@@ -163,7 +163,133 @@ export default async function handler(req: NextRequest) {
 
     console.log('options', options)
 
-    // ストリーミングレスポンスまたは一括レスポンスの生成
+    // ========== LMStudio 用特別処理 ==========
+    if (aiService === 'lmstudio') {
+      const baseUrl = process.env.LOCAL_LLM_URL || 'http://host.docker.internal:1234'
+
+      if (stream) {
+        // 串流モード: LM Studio の SSE をそのまま前段へ転送
+        //ここはいずれ並列処理に変える
+        const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: modifiedModel,
+            messages: modifiedMessages,
+            temperature,
+            max_tokens: maxTokens,
+            stream: true,
+          }),
+        })
+
+        if (!resp.ok) {
+          console.error('LMStudio stream fetch error', await resp.text())
+          return new Response(
+            JSON.stringify({
+              error: 'LMStudio API Error',
+              errorCode: 'LMStudioAPIError',
+            }),
+            { status: 500, headers: { 'Content-Type': 'application/json' } }
+          )
+        }
+
+        if (!resp.body) {
+          return new Response(
+            JSON.stringify({ error: 'Empty LMStudio response body', errorCode: 'AIAPIError' }),
+            { status: 500, headers: { 'Content-Type': 'application/json' } }
+          )
+        }
+
+        const streamBody = new ReadableStream({
+          async start(controller) {
+            const reader = resp.body!.getReader()
+            const decoder = new TextDecoder('utf-8')
+            let buffer = ''
+            try {
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                buffer += decoder.decode(value, { stream: true })
+                const lines = buffer.split('\n')
+                buffer = lines.pop() || ''
+                for (const line of lines) {
+                  // LM Studio は OpenAI 互換の SSE: 'data: {json}'
+                  // フロントは 'data:' を解析できるため、そのまま転送
+                  if (line.startsWith('data:')) {
+                    controller.enqueue(line + '\n')
+                  }
+                }
+              }
+            } catch (e) {
+              console.error('LMStudio stream error:', e)
+              controller.error(e)
+            } finally {
+              reader.releaseLock()
+              controller.close()
+            }
+          },
+        })
+
+        return new Response(streamBody, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+        })
+      }
+
+      // 非串流モード: 通常の JSON 応答を OpenAI 互換に整形
+      const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: modifiedModel,
+          messages: modifiedMessages,
+          temperature,
+          max_tokens: maxTokens,
+          stream: false,
+        }),
+      })
+
+      if (!resp.ok) {
+        console.error('LMStudio fetch error', await resp.text())
+        return new Response(
+          JSON.stringify({
+            error: 'LMStudio API Error',
+            errorCode: 'LMStudioAPIError',
+          }),
+          { status: 500, headers: { 'Content-Type': 'application/json' } }
+        )
+      }
+
+      const data = await resp.json()
+      const formatted = {
+        id: data.id || 'lmstudio-response',
+        object: 'chat.completion',
+        created: Date.now(),
+        model: modifiedModel,
+        choices: [
+          {
+            index: 0,
+            message: data.choices?.[0]?.message || {
+              role: 'assistant',
+              content:
+                data.choices?.[0]?.message?.content || data.choices?.[0]?.text || '',
+            },
+            finish_reason: data.choices?.[0]?.finish_reason || 'stop',
+          },
+        ],
+      }
+
+      return new Response(JSON.stringify(formatted), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    // ========== 通常の処理 ==========
     if (stream) {
       return await streamAiText({
         model: modifiedModel,

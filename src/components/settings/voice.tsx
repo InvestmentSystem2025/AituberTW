@@ -99,6 +99,13 @@ const Voice = () => {
     (s) => s.nijivoiceEmotionalLevel
   )
   const nijivoiceSoundDuration = settingsStore((s) => s.nijivoiceSoundDuration)
+  const voaiApiKey = settingsStore((s) => s.voaiApiKey)
+  const voaiSpeaker = settingsStore((s) => s.voaiSpeaker)
+  const voaiStyle = settingsStore((s) => s.voaiStyle)
+  const voaiSpeed = settingsStore((s) => s.voaiSpeed)
+  const voaiPitchShift = settingsStore((s) => s.voaiPitchShift)
+  const voaiStyleWeight = settingsStore((s) => s.voaiStyleWeight)
+  const voaiBreathPause = settingsStore((s) => s.voaiBreathPause)
 
   const { t } = useTranslation()
   const [nijivoiceSpeakers, setNijivoiceSpeakers] = useState<Array<any>>([])
@@ -220,6 +227,7 @@ const Voice = () => {
           <option value="openai">{t('UsingOpenAITTS')}</option>
           <option value="azure">{t('UsingAzureTTS')}</option>
           <option value="nijivoice">{t('UsingNijiVoice')}</option>
+          <option value="voai">{t('UsingVoai')}</option>
         </select>
       </div>
 
@@ -1376,6 +1384,127 @@ const Voice = () => {
                     })
                   }}
                 />
+              </>
+            )
+          } else if (selectVoice === 'voai') {
+            return (
+              <>
+                <div>
+                  {t('VoaiInfo')}
+                  <br />
+                  <Link
+                    url="https://connect.voai.ai/"
+                    label="https://connect.voai.ai/"
+                  />
+                </div>
+                <div className="mt-4 font-bold">{t('VoaiApiKey')}</div>
+                <div className="mt-2">
+                  <input
+                    className="text-ellipsis px-4 py-2 w-full bg-white hover:bg-white-hover rounded-lg"
+                    type="password"
+                    placeholder="iq-azTdRQZRkv8qPMrVYnVT+kMb1tur/WoLlx8tq54cl90="
+                    value={voaiApiKey}
+                    onChange={(e) =>
+                      settingsStore.setState({
+                        voaiApiKey: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="mt-4 font-bold">{t('VoaiSpeaker')}</div>
+                <div className="mt-2">
+                  <input
+                    className="text-ellipsis px-4 py-2 w-full bg-white hover:bg-white-hover rounded-lg"
+                    type="text"
+                    placeholder="雨榛"
+                    value={voaiSpeaker}
+                    onChange={(e) =>
+                      settingsStore.setState({
+                        voaiSpeaker: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="mt-4 font-bold">{t('VoaiStyle')}</div>
+                <div className="mt-2">
+                  <input
+                    className="text-ellipsis px-4 py-2 w-full bg-white hover:bg-white-hover rounded-lg"
+                    type="text"
+                    placeholder="高興"
+                    value={voaiStyle}
+                    onChange={(e) =>
+                      settingsStore.setState({
+                        voaiStyle: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="mt-6 font-bold">
+                  <div className="select-none">
+                    {t('VoaiSpeed')}: {voaiSpeed}
+                  </div>
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={2.0}
+                    step={0.1}
+                    value={voaiSpeed}
+                    className="mt-2 mb-4 input-range"
+                    onChange={(e) => {
+                      settingsStore.setState({
+                        voaiSpeed: Number(e.target.value),
+                      })
+                    }}
+                  />
+                  <div className="select-none">
+                    {t('VoaiPitchShift')}: {voaiPitchShift}
+                  </div>
+                  <input
+                    type="range"
+                    min={-12}
+                    max={12}
+                    step={1}
+                    value={voaiPitchShift}
+                    className="mt-2 mb-4 input-range"
+                    onChange={(e) => {
+                      settingsStore.setState({
+                        voaiPitchShift: Number(e.target.value),
+                      })
+                    }}
+                  />
+                  <div className="select-none">
+                    {t('VoaiStyleWeight')}: {voaiStyleWeight}
+                  </div>
+                  <input
+                    type="range"
+                    min={0.0}
+                    max={1.0}
+                    step={0.1}
+                    value={voaiStyleWeight}
+                    className="mt-2 mb-4 input-range"
+                    onChange={(e) => {
+                      settingsStore.setState({
+                        voaiStyleWeight: Number(e.target.value),
+                      })
+                    }}
+                  />
+                  <div className="select-none">
+                    {t('VoaiBreathPause')}: {voaiBreathPause}
+                  </div>
+                  <input
+                    type="range"
+                    min={0.0}
+                    max={1.0}
+                    step={0.1}
+                    value={voaiBreathPause}
+                    className="mt-2 mb-4 input-range"
+                    onChange={(e) => {
+                      settingsStore.setState({
+                        voaiBreathPause: Number(e.target.value),
+                      })
+                    }}
+                  />
+                </div>
               </>
             )
           }

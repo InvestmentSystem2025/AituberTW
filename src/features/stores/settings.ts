@@ -120,6 +120,13 @@ interface ModelProvider extends Live2DSettings {
   nijivoiceSpeed: number
   nijivoiceEmotionalLevel: number
   nijivoiceSoundDuration: number
+  voaiApiKey: string
+  voaiSpeaker: string
+  voaiStyle: string
+  voaiSpeed: number
+  voaiPitchShift: number
+  voaiStyleWeight: number
+  voaiBreathPause: number
 }
 
 interface Integrations {
@@ -519,6 +526,13 @@ const getInitialValuesFromEnv = (): SettingsState => ({
   nijivoiceSoundDuration:
     parseFloat(process.env.NEXT_PUBLIC_NIJIVOICE_SOUND_DURATION || '0.1') ||
     0.1,
+  voaiApiKey: process.env.NEXT_PUBLIC_VOAI_API_KEY || '',
+  voaiSpeaker: process.env.NEXT_PUBLIC_VOAI_SPEAKER || '雨榛',
+  voaiStyle: process.env.NEXT_PUBLIC_VOAI_STYLE || '高興',
+  voaiSpeed: parseFloat(process.env.NEXT_PUBLIC_VOAI_SPEED || '1.0') || 1.0,
+  voaiPitchShift: parseFloat(process.env.NEXT_PUBLIC_VOAI_PITCH_SHIFT || '0') || 0,
+  voaiStyleWeight: parseFloat(process.env.NEXT_PUBLIC_VOAI_STYLE_WEIGHT || '0.5') || 0.5,
+  voaiBreathPause: parseFloat(process.env.NEXT_PUBLIC_VOAI_BREATH_PAUSE || '0') || 0,
 
   // Settings
   modelType: (process.env.NEXT_PUBLIC_MODEL_TYPE as 'vrm' | 'live2d') || 'vrm',
@@ -670,6 +684,13 @@ const settingsStore = create<SettingsState>()(
       nijivoiceSpeed: state.nijivoiceSpeed,
       nijivoiceEmotionalLevel: state.nijivoiceEmotionalLevel,
       nijivoiceSoundDuration: state.nijivoiceSoundDuration,
+      voaiApiKey: state.voaiApiKey,
+      voaiSpeaker: state.voaiSpeaker,
+      voaiStyle: state.voaiStyle,
+      voaiSpeed: state.voaiSpeed,
+      voaiPitchShift: state.voaiPitchShift,
+      voaiStyleWeight: state.voaiStyleWeight,
+      voaiBreathPause: state.voaiBreathPause,
       modelType: state.modelType,
       neutralEmotions: state.neutralEmotions,
       happyEmotions: state.happyEmotions,

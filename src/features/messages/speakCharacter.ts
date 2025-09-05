@@ -18,6 +18,7 @@ import toastStore from '@/features/stores/toast'
 import i18next from 'i18next'
 import { SpeakQueue } from './speakQueue'
 import { synthesizeVoiceNijivoiceApi } from './synthesizeVoiceNijivoice'
+import { synthesizeVoiceVoaiApi } from './synthesizeVoiceVoai'
 import { Live2DHandler } from './live2dHandler'
 import {
   asyncConvertEnglishToJapaneseReading,
@@ -46,7 +47,7 @@ export function preprocessMessage(
     /^[!?.,。、．，'"(){}[\]<>+=\-*\/\\|;:@#$%^&*_~！？（）「」『』【】〔〕［］｛｝〈〉《》｢｣。、．，：；＋－＊／＝＜＞％＆＾｜～＠＃＄＿"　]+$/.test(
       processed
     )
-
+  //中国語ログ処理問題
   // 空文字列の場合はnullを返す
   if (processed === '' || isOnlySymbols) return null
 
@@ -184,6 +185,17 @@ async function synthesizeVoice(
           ss.nijivoiceSpeed,
           ss.nijivoiceEmotionalLevel,
           ss.nijivoiceSoundDuration
+        )
+      case 'voai':
+        return await synthesizeVoiceVoaiApi(
+          talk,
+          ss.voaiApiKey,
+          ss.voaiSpeaker,
+          ss.voaiStyle,
+          ss.voaiSpeed,
+          ss.voaiPitchShift,
+          ss.voaiStyleWeight,
+          ss.voaiBreathPause
         )
       default:
         return null
@@ -388,6 +400,7 @@ export const testVoice = async (voiceType: AIVoice, customText?: string) => {
     openai: 'OpenAI TTSを使用します',
     azure: 'Azure TTSを使用します',
     nijivoice: 'にじボイスを使用します',
+    voai: 'VoAIを使用します/使用VoAI',
   }
 
   const message = customText || defaultMessages[voiceType]
