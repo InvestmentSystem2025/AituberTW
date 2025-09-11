@@ -163,6 +163,130 @@ export default async function handler(req: NextRequest) {
 
     console.log('options', options)
 
+    // ========== Ollama 用特別処理 ==========
+    if (aiService === 'ollama') {
+      // 在 Docker 容器內使用服務名稱，在本地使用 localhost
+      const defaultUrl = process.env.OLLAMA_BASE_URL || 'http://ollama:11434'
+      const baseUrl = localLlmUrl || defaultUrl
+      const ollamaModel = modifiedModel || process.env.OLLAMA_MODEL || 'gpt-oss:20b'
+
+      if (stream) {
+        // 串流模式: Ollama 的串流響應
+        const resp = await fetch(`${baseUrl}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: ollamaModel,
+            messages: modifiedMessages,
+            options: {
+              temperature,
+              num_predict: maxTokens,
+            },
+            stream: true,
+          }),
+        })
+
+        if (!resp.ok) {
+          console.error('Ollama stream fetch error', await resp.text())
+          return new Response(
+            JSON.stringify({
+              error: 'Ollama API Error',
+              errorCode: 'OllamaAPIError',
+            }),
+            { status: 500, headers: { 'Content-Type': 'application/json' } }
+          )
+        }
+
+        if (!resp.body) {
+          return new Response(
+            JSON.stringify({ error: 'Empty Ollama response body', errorCode: 'AIAPIError' }),
+            { status: 500, headers: { 'Content-Type': 'application/json' } }
+          )
+        }
+
+        // Ollama 返回 JSONL 格式，需要轉換
+        const streamBody = new ReadableStream({
+          async start(controller) {
+            const reader = resp.body!.getReader()
+            const decoder = new TextDecoder('utf-8')
+            let buffer = ''
+            try {
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                buffer += decoder.decode(value, { stream: true })
+                const lines = buffer.split('\n')
+                buffer = lines.pop() || ''
+                for (const line of lines) {
+                  if (line.trim()) {
+                    try {
+                      const data = JSON.parse(line)
+                      if (data.message?.content) {
+                        // 轉換為前端期待的格式
+                        controller.enqueue(`0:${JSON.stringify(data.message.content)}\n`)
+                      }
+                    } catch (e) {
+                      console.error('Error parsing Ollama response:', e)
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              console.error('Ollama stream error:', e)
+              controller.error(e)
+            } finally {
+              reader.releaseLock()
+              controller.close()
+            }
+          },
+        })
+
+        return new Response(streamBody, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+        })
+      }
+
+      // 非串流模式
+      const resp = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: ollamaModel,
+          messages: modifiedMessages,
+          options: {
+            temperature,
+            num_predict: maxTokens,
+          },
+          stream: false,
+        }),
+      })
+
+      if (!resp.ok) {
+        console.error('Ollama fetch error', await resp.text())
+        return new Response(
+          JSON.stringify({
+            error: 'Ollama API Error',
+            errorCode: 'OllamaAPIError',
+          }),
+          { status: 500, headers: { 'Content-Type': 'application/json' } }
+        )
+      }
+
+      const data = await resp.json()
+      return new Response(
+        JSON.stringify({ text: data.message?.content || '' }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      )
+    }
+
     // ========== LMStudio 用特別処理 ==========
     if (aiService === 'lmstudio') {
       const baseUrl = process.env.LOCAL_LLM_URL || 'http://host.docker.internal:1234'
