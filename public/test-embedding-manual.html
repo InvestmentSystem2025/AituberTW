@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Embedding API 手動測試</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .container { margin: 20px 0; }
+        textarea { width: 100%; height: 100px; margin: 10px 0; }
+        button { padding: 10px 20px; background: #007cba; color: white; border: none; cursor: pointer; }
+        button:hover { background: #005a87; }
+        .result { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .success { background: #d4edda; border-left: 4px solid #28a745; }
+        .error { background: #f8d7da; border-left: 4px solid #dc3545; }
+        .info { background: #d1ecf1; border-left: 4px solid #17a2b8; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Embedding API 手動測試工具</h1>
+    
+    <div class="container">
+        <h3>測試文本：</h3>
+        <textarea id="testText" placeholder="輸入要測試的文本...">你好，這是一個測試。</textarea>
+        <br>
+        <button onclick="testEmbedding()">生成 Embedding</button>
+        <button onclick="testMultiple()">多語言測試</button>
+    </div>
+    
+    <div id="results"></div>
+
+    <script>
+        function addResult(content, type = 'info') {
+            const resultsDiv = document.getElementById('results');
+            const resultDiv = document.createElement('div');
+            resultDiv.className = `result ${type}`;
+            resultDiv.innerHTML = content;
+            resultsDiv.appendChild(resultDiv);
+        }
+
+        async function testEmbedding() {
+            const text = document.getElementById('testText').value;
+            if (!text.trim()) {
+                addResult('❌ 請輸入測試文本', 'error');
+                return;
+            }
+
+            addResult(`🔄 正在生成 embedding: "${text}"`, 'info');
+            
+            try {
+                const response = await fetch('/api/embeddings/ollama', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        text: text,
+                        model: 'jeffh/intfloat-multilingual-e5-large-instruct:f16'
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    addResult(`❌ API 錯誤: ${errorData.error}`, 'error');
+                    return;
+                }
+
+                const data = await response.json();
+                addResult(`✅ 成功生成 embedding!<br>
+                    📊 維度: ${data.dimensions}<br>
+                    🤖 模型: ${data.model}<br>
+                    📝 向量前10個值: [${data.embedding.slice(0, 10).map(v => v.toFixed(4)).join(', ')}...]`, 'success');
+                
+            } catch (error) {
+                addResult(`❌ 網路錯誤: ${error.message}`, 'error');
+            }
+        }
+
+        async function testMultiple() {
+            const testTexts = [
+                { text: "Hello world", lang: "English" },
+                { text: "你好世界", lang: "繁體中文" },
+                { text: "こんにちは世界", lang: "日文" },
+                { text: "最近有什麼新聞？", lang: "中文問題" }
+            ];
+
+            addResult('🔄 開始多語言測試...', 'info');
+
+            for (const test of testTexts) {
+                try {
+                    const response = await fetch('/api/embeddings/ollama', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            text: test.text,
+                            model: 'jeffh/intfloat-multilingual-e5-large-instruct:f16'
+                        })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        addResult(`✅ ${test.lang}: "${test.text}" → ${data.dimensions} 維度`, 'success');
+                    } else {
+                        const errorData = await response.json();
+                        addResult(`❌ ${test.lang} 失敗: ${errorData.error}`, 'error');
+                    }
+                } catch (error) {
+                    addResult(`❌ ${test.lang} 網路錯誤: ${error.message}`, 'error');
+                }
+            }
+        }
+
+        // 頁面載入時顯示說明
+        window.onload = function() {
+            addResult(`
+                📋 <strong>使用說明：</strong><br>
+                1. 確保應用運行在 http://localhost:3000<br>
+                2. 確保 Embedding 模型已下載<br>
+                3. 輸入文本並點擊"生成 Embedding"測試<br>
+                4. 或點擊"多語言測試"進行批量測試
+            `, 'info');
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG 功能測試</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background-color: #f5f5f5;
+        }
+        .container { 
+            background: white;
+            padding: 20px; 
+            margin: 20px 0; 
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #ddd;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            background: #f8f9fa;
+            border: none;
+            border-bottom: 2px solid transparent;
+            margin-right: 5px;
+        }
+        .tab.active {
+            background: #007cba;
+            color: white;
+            border-bottom: 2px solid #007cba;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        textarea { 
+            width: 100%; 
+            min-height: 100px; 
+            margin: 10px 0; 
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button { 
+            padding: 10px 20px; 
+            background: #007cba; 
+            color: white; 
+            border: none; 
+            border-radius: 4px;
+            cursor: pointer; 
+            margin: 5px;
+        }
+        button:hover { background: #005a87; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .result { 
+            background: #f8f9fa; 
+            padding: 15px; 
+            margin: 10px 0; 
+            border-radius: 5px; 
+            border-left: 4px solid #007cba;
+        }
+        .success { background: #d4edda; border-left-color: #28a745; }
+        .error { background: #f8d7da; border-left-color: #dc3545; }
+        .warning { background: #fff3cd; border-left-color: #ffc107; }
+        .json-display {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+        }
+        .chat-container {
+            display: flex;
+            gap: 20px;
+        }
+        .chat-panel {
+            flex: 1;
+        }
+        .chat-messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 15px;
+            background: #f8f9fa;
+            margin-bottom: 10px;
+        }
+        .message {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .user-message {
+            background: #007cba;
+            color: white;
+            margin-left: 20%;
+        }
+        .assistant-message {
+            background: #e9ecef;
+            color: #333;
+            margin-right: 20%;
+        }
+        .rag-info {
+            font-size: 0.9em;
+            color: #666;
+            font-style: italic;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🤖 RAG 功能測試工具</h1>
+    
+    <div class="tabs">
+        <button class="tab active" onclick="showTab('documents')">📚 文檔管理</button>
+        <button class="tab" onclick="showTab('search')">🔍 搜索測試</button>
+        <button class="tab" onclick="showTab('chat')">💬 RAG 聊天</button>
+        <button class="tab" onclick="showTab('setup')">⚙️ 初始設置</button>
+    </div>
+
+    <!-- 初始設置標籤 -->
+    <div id="setup" class="tab-content active">
+        <div class="container">
+            <h3>📋 初始設置</h3>
+            <p>首先，我們需要添加一些測試文檔到向量資料庫中。</p>
+            <button onclick="setupSampleData()">🚀 添加示例文檔</button>
+            <div id="setupResults"></div>
+        </div>
+    </div>
+
+    <!-- 文檔管理標籤 -->
+    <div id="documents" class="tab-content">
+        <div class="container">
+            <h3>📚 文檔管理</h3>
+            
+            <h4>添加文檔</h4>
+            <input type="text" id="docId" placeholder="文檔 ID" style="width: 200px; margin: 5px;">
+            <input type="text" id="collection" placeholder="集合名稱 (預設: test_knowledge)" style="width: 200px; margin: 5px;">
+            <br>
+            <textarea id="docContent" placeholder="文檔內容..."></textarea>
+            <br>
+            <button onclick="addDocument()">➕ 添加文檔</button>
+            
+            <h4>查看集合</h4>
+            <button onclick="listCollections()">📋 列出所有集合</button>
+            <button onclick="getDocumentCount()">📊 獲取文檔數量</button>
+        </div>
+        <div id="documentResults"></div>
+    </div>
+
+    <!-- 搜索測試標籤 -->
+    <div id="search" class="tab-content">
+        <div class="container">
+            <h3>🔍 搜索測試</h3>
+            <input type="text" id="searchCollection" placeholder="集合名稱 (預設: test_knowledge)" style="width: 200px; margin: 5px;">
+            <input type="number" id="searchLimit" placeholder="結果數量" value="3" style="width: 100px; margin: 5px;">
+            <br>
+            <textarea id="searchQuery" placeholder="搜索查詢...">台灣有什麼特色？</textarea>
+            <br>
+            <button onclick="searchDocuments()">🔍 搜索</button>
+            <button onclick="testMultipleQueries()">🧪 批量測試</button>
+        </div>
+        <div id="searchResults"></div>
+    </div>
+
+    <!-- RAG 聊天標籤 -->
+    <div id="chat" class="tab-content">
+        <div class="container">
+            <h3>💬 RAG 聊天測試</h3>
+            <div class="chat-container">
+                <div class="chat-panel">
+                    <h4>普通聊天</h4>
+                    <div id="normalChat" class="chat-messages"></div>
+                    <textarea id="normalChatInput" placeholder="輸入消息...">台灣有什麼特色？</textarea>
+                    <button onclick="sendNormalChat()">💬 普通聊天</button>
+                </div>
+                <div class="chat-panel">
+                    <h4>RAG 聊天</h4>
+                    <div id="ragChat" class="chat-messages"></div>
+                    <textarea id="ragChatInput" placeholder="輸入消息...">台灣有什麼特色？</textarea>
+                    <button onclick="sendRAGChat()">🤖 RAG 聊天</button>
+                </div>
+            </div>
+            <div class="container">
+                <h4>聊天設置</h4>
+                <input type="text" id="chatCollection" placeholder="集合名稱" value="test_knowledge" style="width: 200px; margin: 5px;">
+                <input type="number" id="chatSearchLimit" placeholder="搜索數量" value="3" style="width: 100px; margin: 5px;">
+                <button onclick="clearChats()">🗑️ 清空聊天</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="results"></div>
+
+    <script>
+        let normalChatHistory = [];
+        let ragChatHistory = [];
+
+        function showTab(tabName) {
+            // 隱藏所有標籤內容
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // 顯示選中的標籤
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        function addResult(content, type = 'result', containerId = 'results') {
+            const resultsDiv = document.getElementById(containerId);
+            const resultDiv = document.createElement('div');
+            resultDiv.className = `result ${type}`;
+            resultDiv.innerHTML = content;
+            resultsDiv.appendChild(resultDiv);
+            resultsDiv.scrollTop = resultsDiv.scrollHeight;
+        }
+
+        async function setupSampleData() {
+            const sampleDocuments = [
+                {
+                    id: "doc1",
+                    content: "台灣是位於東亞的島國，首都是台北。台灣以其美食、夜市和友善的人民而聞名。",
+                    metadata: { source: "taiwan_info", type: "geography", language: "zh-TW" }
+                },
+                {
+                    id: "doc2", 
+                    content: "日本是東亞的島國，由四個主要島嶼組成：本州、北海道、九州和四國。東京是日本的首都。",
+                    metadata: { source: "japan_info", type: "geography", language: "zh-TW" }
+                },
+                {
+                    id: "doc3",
+                    content: "人工智慧（AI）是計算機科學的一個分支，致力於創建能夠執行通常需要人類智慧的任務的機器。",
+                    metadata: { source: "ai_info", type: "technology", language: "zh-TW" }
+                },
+                {
+                    id: "doc4",
+                    content: "最近的新聞報導指出，台灣的科技產業持續成長，特別是在半導體和人工智慧領域。",
+                    metadata: { source: "tech_news", type: "news", language: "zh-TW", date: "2024-09-10" }
+                },
+                {
+                    id: "doc5",
+                    content: "最近的新聞指出，木瓜配上西瓜有毒，請社會大眾多加注意",
+                    metadata: { source: "taiwan_news", type: "news", language: "zh-TW", date: "2024-09-10" }
+                }
+            ];
+
+            try {
+                const response = await fetch('/api/rag/documents', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        collection: 'test_knowledge',
+                        documents: sampleDocuments
+                    })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    addResult(`✅ 成功添加 ${data.count} 個示例文檔到集合 'test_knowledge'`, 'success', 'setupResults');
+                    addResult('🎉 現在可以測試搜索和 RAG 聊天功能了！', 'success', 'setupResults');
+                } else {
+                    addResult(`❌ 添加文檔失敗: ${data.error}`, 'error', 'setupResults');
+                }
+            } catch (error) {
+                addResult(`❌ 網路錯誤: ${error.message}`, 'error', 'setupResults');
+            }
+        }
+
+        async function addDocument() {
+            const docId = document.getElementById('docId').value;
+            const content = document.getElementById('docContent').value;
+            const collection = document.getElementById('collection').value || 'test_knowledge';
+
+            if (!docId || !content) {
+                addResult('❌ 請填寫文檔 ID 和內容', 'error', 'documentResults');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/rag/documents', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        collection,
+                        documents: [{
+                            id: docId,
+                            content: content,
+                            metadata: { timestamp: new Date().toISOString() }
+                        }]
+                    })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    addResult(`✅ 成功添加文檔到集合 '${collection}'`, 'success', 'documentResults');
+                    document.getElementById('docId').value = '';
+                    document.getElementById('docContent').value = '';
+                } else {
+                    addResult(`❌ 添加失敗: ${data.error}`, 'error', 'documentResults');
+                }
+            } catch (error) {
+                addResult(`❌ 網路錯誤: ${error.message}`, 'error', 'documentResults');
+            }
+        }
+
+        async function listCollections() {
+            try {
+                const response = await fetch('/api/rag/documents');
+                const data = await response.json();
+                if (response.ok) {
+                    addResult(`📋 可用集合: ${data.collections.join(', ')}`, 'success', 'documentResults');
+                } else {
+                    addResult(`❌ 獲取集合失敗: ${data.error}`, 'error', 'documentResults');
+                }
+            } catch (error) {
+                addResult(`❌ 網路錯誤: ${error.message}`, 'error', 'documentResults');
+            }
+        }
+
+        async function getDocumentCount() {
+            const collection = document.getElementById('collection').value || 'test_knowledge';
+            try {
+                const response = await fetch(`/api/rag/documents?collection=${collection}`);
+                const data = await response.json();
+                if (response.ok) {
+                    addResult(`📊 集合 '${data.collection}' 包含 ${data.count} 個文檔`, 'success', 'documentResults');
+                } else {
+                    addResult(`❌ 獲取文檔數量失敗: ${data.error}`, 'error', 'documentResults');
+                }
+            } catch (error) {
+                addResult(`❌ 網路錯誤: ${error.message}`, 'error', 'documentResults');
+            }
+        }
+
+        async function searchDocuments() {
+            const query = document.getElementById('searchQuery').value;
+            const collection = document.getElementById('searchCollection').value || 'test_knowledge';
+            const limit = parseInt(document.getElementById('searchLimit').value) || 3;
+
+            if (!query) {
+                addResult('❌ 請輸入搜索查詢', 'error', 'searchResults');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/rag/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, collection, limit })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    addResult(`🔍 搜索結果 (${data.count} 個):<div class="json-display">${JSON.stringify(data.results, null, 2)}</div>`, 'success', 'searchResults');
+                } else {
+                    addResult(`❌ 搜索失敗: ${data.error}`, 'error', 'searchResults');
+                }
+            } catch (error) {
+                addResult(`❌ 網路錯誤: ${error.message}`, 'error', 'searchResults');
+            }
+        }
+
+        async function testMultipleQueries() {
+            const queries = [
+                "台灣有什麼特色？",
+                "日本的首都是哪裡？", 
+                "什麼是人工智慧？",
+                "最近有什麼科技新聞？"
+            ];
+
+            for (const query of queries) {
+                document.getElementById('searchQuery').value = query;
+                await searchDocuments();
+                await new Promise(resolve => setTimeout(resolve, 1000)); // 等待1秒
+            }
+        }
+
+        async function sendNormalChat() {
+            const input = document.getElementById('normalChatInput');
+            const message = input.value.trim();
+            if (!message) return;
+
+            const chatDiv = document.getElementById('normalChat');
+            
+            // 添加用戶消息
+            addChatMessage(chatDiv, message, 'user');
+            normalChatHistory.push({ role: 'user', content: message });
+
+            try {
+                const response = await fetch('/api/ai/vercel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        messages: normalChatHistory,
+                        aiService: 'ollama',
+                        model: 'gpt-oss:20b',
+                        localLlmUrl: '',
+                        stream: false,
+                        temperature: 0.7,
+                        maxTokens: 4096
+                    })
+                });
+
+                const data = await response.json();
+                if (response.ok && data.text) {
+                    addChatMessage(chatDiv, data.text, 'assistant');
+                    normalChatHistory.push({ role: 'assistant', content: data.text });
+                } else {
+                    addChatMessage(chatDiv, '❌ 聊天失敗', 'assistant');
+                }
+            } catch (error) {
+                addChatMessage(chatDiv, `❌ 網路錯誤: ${error.message}`, 'assistant');
+            }
+
+            input.value = '';
+        }
+
+        async function sendRAGChat() {
+            const input = document.getElementById('ragChatInput');
+            const message = input.value.trim();
+            if (!message) return;
+
+            const chatDiv = document.getElementById('ragChat');
+            const collection = document.getElementById('chatCollection').value || 'test_knowledge';
+            const searchLimit = parseInt(document.getElementById('chatSearchLimit').value) || 3;
+            
+            // 添加用戶消息
+            addChatMessage(chatDiv, message, 'user');
+            ragChatHistory.push({ role: 'user', content: message });
+
+            try {
+                const response = await fetch('/api/rag/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        messages: ragChatHistory,
+                        collection,
+                        ragEnabled: true,
+                        searchLimit,
+                        model: 'gpt-oss:20b',
+                        temperature: 0.7,
+                        maxTokens: 4096
+                    })
+                });
+
+                const data = await response.json();
+                if (response.ok && data.message) {
+                    const ragInfo = `<div class="rag-info">📚 ${data.ragContext} (搜索: ${data.searchResults})</div>`;
+                    addChatMessage(chatDiv, data.message + ragInfo, 'assistant');
+                    ragChatHistory.push({ role: 'assistant', content: data.message });
+                } else {
+                    addChatMessage(chatDiv, '❌ RAG 聊天失敗', 'assistant');
+                }
+            } catch (error) {
+                addChatMessage(chatDiv, `❌ 網路錯誤: ${error.message}`, 'assistant');
+            }
+
+            input.value = '';
+        }
+
+        function addChatMessage(chatDiv, message, role) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}-message`;
+            messageDiv.innerHTML = message;
+            chatDiv.appendChild(messageDiv);
+            chatDiv.scrollTop = chatDiv.scrollHeight;
+        }
+
+        function clearChats() {
+            document.getElementById('normalChat').innerHTML = '';
+            document.getElementById('ragChat').innerHTML = '';
+            normalChatHistory = [];
+            ragChatHistory = [];
+        }
+
+        // 頁面載入時顯示說明
+        window.onload = function() {
+            addResult(`
+                📋 <strong>RAG 測試說明：</strong><br>
+                1. 首先點擊 "⚙️ 初始設置" 添加示例文檔<br>
+                2. 使用 "🔍 搜索測試" 驗證向量搜索<br>
+                3. 使用 "💬 RAG 聊天" 比較普通聊天和 RAG 聊天的差異<br>
+                4. 使用 "📚 文檔管理" 添加更多文檔
+            `, 'result', 'setupResults');
+        };
+    </script>
+</body>
+</html>

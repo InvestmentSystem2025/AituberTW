@@ -1,0 +1,266 @@
+{
+  "name": "RSS News Automation",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1a8c2e4d-7b9f-4a2d-8e1c-3f5a6b7c8d9e",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "value": 1
+            }
+          ]
+        }
+      },
+      "id": "2b9d3f5e-8c1a-5b3d-9f2e-4a6b7c8d9e1f",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://technews.tw/feed/",
+        "options": {
+          "itemsToReturn": 3
+        }
+      },
+      "id": "3c1e4f6a-9d2b-6c4e-1a3f-5b7c8d9e1f2a",
+      "name": "Taiwan Tech RSS",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://www3.nhk.or.jp/rss/news/cat0.xml",
+        "options": {
+          "itemsToReturn": 3
+        }
+      },
+      "id": "4d2f5a7b-1e3c-7d5f-2b4a-6c8d9e1f2a3b",
+      "name": "Japan News RSS",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex",
+        "options": {}
+      },
+      "id": "5e3a6b8c-2f4d-8e6a-3c5b-7d9e1f2a3b4c",
+      "name": "Merge RSS Feeds",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 處理和清理RSS新聞數據 - 單一項目版本\nconst allItems = $input.all();\nconst MAX_ITEMS = 6; // 強制限制：最多處理6個新聞項目\n\nconsole.log(`📥 Processing ${allItems.length} RSS items from all sources (limit: ${MAX_ITEMS})...`);\n\n// 限制處理數量，防止過多項目\nconst limitedItems = allItems.slice(0, MAX_ITEMS);\nconsole.log(`📊 Limited to ${limitedItems.length} items for processing`);\n\n// 收集所有新聞到一個陣列中\nconst allNewsItems = [];\nfor (const item of limitedItems) {\n  const rawContent = item.json.content || item.json.contentSnippet || item.json.description || item.json.summary || '';\n  const cleanContent = rawContent.replace(/<[^>]*>/g, '').trim();\n  \n  const newsItem = {\n    id: `news_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,\n    title: item.json.title || 'No Title',\n    content: cleanContent,\n    url: item.json.link || '',\n    publishedAt: item.json.pubDate || item.json.published || new Date().toISOString(),\n    source: item.json.link?.includes('nhk') || item.json.link?.includes('asahi') ? 'NHK Japan' : \n            item.json.link?.includes('technews') ? 'TechNews Taiwan' : \n            item.json.link?.includes('ltn') ? 'LTN Taiwan' : 'Unknown',\n    language: item.json.link?.includes('nhk') || item.json.link?.includes('asahi') ? 'ja' : 'zh-TW'\n  };\n  \n  if (newsItem.title && newsItem.title !== 'No Title' && \n      (newsItem.content.length > 20 || newsItem.title.length > 10)) {\n    console.log(`✅ ${newsItem.source}: ${newsItem.title.substring(0, 40)}...`);\n    allNewsItems.push(newsItem);\n  } else {\n    console.log(`❌ Filtered: ${newsItem.title} (content: ${newsItem.content.length} chars)`);\n  }\n}\n\nconsole.log(`📊 Final result: ${allNewsItems.length} valid items processed`);\n\n// 返回單一項目包含所有新聞，避免多次觸發下游節點\nif (allNewsItems.length > 0) {\n  console.log(`📤 Returning single item with ${allNewsItems.length} news items`);\n  return { newsItems: allNewsItems };\n} else {\n  console.log('❌ No valid news items found');\n  return {};\n}"
+      },
+      "id": "6f4b7c9d-3a5e-9f7b-4d6c-8e1f2a3b4c5d",
+      "name": "Process News Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://app:3000/api/news/ingest",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"newsItems\": $json.newsItems, \"collection\": \"news_knowledge\" } }}",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        }
+      },
+      "id": "7a5c8d1e-4b6f-1a8c-5e7d-9f2a3b4c5d6e",
+      "name": "Send to Vector DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "1",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8b6d9e2f-5c7a-2b9d-6f8e-1a3b4c5d6e7f",
+      "name": "Check Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "message": "✅ Successfully processed {{ $json.count }} news items at {{ new Date().toLocaleString() }}",
+        "options": {}
+      },
+      "id": "9c7e1a3f-6d8b-3c1e-7a9f-2b4c5d6e7f8a",
+      "name": "Success Notification",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1780, 200]
+    },
+    {
+      "parameters": {
+        "message": "❌ Failed to process news items: {{ $json.error }}",
+        "options": {}
+      },
+      "id": "1d8f2b4a-7e9c-4d2f-8b1e-3c5d6e7f8a9b",
+      "name": "Error Notification",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1780, 400]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Schedule Trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Taiwan Tech RSS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Japan News RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Taiwan Tech RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge RSS Feeds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Japan News RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge RSS Feeds",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge RSS Feeds": {
+      "main": [
+        [
+          {
+            "node": "Process News Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process News Data": {
+      "main": [
+        [
+          {
+            "node": "Send to Vector DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to Vector DB": {
+      "main": [
+        [
+          {
+            "node": "Check Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Success": {
+      "main": [
+        [
+          {
+            "node": "Success Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-09-12T04:00:00.000Z",
+      "updatedAt": "2024-09-12T04:00:00.000Z",
+      "id": "1",
+      "name": "news-automation"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-09-12T04:00:00.000Z",
+  "versionId": "1"
+}
