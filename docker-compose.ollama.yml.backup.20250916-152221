@@ -1,4 +1,4 @@
-﻿version: '3.8'
+version: '3.8'
 
 services:
   # Ollama 服務
@@ -11,20 +11,17 @@ services:
       - ollama_data:/root/.ollama
     environment:
       - OLLAMA_HOST=0.0.0.0
-      - CUDA_VISIBLE_DEVICES=0
-      - NVIDIA_VISIBLE_DEVICES=0
     restart: unless-stopped
-    gpus: all
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: all
               capabilities: [gpu]
+              device_ids: ['0']  # 強制使用第一個GPU (RTX 5060)
     command: serve
 
-  # ChromaDB 服務
+  # ChromaDB 服務（提前準備步驟3）
   chromadb:
     image: ghcr.io/chroma-core/chroma:0.5.0
     container_name: chromadb

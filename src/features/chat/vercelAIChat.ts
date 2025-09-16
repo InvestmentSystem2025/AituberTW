@@ -6,6 +6,37 @@ import {
   AIService,
 } from '@/features/constants/settings'
 import settingsStore from '../stores/settings'
+import { integrateRAGWithChat } from '@/lib/rag/ragIntegration'
+
+/**
+ * 檢測用戶語言
+ */
+function detectUserLanguage(text: string): string {
+  // 檢測中文字符
+  const chineseRegex = /[\u4e00-\u9fff]/
+  // 檢測日文字符
+  const japaneseRegex = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]/
+  // 檢測韓文字符
+  const koreanRegex = /[\uac00-\ud7af]/
+  // 檢測阿拉伯文字符
+  const arabicRegex = /[\u0600-\u06ff]/
+  // 檢測俄文字符
+  const russianRegex = /[\u0400-\u04ff]/
+  
+  if (chineseRegex.test(text)) {
+    return '繁體中文'
+  } else if (japaneseRegex.test(text)) {
+    return '日本語'
+  } else if (koreanRegex.test(text)) {
+    return '한국어'
+  } else if (arabicRegex.test(text)) {
+    return 'العربية'
+  } else if (russianRegex.test(text)) {
+    return 'Русский'
+  } else {
+    return 'English'
+  }
+}
 
 const getAIConfig = () => {
   const ss = settingsStore.getState()
@@ -154,12 +185,63 @@ export async function getVercelAIChatResponseStream(
     customApiIncludeMimeType,
   } = getAIConfig()
 
+  // 檢查是否需要使用RAG功能
+  const lastUserMessage = messages
+    .filter(msg => msg.role === 'user')
+    .pop()
+
+  let processedMessages = messages
+  let ragInfo = ''
+
+  if (lastUserMessage && typeof lastUserMessage.content === 'string') {
+    const ragResult = await integrateRAGWithChat(messages, lastUserMessage.content)
+    
+    if (ragResult.shouldUseRAG && ragResult.ragResponse) {
+      // 使用RAG回答，但通過正常的AI服務流程
+      console.log('🎙️ Using RAG for news-related question')
+      console.log(`📊 Found ${ragResult.ragResponse.contextCount} relevant news items`)
+      
+      ragInfo = ` (使用新聞資料庫回答，找到 ${ragResult.ragResponse.contextCount} 條相關資料)`
+      
+      // 檢測用戶語言
+      const userLanguage = detectUserLanguage(lastUserMessage.content)
+      
+      // 將RAG回答作為系統消息添加到消息列表中
+      const ragSystemMessage = {
+        role: 'system',
+        content: `你是一個活潑有趣的AITuber直播主！你必須用直播主的風格來回答所有問題。
+
+🎙️ **重要：你必須以直播主身份回答**：
+- 開頭必須用「大家好！」「各位觀眾！」等稱呼
+- 用親切、活潑的語氣，像在跟觀眾聊天
+- 對新聞內容表達個人看法和情感反應
+- 使用表情符號和網路用語
+- 像在現場報導一樣生動有趣
+- 回答語言必須使用：${userLanguage}
+
+📰 **參考新聞資料**：
+${ragResult.ragResponse.ragMessage}
+
+**重要指示**：
+1. 你必須以直播主身份回答，開頭要有稱呼語
+2. 回答語言必須使用${userLanguage}，即使新聞資料是其他語言也要用${userLanguage}回答
+3. 用直播主的活潑語氣分享新聞內容
+4. 如果沒有相關新聞，就誠實說明，但仍要保持直播主的活潑語氣
+
+現在請以直播主身份回答用戶的問題！`
+      }
+      
+      // 將RAG系統消息插入到消息列表的開頭
+      processedMessages = [ragSystemMessage, ...messages.filter(msg => msg.role !== 'system')]
+    }
+  }
+
   // APIエンドポイントを決定
   const apiEndpoint = getApiEndpoint(selectAIService)
 
   // 共通リクエストデータ
   const requestData: any = {
-    messages,
+    messages: processedMessages,
     stream: true,
   }
 
@@ -167,8 +249,8 @@ export async function getVercelAIChatResponseStream(
   if (selectAIService === 'custom-api') {
     // カスタムAPI用データ
     const filteredMessages = getAIConfig().includeSystemMessagesInCustomApi
-      ? messages
-      : messages.filter((message) => message.role !== 'system')
+      ? processedMessages
+      : processedMessages.filter((message) => message.role !== 'system')
 
     Object.assign(requestData, {
       customApiUrl,

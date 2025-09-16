@@ -95,41 +95,77 @@ ${ragContext}
     // 調用 Ollama API 進行聊天
     const ollamaUrl = process.env.OLLAMA_BASE_URL || 'http://ollama:11434'
     
-    const response = await fetch(`${ollamaUrl}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        messages: contextMessages,
-        options: {
-          temperature,
-          num_predict: maxTokens,
+    try {
+      const response = await fetch(`${ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-        stream: false,
-      }),
-    })
+        body: JSON.stringify({
+          model,
+          messages: contextMessages,
+          options: {
+            temperature,
+            num_predict: maxTokens,
+          },
+          stream: false,
+        }),
+      })
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error('Ollama chat error:', errorText)
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Ollama chat error:', errorText)
+        
+        // 如果Ollama失敗，但有RAG上下文，返回RAG上下文
+        if (ragContext) {
+          return res.status(200).json({
+            message: `大家好！我找到了一些相關的新聞資料：\n\n${ragContext}\n\n抱歉，AI模型暫時無法回應，但我為大家整理了這些新聞資料！`,
+            ragEnabled: true,
+            ragContext: `找到 ${searchResults.length} 條相關參考資料`,
+            contextCount: searchResults.length,
+            searchResults: searchLimit,
+            model: 'fallback',
+            fallback: true
+          })
+        }
+        
+        return res.status(500).json({
+          error: 'Chat generation failed',
+          details: errorText
+        })
+      }
+
+      const data = await response.json()
+
+      return res.status(200).json({
+        message: data.message?.content || '',
+        ragEnabled,
+        ragContext: ragContext ? `找到 ${searchResults.length} 條相關參考資料` : 'No relevant materials found',
+        contextCount: ragContext ? searchResults.length : 0,
+        searchResults: ragEnabled ? searchLimit : 0,
+        model,
+      })
+    } catch (ollamaError: any) {
+      console.error('Ollama connection error:', ollamaError)
+      
+      // 如果Ollama連接失敗，但有RAG上下文，返回RAG上下文
+      if (ragContext) {
+        return res.status(200).json({
+          message: `大家好！我找到了一些相關的新聞資料：\n\n${ragContext}\n\n抱歉，AI模型暫時無法回應，但我為大家整理了這些新聞資料！`,
+          ragEnabled: true,
+          ragContext: `找到 ${searchResults.length} 條相關參考資料`,
+          contextCount: searchResults.length,
+          searchResults: searchLimit,
+          model: 'fallback',
+          fallback: true
+        })
+      }
+      
       return res.status(500).json({
-        error: 'Chat generation failed',
-        details: errorText
+        error: 'Ollama service unavailable',
+        details: ollamaError.message
       })
     }
-
-    const data = await response.json()
-
-    return res.status(200).json({
-      message: data.message?.content || '',
-      ragEnabled,
-      ragContext: ragContext ? `找到 ${searchResults.length} 條相關參考資料` : 'No relevant materials found',
-      contextCount: ragContext ? searchResults.length : 0,
-      searchResults: ragEnabled ? searchLimit : 0,
-      model,
-    })
   } catch (error: any) {
     console.error('RAG chat error:', error)
     return res.status(500).json({

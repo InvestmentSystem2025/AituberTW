@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG整合測試頁面</title>
+    <style>
+        body {
+            font-family: 'Microsoft JhengHei', Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+        }
+        .test-section h3 {
+            color: #555;
+            margin-top: 0;
+        }
+        .question-input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+        .test-button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        .test-button:hover {
+            background-color: #0056b3;
+        }
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        .sample-questions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .sample-question {
+            background-color: #e9ecef;
+            padding: 8px 12px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        .sample-question:hover {
+            background-color: #dee2e6;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .loading {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎙️ RAG整合測試頁面</h1>
+        
+        <div class="test-section">
+            <h3>📰 新聞相關問題測試</h3>
+            <p>測試聊天功能是否能自動檢測新聞相關問題並使用RAG回答：</p>
+            
+            <input type="text" id="newsQuestion" class="question-input" 
+                   placeholder="輸入新聞相關問題，例如：最近有什麼新聞？">
+            
+            <button class="test-button" onclick="testNewsQuestion()">測試新聞問題</button>
+            <button class="test-button" onclick="testNonNewsQuestion()">測試非新聞問題</button>
+            
+            <div class="sample-questions">
+                <div class="sample-question" onclick="setQuestion('最近有什麼新聞？')">最近有什麼新聞？</div>
+                <div class="sample-question" onclick="setQuestion('今天台灣發生了什麼事？')">今天台灣發生了什麼事？</div>
+                <div class="sample-question" onclick="setQuestion('日本有什麼最新消息？')">日本有什麼最新消息？</div>
+                <div class="sample-question" onclick="setQuestion('科技新聞有什麼新發展？')">科技新聞有什麼新發展？</div>
+                <div class="sample-question" onclick="setQuestion('天氣如何？')">天氣如何？</div>
+                <div class="sample-question" onclick="setQuestion('你好，今天心情怎麼樣？')">你好，今天心情怎麼樣？</div>
+            </div>
+            
+            <div id="newsResult" class="result" style="display: none;"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>🔍 RAG功能測試</h3>
+            <p>直接測試RAG API功能：</p>
+            
+            <input type="text" id="ragQuery" class="question-input" 
+                   placeholder="輸入查詢內容">
+            
+            <button class="test-button" onclick="testRAGSearch()">測試RAG搜尋</button>
+            <button class="test-button" onclick="testRAGChat()">測試RAG聊天</button>
+            
+            <div id="ragResult" class="result" style="display: none;"></div>
+        </div>
+
+        <div class="test-section">
+            <h3>📊 系統狀態檢查</h3>
+            <button class="test-button" onclick="checkSystemStatus()">檢查系統狀態</button>
+            <div id="statusResult" class="result" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        function setQuestion(question) {
+            document.getElementById('newsQuestion').value = question;
+        }
+
+        function showResult(elementId, content, type = 'info') {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.className = `result ${type}`;
+            element.textContent = content;
+        }
+
+        function showLoading(elementId) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.className = 'result loading';
+            element.textContent = '處理中...';
+        }
+
+        async function testNewsQuestion() {
+            const question = document.getElementById('newsQuestion').value.trim();
+            if (!question) {
+                showResult('newsResult', '請輸入問題', 'error');
+                return;
+            }
+
+            showLoading('newsResult');
+
+            try {
+                // 直接測試RAG聊天功能
+                const response = await fetch('/api/rag/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        messages: [
+                            { role: 'user', content: question }
+                        ],
+                        collection: 'news_knowledge',
+                        ragEnabled: true,
+                        searchLimit: 3,
+                        model: 'gpt-oss:20b',
+                        temperature: 0.7,
+                        maxTokens: 4096
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(`HTTP ${response.status}: ${errorData.error || response.statusText}`);
+                }
+
+                const data = await response.json();
+                
+                let result = `問題: ${question}\n\n`;
+                result += `RAG回答: ${data.message || '無回答'}\n\n`;
+                result += `RAG上下文: ${data.ragContext || '無'}\n`;
+                result += `找到資料數量: ${data.contextCount || 0}\n`;
+                result += `搜尋結果數量: ${data.searchResults || 0}\n`;
+                result += `模型: ${data.model || '未知'}`;
+
+                showResult('newsResult', result, 'success');
+            } catch (error) {
+                showResult('newsResult', `錯誤: ${error.message}`, 'error');
+            }
+        }
+
+        async function testNonNewsQuestion() {
+            const nonNewsQuestion = "你好，今天心情怎麼樣？";
+            document.getElementById('newsQuestion').value = nonNewsQuestion;
+            await testNewsQuestion();
+        }
+
+        async function testRAGSearch() {
+            const query = document.getElementById('ragQuery').value.trim();
+            if (!query) {
+                showResult('ragResult', '請輸入查詢內容', 'error');
+                return;
+            }
+
+            showLoading('ragResult');
+
+            try {
+                const response = await fetch('/api/rag/search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        query: query,
+                        collection: 'news_knowledge',
+                        limit: 5
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                
+                let result = `查詢: ${query}\n\n`;
+                result += `找到 ${data.count} 條結果:\n\n`;
+                
+                data.results.forEach((item, index) => {
+                    result += `[${index + 1}] ${item.content.substring(0, 100)}...\n`;
+                    result += `相似度: ${(1 - item.distance).toFixed(3)}\n\n`;
+                });
+
+                showResult('ragResult', result, 'success');
+            } catch (error) {
+                showResult('ragResult', `錯誤: ${error.message}`, 'error');
+            }
+        }
+
+        async function testRAGChat() {
+            const query = document.getElementById('ragQuery').value.trim();
+            if (!query) {
+                showResult('ragResult', '請輸入查詢內容', 'error');
+                return;
+            }
+
+            showLoading('ragResult');
+
+            try {
+                const response = await fetch('/api/rag/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        messages: [
+                            { role: 'user', content: query }
+                        ],
+                        collection: 'news_knowledge',
+                        ragEnabled: true,
+                        searchLimit: 3
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                
+                let result = `問題: ${query}\n\n`;
+                result += `RAG回答: ${data.message}\n\n`;
+                result += `RAG上下文: ${data.ragContext}\n`;
+                result += `找到資料數量: ${data.contextCount}\n`;
+                result += `搜尋結果數量: ${data.searchResults}`;
+
+                showResult('ragResult', result, 'success');
+            } catch (error) {
+                showResult('ragResult', `錯誤: ${error.message}`, 'error');
+            }
+        }
+
+        async function checkSystemStatus() {
+            showLoading('statusResult');
+
+            try {
+                const checks = [];
+                
+                // 檢查RAG API
+                try {
+                    const ragResponse = await fetch('/api/rag/search', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            query: 'test',
+                            collection: 'news_knowledge',
+                            limit: 1
+                        })
+                    });
+                    checks.push(`RAG API: ${ragResponse.ok ? '✅ 正常' : '❌ 錯誤'}`);
+                } catch (error) {
+                    checks.push(`RAG API: ❌ 錯誤 - ${error.message}`);
+                }
+
+                // 檢查RAG聊天API
+                try {
+                    const ragChatResponse = await fetch('/api/rag/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            messages: [{ role: 'user', content: 'test' }],
+                            collection: 'news_knowledge',
+                            ragEnabled: true,
+                            searchLimit: 1
+                        })
+                    });
+                    checks.push(`RAG聊天API: ${ragChatResponse.ok ? '✅ 正常' : '❌ 錯誤'}`);
+                } catch (error) {
+                    checks.push(`RAG聊天API: ❌ 錯誤 - ${error.message}`);
+                }
+
+                // 檢查新聞API
+                try {
+                    const newsResponse = await fetch('/api/news/fetch');
+                    checks.push(`新聞API: ${newsResponse.ok ? '✅ 正常' : '❌ 錯誤'}`);
+                } catch (error) {
+                    checks.push(`新聞API: ❌ 錯誤 - ${error.message}`);
+                }
+
+                const result = `系統狀態檢查結果:\n\n${checks.join('\n')}\n\n`;
+                const allOk = checks.every(check => check.includes('✅'));
+                
+                showResult('statusResult', result, allOk ? 'success' : 'error');
+            } catch (error) {
+                showResult('statusResult', `檢查失敗: ${error.message}`, 'error');
+            }
+        }
+    </script>
+</body>
+</html>
