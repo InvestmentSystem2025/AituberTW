@@ -199,6 +199,7 @@ interface General {
   messageReceiverEnabled: boolean
   clientId: string
   useSearchGrounding: boolean
+  webSearchMode: 'openai' | 'vector-db'
   dynamicRetrievalThreshold: number
   maxPastMessages: number
   useVideoAsBackground: boolean
@@ -449,6 +450,15 @@ const getInitialValuesFromEnv = (): SettingsState => ({
     process.env.NEXT_PUBLIC_MESSAGE_RECEIVER_ENABLED === 'true',
   clientId: process.env.NEXT_PUBLIC_CLIENT_ID || '',
   useSearchGrounding: process.env.NEXT_PUBLIC_USE_SEARCH_GROUNDING === 'true',
+  webSearchMode: (() => {
+    const envValue = process.env.NEXT_PUBLIC_WEB_SEARCH_MODE;
+    console.log('🔍 環境變數檢查:', {
+      NEXT_PUBLIC_WEB_SEARCH_MODE: envValue,
+      type: typeof envValue,
+      allEnvKeys: Object.keys(process.env).filter(key => key.includes('WEB_SEARCH'))
+    });
+    return (envValue as 'openai' | 'vector-db') || 'vector-db';
+  })(),
   dynamicRetrievalThreshold:
     parseFloat(process.env.NEXT_PUBLIC_DYNAMIC_RETRIEVAL_THRESHOLD || '0.3') ||
     0.3,
@@ -566,6 +576,17 @@ const settingsStore = create<SettingsState>()(
         }
       }
 
+      // 強制 webSearchMode 使用環境變數
+      if (state) {
+        const envWebSearchMode = (process.env.NEXT_PUBLIC_WEB_SEARCH_MODE as 'openai' | 'vector-db') || 'vector-db'
+        console.log('🔄 強制覆蓋 webSearchMode:', {
+          localStorage: state.webSearchMode,
+          env: envWebSearchMode,
+          overriding: state.webSearchMode !== envWebSearchMode
+        })
+        state.webSearchMode = envWebSearchMode
+      }
+
       // Override with environment variables if the option is enabled
       if (
         state &&
@@ -668,6 +689,7 @@ const settingsStore = create<SettingsState>()(
       messageReceiverEnabled: state.messageReceiverEnabled,
       clientId: state.clientId,
       useSearchGrounding: state.useSearchGrounding,
+      // webSearchMode: state.webSearchMode, // 不保存到 localStorage，總是使用環境變數
       openaiTTSVoice: state.openaiTTSVoice,
       openaiTTSModel: state.openaiTTSModel,
       openaiTTSSpeed: state.openaiTTSSpeed,

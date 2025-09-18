@@ -19,7 +19,8 @@ type AIServiceConfig = Record<VercelAIService, (params: any) => any>
  * Vercel AI SDKを使用したAIサービス設定
  */
 export const aiServiceConfig: AIServiceConfig = {
-  openai: ({ apiKey }) => createOpenAI({ apiKey }).responses,
+  openai: ({ apiKey }) => createOpenAI({ apiKey }),
+  //openai: ({ apiKey }) => createOpenAI({ apiKey }).responses,
   anthropic: ({ apiKey }) => createAnthropic({ apiKey }),
   google: ({ apiKey }) => createGoogleGenerativeAI({ apiKey }),
   azure: ({ resourceName, apiKey }) =>
@@ -60,6 +61,7 @@ export async function streamAiText({
   temperature,
   maxTokens,
   options = {},
+  aiApiKey,
 }: {
   model: string
   modelInstance: any
@@ -67,16 +69,111 @@ export async function streamAiText({
   temperature: number
   maxTokens: number
   options?: any
+  aiApiKey?: string
 }) {
   try {
-    const result = await streamText({
-      model: modelInstance(model, options),
-      messages: messages as CoreMessage[],
+    // 檢查是否為 OpenAI web-search 模式
+    const isOpenAIWebSearch = options.tools && options.tools.some((tool: any) => tool.type === 'web_search')
+    
+    let streamOptions: any = {
       temperature,
       maxTokens,
-    })
+    }
 
-    return result.toDataStreamResponse()
+    // 如果是 OpenAI web-search 模式，使用 responses API
+    if (isOpenAIWebSearch) {
+      // 使用官方 OpenAI SDK 的 Responses API（支援 Edge）
+      const { OpenAI } = await import('openai')
+      const openaiClient = new OpenAI({ apiKey: aiApiKey || process.env.OPENAI_API_KEY })
+      // 僅取最後一則使用者訊息作為查詢輸入（貼近 /api/web-search 測試行為）
+      const lastUserMessage = messages
+        .filter((m) => m.role === 'user' && typeof m.content === 'string')
+        .pop()
+      const userInput = lastUserMessage
+        ? String(lastUserMessage.content)
+        : messages.map((msg) => `${msg.role}: ${msg.content}`).join('\n')
+
+      const result = await openaiClient.responses.create({
+        model: model,
+        tools: options.tools,
+        include: options.include,
+        temperature,
+        max_output_tokens: maxTokens,
+        input: userInput,
+        stream: true,
+      })
+
+      // 轉換 Responses 流為前端可解析的 SSE (data:) 格式
+      const sourceStream: ReadableStream =
+        (result as any).toReadableStream?.() || (result as any).body
+
+      const transformed = new ReadableStream({
+        async start(controller) {
+          const reader = (sourceStream as any).getReader()
+          const decoder = new TextDecoder('utf-8')
+          let buffer = ''
+          try {
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              buffer += decoder.decode(value, { stream: true })
+              const lines = buffer.split('\n')
+              buffer = lines.pop() || ''
+              for (const line of lines) {
+                const trimmed = line.trim()
+                if (!trimmed) continue
+                try {
+                  const event = JSON.parse(trimmed)
+                  // 只轉出文字增量，符合前端對 OpenAI Chat SSE 的解析
+                  if (
+                    event.type === 'response.output_text.delta' &&
+                    typeof event.delta === 'string' &&
+                    event.delta.length > 0
+                  ) {
+                    const ssePayload = {
+                      choices: [
+                        { delta: { content: event.delta } },
+                      ],
+                    }
+                    controller.enqueue(
+                      `data: ${JSON.stringify(ssePayload)}\n`
+                    )
+                  } else if (event.type === 'response.completed') {
+                    controller.enqueue('data: [DONE]\n')
+                  }
+                } catch (e) {
+                  // 忽略非 JSON 行
+                  continue
+                }
+              }
+            }
+          } catch (err) {
+            controller.error(err)
+          } finally {
+            controller.close()
+          }
+        },
+      })
+
+      return new Response(transformed, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      })
+    } else {
+      // 一般模式使用 streamText
+      const result = await streamText({
+        model: modelInstance(model, options),
+        messages: messages as CoreMessage[],
+        temperature,
+        maxTokens,
+      })
+
+      return result.toDataStreamResponse()
+    }
   } catch (error: any) {
     console.error(`Vercel AI Stream Error: ${error.message || 'Unknown error'}`)
     console.error(`Model: ${model}, Temperature: ${temperature}`)
@@ -103,25 +200,61 @@ export async function generateAiText({
   messages,
   temperature,
   maxTokens,
+  options = {},
+  aiApiKey,
 }: {
   model: string
   modelInstance: any
   messages: Message[]
   temperature: number
   maxTokens: number
+  options?: any
+  aiApiKey?: string
 }) {
   try {
-    const result = await generateText({
-      model: modelInstance(model),
-      messages: messages as CoreMessage[],
-      temperature,
-      maxTokens,
-    })
+    // 檢查是否為 OpenAI web-search 模式
+    const isOpenAIWebSearch = options.tools && options.tools.some((tool: any) => tool.type === 'web_search')
+    
+    if (isOpenAIWebSearch) {
+      // 使用官方 OpenAI SDK Responses API
+      const { OpenAI } = await import('openai')
+      const openaiClient = new OpenAI({ apiKey: aiApiKey || process.env.OPENAI_API_KEY })
+      // 僅取最後一則使用者訊息作為查詢輸入（貼近 /api/web-search 測試行為）
+      const lastUserMessage = messages
+        .filter((m) => m.role === 'user' && typeof m.content === 'string')
+        .pop()
+      const userInput = lastUserMessage
+        ? String(lastUserMessage.content)
+        : messages.map((msg) => `${msg.role}: ${msg.content}`).join('\n')
 
-    return new Response(JSON.stringify({ text: result.text }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
+      const result = await openaiClient.responses.create({
+        model: model,
+        tools: options.tools,
+        include: options.include,
+        temperature,
+        max_output_tokens: maxTokens,
+        input: userInput,
+        stream: false,
+      })
+
+      return new Response(JSON.stringify({ text: (result as any).output_text }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    } else {
+      // 一般模式使用 generateText
+      const result = await generateText({
+        model: modelInstance(model),
+        messages: messages as CoreMessage[],
+        temperature,
+        maxTokens,
+      })
+
+      return new Response(JSON.stringify({ text: result.text }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
   } catch (error: any) {
     console.error(
       `Vercel AI Generate Error: ${error.message || 'Unknown error'}`

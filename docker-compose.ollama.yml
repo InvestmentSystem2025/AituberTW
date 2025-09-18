@@ -1,6 +1,4 @@
-﻿version: '3.8'
-
-services:
+﻿services:
   # Ollama 服務
   ollama:
     image: ollama/ollama:latest

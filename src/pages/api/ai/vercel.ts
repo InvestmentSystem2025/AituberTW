@@ -40,6 +40,7 @@ export default async function handler(req: NextRequest) {
     azureEndpoint,
     stream,
     useSearchGrounding,
+    webSearchMode,
     dynamicRetrievalThreshold,
     temperature = 1.0,
     maxTokens = 4096,
@@ -145,6 +146,12 @@ export default async function handler(req: NextRequest) {
       useSearchGrounding &&
       modifiedMessages.every((msg) => typeof msg.content === 'string')
 
+    // OpenAI web-search オプションの設定
+    const isUseOpenAIWebSearch =
+      aiService === 'openai' &&
+      webSearchMode === 'openai' &&
+      modifiedMessages.every((msg) => typeof msg.content === 'string')
+
     let options = {}
     if (isUseSearchGrounding) {
       options = {
@@ -158,6 +165,20 @@ export default async function handler(req: NextRequest) {
               dynamicThreshold: dynamicRetrievalThreshold,
             },
           }),
+      }
+    } else if (isUseOpenAIWebSearch) {
+      // OpenAI web-search ツールの設定
+      options = {
+        tools: [{ 
+          type: "web_search" as any,
+          user_location: {
+            type: "approximate",
+            country: "TW",
+            city: "Taipei",
+            region: "Taipei"
+          }
+        }],
+        include: ["web_search_call.action.sources"] as any,
       }
     }
 
@@ -422,7 +443,9 @@ export default async function handler(req: NextRequest) {
         temperature,
         maxTokens,
         options,
-      })
+        // 額外傳入 openaiApiKey 供 web-search 分支使用官方 SDK
+        aiApiKey,
+      } as any)
     } else {
       return await generateAiText({
         model: modifiedModel,
@@ -430,7 +453,10 @@ export default async function handler(req: NextRequest) {
         messages: modifiedMessages,
         temperature,
         maxTokens,
-      })
+        options,
+        // 額外傳入 openaiApiKey 供 web-search 分支使用官方 SDK
+        aiApiKey,
+      } as any)
     }
   } catch (error) {
     console.error('Error in AI API call:', error)
