@@ -30,7 +30,7 @@
       "parameters": {
         "url": "https://technews.tw/feed/",
         "options": {
-          "itemsToReturn": 3
+          "itemsToReturn": 6
         }
       },
       "id": "3c1e4f6a-9d2b-6c4e-1a3f-5b7c8d9e1f2a",
@@ -41,9 +41,19 @@
     },
     {
       "parameters": {
+        "jsCode": "// 限制 Taiwan Tech RSS 為 6 篇新聞\nconst items = $input.all();\nconst limitedItems = items.slice(0, 6);\nreturn limitedItems;"
+      },
+      "id": "3d1e4f6a-9d2b-6c4e-1a3f-5b7c8d9e1f2b",
+      "name": "Limit Taiwan Tech",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
         "url": "https://www3.nhk.or.jp/rss/news/cat0.xml",
         "options": {
-          "itemsToReturn": 3
+          "itemsToReturn": 6
         }
       },
       "id": "4d2f5a7b-1e3c-7d5f-2b4a-6c8d9e1f2a3b",
@@ -54,25 +64,66 @@
     },
     {
       "parameters": {
-        "mode": "combine",
-        "combinationMode": "multiplex",
-        "options": {}
+        "jsCode": "// 限制 Japan News RSS 為 6 篇新聞\nconst items = $input.all();\nconst limitedItems = items.slice(0, 6);\nreturn limitedItems;"
       },
-      "id": "5e3a6b8c-2f4d-8e6a-3c5b-7d9e1f2a3b4c",
-      "name": "Merge RSS Feeds",
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 2.1,
-      "position": [900, 300]
+      "id": "4e2f5a7b-1e3c-7d5f-2b4a-6c8d9e1f2a3c",
+      "name": "Limit Japan News",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 400]
     },
     {
       "parameters": {
-        "jsCode": "// 處理和清理RSS新聞數據 - 單一項目版本\nconst allItems = $input.all();\nconst MAX_ITEMS = 6; // 強制限制：最多處理6個新聞項目\n\nconsole.log(`📥 Processing ${allItems.length} RSS items from all sources (limit: ${MAX_ITEMS})...`);\n\n// 限制處理數量，防止過多項目\nconst limitedItems = allItems.slice(0, MAX_ITEMS);\nconsole.log(`📊 Limited to ${limitedItems.length} items for processing`);\n\n// 收集所有新聞到一個陣列中\nconst allNewsItems = [];\nfor (const item of limitedItems) {\n  const rawContent = item.json.content || item.json.contentSnippet || item.json.description || item.json.summary || '';\n  const cleanContent = rawContent.replace(/<[^>]*>/g, '').trim();\n  \n  const newsItem = {\n    id: `news_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,\n    title: item.json.title || 'No Title',\n    content: cleanContent,\n    url: item.json.link || '',\n    publishedAt: item.json.pubDate || item.json.published || new Date().toISOString(),\n    source: item.json.link?.includes('nhk') || item.json.link?.includes('asahi') ? 'NHK Japan' : \n            item.json.link?.includes('technews') ? 'TechNews Taiwan' : \n            item.json.link?.includes('ltn') ? 'LTN Taiwan' : 'Unknown',\n    language: item.json.link?.includes('nhk') || item.json.link?.includes('asahi') ? 'ja' : 'zh-TW'\n  };\n  \n  if (newsItem.title && newsItem.title !== 'No Title' && \n      (newsItem.content.length > 20 || newsItem.title.length > 10)) {\n    console.log(`✅ ${newsItem.source}: ${newsItem.title.substring(0, 40)}...`);\n    allNewsItems.push(newsItem);\n  } else {\n    console.log(`❌ Filtered: ${newsItem.title} (content: ${newsItem.content.length} chars)`);\n  }\n}\n\nconsole.log(`📊 Final result: ${allNewsItems.length} valid items processed`);\n\n// 返回單一項目包含所有新聞，避免多次觸發下游節點\nif (allNewsItems.length > 0) {\n  console.log(`📤 Returning single item with ${allNewsItems.length} news items`);\n  return { newsItems: allNewsItems };\n} else {\n  console.log('❌ No valid news items found');\n  return {};\n}"
+        "url": "https://news.ltn.com.tw/rss/novelty.xml",
+        "options": {
+          "itemsToReturn": 6
+        }
       },
-      "id": "6f4b7c9d-3a5e-9f7b-4d6c-8e1f2a3b4c5d",
-      "name": "Process News Data",
+      "id": "5e3a6b8c-2f4d-8e6a-3c5b-7d9e1f2a3b4c",
+      "name": "LTN Novelty RSS",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [680, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 限制 LTN Novelty RSS 為 6 篇新聞\nconst items = $input.all();\nconst limitedItems = items.slice(0, 6);\nreturn limitedItems;"
+      },
+      "id": "5f3a6b8c-2f4d-8e6a-3c5b-7d9e1f2a3b4d",
+      "name": "Limit LTN Novelty",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1120, 300]
+      "position": [900, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 將 Taiwan Tech 的 6 筆項目打包為單一 ITEM 並格式化\nconst items = $input.all().map(i => (i.json && i.json.json) ? i.json.json : i.json);\nconst newsItems = items.map(item => {\n  const rawContent = item['content:encoded'] || item.content || item.contentSnippet || item.description || item.summary || '';\n  const cleanContent = String(rawContent).replace(/<[^>]*>/g, '').trim();\n  return {\n    id: `news_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,\n    title: item.title || 'No Title',\n    content: cleanContent,\n    url: item.link || item.guid || '',\n    publishedAt: item.pubDate || item.published || item.isoDate || new Date().toISOString(),\n    source: 'TechNews Taiwan',\n    language: 'zh-TW'\n  };\n});\nreturn [{ json: { newsItems } }];"
+      },
+      "id": "a1-pack-tech",
+      "name": "Pack Taiwan Tech Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 將 Japan News 的 6 筆項目打包為單一 ITEM 並格式化\nconst items = $input.all().map(i => (i.json && i.json.json) ? i.json.json : i.json);\nconst newsItems = items.map(item => {\n  const rawContent = item['content:encoded'] || item.content || item.contentSnippet || item.description || item.summary || '';\n  const cleanContent = String(rawContent).replace(/<[^>]*>/g, '').trim();\n  return {\n    id: `news_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,\n    title: item.title || 'No Title',\n    content: cleanContent,\n    url: item.link || item.guid || '',\n    publishedAt: item.pubDate || item.published || item.isoDate || new Date().toISOString(),\n    source: 'NHK Japan',\n    language: 'ja'\n  };\n});\nreturn [{ json: { newsItems } }];"
+      },
+      "id": "a2-pack-japan",
+      "name": "Pack Japan News Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 將 LTN Novelty 的 6 筆項目打包為單一 ITEM 並格式化\nconst items = $input.all().map(i => (i.json && i.json.json) ? i.json.json : i.json);\nconst newsItems = items.map(item => {\n  const rawContent = item['content:encoded'] || item.content || item.contentSnippet || item.description || item.summary || '';\n  const cleanContent = String(rawContent).replace(/<[^>]*>/g, '').trim();\n  return {\n    id: `news_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,\n    title: item.title || 'No Title',\n    content: cleanContent,\n    url: item.link || item.guid || '',\n    publishedAt: item.pubDate || item.published || item.isoDate || new Date().toISOString(),\n    source: 'LTN Taiwan',\n    language: 'zh-TW'\n  };\n});\nreturn [{ json: { newsItems } }];"
+      },
+      "id": "a3-pack-ltn",
+      "name": "Pack LTN Novelty Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 600]
     },
     {
       "parameters": {
@@ -87,20 +138,54 @@
           }
         }
       },
-      "id": "7a5c8d1e-4b6f-1a8c-5e7d-9f2a3b4c5d6e",
-      "name": "Send to Vector DB",
+      "id": "8b6d9e2f-5c7a-2b9d-6f8e-1a3b4c5d6e7f",
+      "name": "Send Taiwan Tech to Vector DB",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1340, 300]
+      "position": [1280, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://app:3000/api/news/ingest",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"newsItems\": $json.newsItems, \"collection\": \"news_knowledge\" } }}",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        }
+      },
+      "id": "9c7e1a3f-6d8b-3c1e-7a9f-2b4c5d6e7f8a",
+      "name": "Send Japan News to Vector DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1280, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://app:3000/api/news/ingest",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"newsItems\": $json.newsItems, \"collection\": \"news_knowledge\" } }}",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        }
+      },
+      "id": "1d8f2b4a-7e9c-4d2f-8b1e-3c5d6e7f8a9b",
+      "name": "Send LTN Novelty to Vector DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1280, 600]
     },
     {
       "parameters": {
         "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
+          "options": {},
           "conditions": [
             {
               "id": "1",
@@ -113,36 +198,33 @@
             }
           ],
           "combinator": "and"
-        },
-        "options": {}
+        }
       },
-      "id": "8b6d9e2f-5c7a-2b9d-6f8e-1a3b4c5d6e7f",
+      "id": "9c7e1a3f-6d8b-3c1e-7a9f-2b4c5d6e7f8a",
       "name": "Check Success",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1560, 300]
+      "position": [1780, 400]
     },
     {
       "parameters": {
-        "message": "✅ Successfully processed {{ $json.count }} news items at {{ new Date().toLocaleString() }}",
-        "options": {}
+        "message": "✅ Successfully processed {{ $json.count }} news items at {{ new Date().toLocaleString() }}"
       },
-      "id": "9c7e1a3f-6d8b-3c1e-7a9f-2b4c5d6e7f8a",
+      "id": "1d8f2b4a-7e9c-4d2f-8b1e-3c5d6e7f8a9b",
       "name": "Success Notification",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [1780, 200]
+      "position": [2000, 300]
     },
     {
       "parameters": {
-        "message": "❌ Failed to process news items: {{ $json.error }}",
-        "options": {}
+        "message": "❌ Failed to process news items: {{ $json.error || 'no items ingested' }}"
       },
-      "id": "1d8f2b4a-7e9c-4d2f-8b1e-3c5d6e7f8a9b",
+      "id": "2e9f3a5b-8d1c-4e3f-9c2d-5f6a7b8c9d1e",
       "name": "Error Notification",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [1780, 400]
+      "position": [2000, 500]
     }
   ],
   "connections": {
@@ -169,6 +251,11 @@
             "node": "Japan News RSS",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "LTN Novelty RSS",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -177,7 +264,18 @@
       "main": [
         [
           {
-            "node": "Merge RSS Feeds",
+            "node": "Limit Taiwan Tech",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit Taiwan Tech": {
+      "main": [
+        [
+          {
+            "node": "Pack Taiwan Tech Items",
             "type": "main",
             "index": 0
           }
@@ -188,36 +286,102 @@
       "main": [
         [
           {
-            "node": "Merge RSS Feeds",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
-    },
-    "Merge RSS Feeds": {
-      "main": [
-        [
-          {
-            "node": "Process News Data",
+            "node": "Limit Japan News",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Process News Data": {
+    "Limit Japan News": {
       "main": [
         [
           {
-            "node": "Send to Vector DB",
+            "node": "Pack Japan News Items",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Send to Vector DB": {
+    "LTN Novelty RSS": {
+      "main": [
+        [
+          {
+            "node": "Limit LTN Novelty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit LTN Novelty": {
+      "main": [
+        [
+          {
+            "node": "Pack LTN Novelty Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pack Taiwan Tech Items": {
+      "main": [
+        [
+          {
+            "node": "Send Taiwan Tech to Vector DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pack Japan News Items": {
+      "main": [
+        [
+          {
+            "node": "Send Japan News to Vector DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pack LTN Novelty Items": {
+      "main": [
+        [
+          {
+            "node": "Send LTN Novelty to Vector DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Taiwan Tech to Vector DB": {
+      "main": [
+        [
+          {
+            "node": "Check Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Japan News to Vector DB": {
+      "main": [
+        [
+          {
+            "node": "Check Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send LTN Novelty to Vector DB": {
       "main": [
         [
           {
@@ -247,20 +411,7 @@
       ]
     }
   },
-  "pinData": {},
   "settings": {
     "executionOrder": "v1"
-  },
-  "staticData": null,
-  "tags": [
-    {
-      "createdAt": "2024-09-12T04:00:00.000Z",
-      "updatedAt": "2024-09-12T04:00:00.000Z",
-      "id": "1",
-      "name": "news-automation"
-    }
-  ],
-  "triggerCount": 1,
-  "updatedAt": "2024-09-12T04:00:00.000Z",
-  "versionId": "1"
+  }
 }

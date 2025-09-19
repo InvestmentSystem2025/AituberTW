@@ -47,6 +47,7 @@
       - ./n8n-workflows:/home/node/.n8n/workflows
       - ./news-data:/app/news-data
     environment:
+      - TZ=Asia/Taipei
       - N8N_BASIC_AUTH_ACTIVE=false
       - N8N_USER_MANAGEMENT_DISABLED=true
       - N8N_DIAGNOSTICS_ENABLED=false
