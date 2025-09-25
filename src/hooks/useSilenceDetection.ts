@@ -171,7 +171,7 @@ export const useSilenceDetection = ({
         }
       }, 100) // 100msごとにチェック
     },
-    [onTextDetected, setUserMessage, speechDetectedRef, t]
+    [onTextDetected, setUserMessage, t]
   )
 
   // 音声検出時刻を更新する関数
