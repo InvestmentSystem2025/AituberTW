@@ -34,6 +34,6 @@ export const getVoiceLanguageCode = (selectLanguage: string): VoiceLanguage => {
     case 'th':
       return 'th-TH'
     default:
-      return 'ja-JP'
+      return 'zh-TW'
   }
 }
