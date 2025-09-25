@@ -259,7 +259,7 @@ export async function getInterviewAIResponse(messages: Message[]) {
     }
 
     const data = await response.json()
-    
+    //一時停止TTS
     // 如果AI回應成功，觸發TTS
     // if (data.text) {
     //   triggerInterviewTTS(data.text)
@@ -472,7 +472,7 @@ export async function getInterviewAIResponseStream(
               }
             }
           }
-          
+          //一時停止TTS
           // 串流結束後觸發TTS
           // if (fullResponse.trim()) {
           //   triggerInterviewTTS(fullResponse)
