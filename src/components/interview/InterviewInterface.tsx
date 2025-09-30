@@ -4,6 +4,9 @@ import settingsStore from '@/features/stores/settings'
 import { getInterviewAIResponse, getInterviewAIResponseStream } from '@/features/chat/interviewAIChat'
 import { Message } from '@/features/messages/messages'
 import { useInterviewVoiceRecognition } from '@/hooks/useInterviewVoiceRecognition'
+import { InterviewScoringEngine } from '@/features/interview/interviewScoring'
+import { InterviewScoringSettings } from '@/components/interview/InterviewScoringSettings'
+import { ScoringCriteria, AnswerScore, DEFAULT_SCORING_CRITERIA } from '@/types/interviewScoring'
 
 // 直接在組件內定義面試問題
 const INTERVIEW_QUESTIONS = [
@@ -76,7 +79,7 @@ interface ChatMessage {
 }
 
 interface InterviewInterfaceProps {
-  onInterviewComplete: () => void
+  onInterviewComplete: (result?: any) => void
 }
 
 export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
@@ -91,6 +94,12 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const isInitializedRef = useRef(false)
+  
+  // 評分系統狀態
+  const [scoringEngine] = useState(() => new InterviewScoringEngine(DEFAULT_SCORING_CRITERIA))
+  const [answerScores, setAnswerScores] = useState<AnswerScore[]>([])
+  const [showScoringSettings, setShowScoringSettings] = useState(false)
+  const [currentQuestionId, setCurrentQuestionId] = useState<string>('')
   
   // 使用 ref 來避免閉包問題
   const handleUserAnswerRef = useRef<(answer: string) => void>()
@@ -154,10 +163,23 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       if (aiResponse.text) {
         addAIMessage(aiResponse.text)
         
+        // 處理評分結果
+        if (aiResponse.scoreResult) {
+          setAnswerScores(prev => [...prev, aiResponse.scoreResult!])
+          // 直接將已評分的結果添加到評分引擎
+          scoringEngine.addScoredAnswer(aiResponse.scoreResult)
+        }
+        
         // 檢查是否為面試結束的回應
-        if (aiResponse.text.includes('面試到此結束') || aiResponse.text.includes('謝謝你的回答')) {
+        const endKeywords = ['面試到此結束', '面試結束', '感謝你的參與', '我們的面試', '後續流程']
+        const isInterviewEnding = endKeywords.some(keyword => aiResponse.text.includes(keyword))
+        
+        if (isInterviewEnding) {
+          console.log('🎯 檢測到面試結束信號，準備生成最終結果...')
           setTimeout(() => {
-            onInterviewComplete()
+            const finalResult = scoringEngine.generateFinalResult('candidate-001')
+            console.log('📊 最終面試結果:', finalResult)
+            onInterviewComplete(finalResult)
           }, 3000)
         } else {
           setIsWaitingForAnswer(true)
@@ -208,6 +230,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   // 開始面試
   const startInterview = useCallback(async () => {
     const firstQuestion = INTERVIEW_QUESTIONS[0]
+    setCurrentQuestionId(firstQuestion.id)
     addAIMessage(firstQuestion.question)
     setIsWaitingForAnswer(true)
   }, [addAIMessage])
@@ -280,6 +303,12 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           <div className="flex justify-between items-center">
             <div className="font-bold">面試對話記錄</div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowScoringSettings(true)}
+                className="px-2 py-1 bg-white/20 hover:bg-white/30 rounded text-sm transition-colors"
+              >
+                評分設定
+              </button>
               <label className="text-sm">語音語言:</label>
               <select
                 value={interviewLanguage}
@@ -312,30 +341,72 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           ref={chatContainerRef}
           className="flex-1 overflow-y-auto p-4 space-y-4"
         >
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${
-                message.type === 'ai' ? 'justify-start' : 'justify-end'
-              }`}
-            >
-              <div
-                className={`max-w-[80%] px-4 py-2 rounded-lg ${
-                  message.type === 'ai'
-                    ? 'bg-blue-100 text-blue-900'
-                    : 'bg-green-100 text-green-900'
-                }`}
-              >
-                <div className="text-sm font-medium mb-1">
-                  {message.type === 'ai' ? 'AI面試官' : '面試者'}
+          {messages.map((message, index) => {
+            // 查找對應的評分結果
+            const scoreResult = answerScores.find(score => 
+              score.questionText === message.content || 
+              (message.type === 'user' && answerScores[index - 1])
+            )
+            
+            return (
+              <div key={message.id}>
+                <div
+                  className={`flex ${
+                    message.type === 'ai' ? 'justify-start' : 'justify-end'
+                  }`}
+                >
+                  <div
+                    className={`max-w-[80%] px-4 py-2 rounded-lg ${
+                      message.type === 'ai'
+                        ? 'bg-blue-100 text-blue-900'
+                        : 'bg-green-100 text-green-900'
+                    }`}
+                  >
+                    <div className="text-sm font-medium mb-1">
+                      {message.type === 'ai' ? 'AI面試官' : '面試者'}
+                    </div>
+                    <div className="text-sm">{message.content}</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {message.timestamp.toLocaleTimeString()}
+                    </div>
+                  </div>
                 </div>
-                <div className="text-sm">{message.content}</div>
-                <div className="text-xs text-gray-500 mt-1">
-                  {message.timestamp.toLocaleTimeString()}
-                </div>
+                
+                {/* 顯示評分結果 */}
+                {scoreResult && message.type === 'ai' && (
+                  <div className="mt-2 ml-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <div className="text-sm font-medium text-yellow-800 mb-2">📊 評分結果</div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="flex justify-between">
+                        <span>內容完整性:</span>
+                        <span className="font-medium">{scoreResult.scores.contentCompleteness}/10</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>邏輯清晰度:</span>
+                        <span className="font-medium">{scoreResult.scores.logicalClarity}/10</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>專業深度:</span>
+                        <span className="font-medium">{scoreResult.scores.professionalDepth}/10</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>溝通表達:</span>
+                        <span className="font-medium">{scoreResult.scores.communicationSkills}/10</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>個人特質:</span>
+                        <span className="font-medium">{scoreResult.scores.personalTraits}/10</span>
+                      </div>
+                      <div className="flex justify-between col-span-2 border-t pt-1">
+                        <span className="font-medium">總分:</span>
+                        <span className="font-bold text-blue-600">{scoreResult.totalScore.toFixed(1)}/10</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
 
         {/* 輸入區域 */}
@@ -355,7 +426,12 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
               {isListening ? '停止語音輸入' : '開始語音輸入'}
             </button>
             <button
-              onClick={onInterviewComplete}
+              onClick={() => {
+                console.log('🎯 手動結束面試，準備生成最終結果...')
+                const finalResult = scoringEngine.generateFinalResult('candidate-001')
+                console.log('📊 最終面試結果:', finalResult)
+                onInterviewComplete(finalResult)
+              }}
               className="px-4 py-2 rounded-lg text-white font-medium bg-gray-500 hover:bg-gray-600"
             >
               結束面試
@@ -426,6 +502,16 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           AI面試官
         </div>
       </div>
+
+      {/* 評分設定彈窗 */}
+      <InterviewScoringSettings
+        isOpen={showScoringSettings}
+        onClose={() => setShowScoringSettings(false)}
+        onSave={(criteria) => {
+          scoringEngine.updatePassingCriteria(criteria)
+          setShowScoringSettings(false)
+        }}
+      />
     </div>
   )
 }

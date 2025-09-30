@@ -150,14 +150,15 @@ const Interview = () => {
       ) : interviewFlow.interviewStatus === 'interviewing' ? (
         /* 面試進行中：顯示新的面試界面 */
         <InterviewInterface
-          onInterviewComplete={() => {
-            interviewFlow.completeInterview()
+          onInterviewComplete={(result) => {
+            interviewFlow.completeInterview(result)
           }}
         />
-      ) : interviewFlow.showResults ? (
+      ) : interviewFlow.interviewStatus === 'completed' || interviewFlow.showResults ? (
         /* 顯示面試結果 */
         <InterviewResults
           answers={interviewFlow.answers}
+          interviewResult={interviewFlow.interviewResult}
           onRestart={interviewFlow.restartInterview}
           onExit={interviewFlow.exitInterview}
         />

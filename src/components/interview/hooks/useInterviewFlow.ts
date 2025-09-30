@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { usePersonDetection, PersonDetectionState } from './usePersonDetection'
+import { InterviewResult } from '@/types/interviewScoring'
 
 export interface Answer {
   question: {
@@ -16,6 +17,7 @@ export interface InterviewFlowState extends PersonDetectionState {
   interviewStarted: boolean
   answers: Answer[]
   showResults: boolean
+  interviewResult?: InterviewResult
 }
 
 export const useInterviewFlow = () => {
@@ -23,16 +25,20 @@ export const useInterviewFlow = () => {
   const [interviewStarted, setInterviewStarted] = useState(false)
   const [answers, setAnswers] = useState<Answer[]>([])
   const [showResults, setShowResults] = useState(false)
+  const [interviewResult, setInterviewResult] = useState<InterviewResult | undefined>(undefined)
+  const [interviewStatus, setInterviewStatus] = useState<'waiting' | 'detecting' | 'ready' | 'interviewing' | 'completed'>('waiting')
 
   // 重置面試流程
   const resetInterview = useCallback(() => {
     setInterviewStarted(false)
+    setInterviewStatus('waiting')
     personDetection.resetDetection()
   }, [personDetection])
 
   // 手動開始面試
   const startInterviewManually = useCallback(() => {
     setInterviewStarted(true)
+    setInterviewStatus('interviewing')
     personDetection.startInterview()
   }, [personDetection])
 
@@ -50,8 +56,12 @@ export const useInterviewFlow = () => {
   )
 
   // 完成面試並顯示結果
-  const completeInterview = useCallback(() => {
+  const completeInterview = useCallback((result?: InterviewResult) => {
     setInterviewStarted(false)
+    setInterviewStatus('completed')
+    if (result) {
+      setInterviewResult(result)
+    }
     setShowResults(true)
   }, [])
 
@@ -60,6 +70,8 @@ export const useInterviewFlow = () => {
     setAnswers([])
     setShowResults(false)
     setInterviewStarted(false)
+    setInterviewStatus('waiting')
+    setInterviewResult(undefined)
     personDetection.resetDetection()
   }, [personDetection])
 
@@ -68,6 +80,8 @@ export const useInterviewFlow = () => {
     setShowResults(false)
     setAnswers([])
     setInterviewStarted(false)
+    setInterviewStatus('waiting')
+    setInterviewResult(undefined)
     personDetection.resetDetection()
   }, [personDetection])
 
@@ -76,6 +90,8 @@ export const useInterviewFlow = () => {
     interviewStarted,
     answers,
     showResults,
+    interviewResult,
+    interviewStatus,
     resetInterview,
     startInterviewManually,
     addAnswer,

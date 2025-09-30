@@ -11,6 +11,8 @@ import {
   INTERVIEW_STAGES, 
   formatPrompt 
 } from './interviewPromptTemplates'
+import { InterviewScoringEngine } from '@/features/interview/interviewScoring'
+import { AnswerScore } from '@/types/interviewScoring'
 import { speakCharacter } from '../messages/speakCharacter'
 import { generateMessageId } from '@/utils/messageUtils'
 
@@ -133,6 +135,241 @@ function formatConversationHistory(messages: Message[]): string {
       return `${role}: ${msg.content}`
     })
     .join('\n')
+}
+
+/**
+ * 創建AnswerScore對象
+ */
+function createAnswerScore(scoreData: any): AnswerScore | null {
+  // 驗證必要的字段
+  if (!scoreData.scores || typeof scoreData.scores !== 'object') {
+    console.warn('評分數據缺少scores字段或格式不正確')
+    return null
+  }
+  
+  return {
+    answerId: scoreData.questionId || generateMessageId(),
+    questionId: scoreData.questionId || '',
+    questionText: scoreData.questionText || '',
+    answerText: scoreData.answerText || '',
+    timestamp: new Date(),
+    scores: {
+      contentCompleteness: Number(scoreData.scores.contentCompleteness) || 0,
+      logicalClarity: Number(scoreData.scores.logicalClarity) || 0,
+      professionalDepth: Number(scoreData.scores.professionalDepth) || 0,
+      communicationSkills: Number(scoreData.scores.communicationSkills) || 0,
+      personalTraits: Number(scoreData.scores.personalTraits) || 0
+    },
+    totalScore: Number(scoreData.totalScore) || 0,
+    deductions: {
+      contentCompleteness: Array.isArray(scoreData.deductions?.contentCompleteness) ? scoreData.deductions.contentCompleteness : [],
+      logicalClarity: Array.isArray(scoreData.deductions?.logicalClarity) ? scoreData.deductions.logicalClarity : [],
+      communicationSkills: Array.isArray(scoreData.deductions?.communicationSkills) ? scoreData.deductions.communicationSkills : []
+    },
+    additions: {
+      professionalDepth: Array.isArray(scoreData.additions?.professionalDepth) ? scoreData.additions.professionalDepth : [],
+      personalTraits: Array.isArray(scoreData.additions?.personalTraits) ? scoreData.additions.personalTraits : []
+    },
+    aiFeedback: String(scoreData.aiFeedback || '')
+  }
+}
+
+/**
+ * 解析AI回應中的評分信息
+ */
+function parseScoreFromResponse(response: string): AnswerScore | null {
+  const scoreStartPattern = /\[SCORE_START\]([\s\S]*?)\[SCORE_END\]/
+  const match = response.match(scoreStartPattern)
+  
+  if (!match) return null
+  
+  try {
+    // 清理JSON字符串，移除可能的額外字符
+    let jsonString = match[1].trim()
+    
+    // 檢查是否包含多個JSON對象（用逗號分隔）
+    const jsonObjects = []
+    let braceCount = 0
+    let currentObject = ''
+    let inString = false
+    let escapeNext = false
+    
+    for (let i = 0; i < jsonString.length; i++) {
+      const char = jsonString[i]
+      
+      if (escapeNext) {
+        currentObject += char
+        escapeNext = false
+        continue
+      }
+      
+      if (char === '\\') {
+        escapeNext = true
+        currentObject += char
+        continue
+      }
+      
+      if (char === '"' && !escapeNext) {
+        inString = !inString
+      }
+      
+      if (!inString) {
+        if (char === '{') {
+          braceCount++
+        } else if (char === '}') {
+          braceCount--
+        }
+      }
+      
+      currentObject += char
+      
+      // 當大括號平衡且不在字符串中時，表示一個完整的JSON對象
+      if (braceCount === 0 && currentObject.trim().startsWith('{')) {
+        jsonObjects.push(currentObject.trim())
+        currentObject = ''
+      }
+    }
+    
+    // 如果沒有找到多個對象，嘗試解析單個對象
+    if (jsonObjects.length === 0) {
+      // 嘗試修復常見的JSON格式問題
+      const jsonEndIndex = jsonString.lastIndexOf('}')
+      if (jsonEndIndex !== -1) {
+        jsonString = jsonString.substring(0, jsonEndIndex + 1)
+      }
+      
+      const jsonStartIndex = jsonString.indexOf('{')
+      if (jsonStartIndex !== -1) {
+        jsonString = jsonString.substring(jsonStartIndex)
+      }
+      
+      jsonString = jsonString.replace(/\n/g, ' ').replace(/\s+/g, ' ')
+      jsonString = jsonString.replace(/'/g, '"')
+      
+      console.log('🔍 嘗試解析的JSON字符串:', jsonString)
+      const scoreData = JSON.parse(jsonString)
+      return createAnswerScore(scoreData)
+    }
+    
+    // 解析多個JSON對象，返回最後一個（最新的評分）
+    console.log(`🔍 找到 ${jsonObjects.length} 個JSON對象，解析最後一個`)
+    const lastJsonString = jsonObjects[jsonObjects.length - 1]
+    console.log('🔍 最後一個JSON字符串:', lastJsonString)
+    
+    const scoreData = JSON.parse(lastJsonString)
+    return createAnswerScore(scoreData)
+  } catch (error) {
+    console.error('解析評分信息失敗:', error)
+    console.error('原始JSON字符串:', match[1])
+    
+    // 嘗試備用解析方法
+    try {
+      return parseScoreFromResponseFallback(match[1])
+    } catch (fallbackError) {
+      console.error('備用解析方法也失敗:', fallbackError)
+      return null
+    }
+  }
+}
+
+/**
+ * 備用評分解析方法 - 使用正則表達式提取分數
+ */
+function parseScoreFromResponseFallback(jsonString: string): AnswerScore | null {
+  try {
+    console.log('🔄 使用備用解析方法')
+    
+    // 使用正則表達式提取各個分數
+    const extractNumber = (pattern: string): number => {
+      const match = jsonString.match(new RegExp(pattern + '":\\s*(\\d+(?:\\.\\d+)?)'))
+      return match ? parseFloat(match[1]) : 0
+    }
+    
+    const extractArray = (pattern: string): string[] => {
+      const match = jsonString.match(new RegExp(pattern + '":\\s*\\[([^\\]]*)\\]'))
+      if (!match) return []
+      
+      // 提取數組中的字符串
+      const arrayContent = match[1]
+      const items = arrayContent.match(/"([^"]*)"/g)
+      return items ? items.map(item => item.replace(/"/g, '')) : []
+    }
+    
+    const scores = {
+      contentCompleteness: extractNumber('"contentCompleteness"'),
+      logicalClarity: extractNumber('"logicalClarity"'),
+      professionalDepth: extractNumber('"professionalDepth"'),
+      communicationSkills: extractNumber('"communicationSkills"'),
+      personalTraits: extractNumber('"personalTraits"')
+    }
+    
+    const totalScore = extractNumber('"totalScore"')
+    
+    // 提取問題和回答文本
+    const questionTextMatch = jsonString.match(/"questionText":\\s*"([^"]*)"/)
+    const answerTextMatch = jsonString.match(/"answerText":\\s*"([^"]*)"/)
+    const questionIdMatch = jsonString.match(/"questionId":\\s*"([^"]*)"/)
+    
+    return {
+      answerId: questionIdMatch ? questionIdMatch[1] : generateMessageId(),
+      questionId: questionIdMatch ? questionIdMatch[1] : '',
+      questionText: questionTextMatch ? questionTextMatch[1] : '',
+      answerText: answerTextMatch ? answerTextMatch[1] : '',
+      timestamp: new Date(),
+      scores,
+      totalScore,
+      deductions: {
+        contentCompleteness: extractArray('"contentCompleteness"'),
+        logicalClarity: extractArray('"logicalClarity"'),
+        communicationSkills: extractArray('"communicationSkills"')
+      },
+      additions: {
+        professionalDepth: extractArray('"professionalDepth"'),
+        personalTraits: extractArray('"personalTraits"')
+      },
+      aiFeedback: ''
+    }
+  } catch (error) {
+    console.error('備用解析方法失敗:', error)
+    return null
+  }
+}
+
+/**
+ * 記錄評分結果到控制台
+ */
+function logScoreResult(answerScore: AnswerScore): void {
+  console.log('=== 面試評分結果 ===')
+  console.log(`問題: ${answerScore.questionText}`)
+  console.log(`回答: ${answerScore.answerText}`)
+  console.log('--- 各項評分 ---')
+  console.log(`內容完整性: ${answerScore.scores.contentCompleteness}/10`)
+  console.log(`邏輯清晰度: ${answerScore.scores.logicalClarity}/10`)
+  console.log(`專業深度: ${answerScore.scores.professionalDepth}/10`)
+  console.log(`溝通表達: ${answerScore.scores.communicationSkills}/10`)
+  console.log(`個人特質: ${answerScore.scores.personalTraits}/10`)
+  console.log(`總分: ${answerScore.totalScore.toFixed(1)}/10`)
+  
+  // 扣分原因
+  if (answerScore.deductions.contentCompleteness.length > 0) {
+    console.log('扣分原因 (內容完整性):', answerScore.deductions.contentCompleteness)
+  }
+  if (answerScore.deductions.logicalClarity.length > 0) {
+    console.log('扣分原因 (邏輯清晰度):', answerScore.deductions.logicalClarity)
+  }
+  if (answerScore.deductions.communicationSkills.length > 0) {
+    console.log('扣分原因 (溝通表達):', answerScore.deductions.communicationSkills)
+  }
+  
+  // 加分原因
+  if (answerScore.additions.professionalDepth.length > 0) {
+    console.log('加分原因 (專業深度):', answerScore.additions.professionalDepth)
+  }
+  if (answerScore.additions.personalTraits.length > 0) {
+    console.log('加分原因 (個人特質):', answerScore.additions.personalTraits)
+  }
+  
+  console.log('==================')
 }
 
 /**
@@ -259,11 +496,26 @@ export async function getInterviewAIResponse(messages: Message[]) {
     }
 
     const data = await response.json()
-    //一時停止TTS
-    // 如果AI回應成功，觸發TTS
-    // if (data.text) {
-    //   triggerInterviewTTS(data.text)
-    // }
+    
+    // 解析評分信息
+    if (data.text) {
+      const scoreResult = parseScoreFromResponse(data.text)
+      if (scoreResult) {
+        logScoreResult(scoreResult)
+      }
+      
+      // 移除評分標記，只返回純文字回應
+      const cleanText = data.text.replace(/\[SCORE_START\][\s\S]*?\[SCORE_END\]/, '').trim()
+      
+      //一時停止TTS
+      // 如果AI回應成功，觸發TTS
+      // triggerInterviewTTS(cleanText)
+      
+      return { 
+        text: cleanText,
+        scoreResult: scoreResult || undefined
+      }
+    }
     
     return { text: data.text }
   } catch (error: any) {
@@ -472,11 +724,20 @@ export async function getInterviewAIResponseStream(
               }
             }
           }
-          //一時停止TTS
-          // 串流結束後觸發TTS
-          // if (fullResponse.trim()) {
-          //   triggerInterviewTTS(fullResponse)
-          // }
+          // 解析評分信息
+          if (fullResponse.trim()) {
+            const scoreResult = parseScoreFromResponse(fullResponse)
+            if (scoreResult) {
+              logScoreResult(scoreResult)
+            }
+            
+            // 移除評分標記，只返回純文字回應
+            const cleanResponse = fullResponse.replace(/\[SCORE_START\][\s\S]*?\[SCORE_END\]/, '').trim()
+            
+            //一時停止TTS
+            // 串流結束後觸發TTS
+            // triggerInterviewTTS(cleanResponse)
+          }
         } catch (error) {
           console.error(
             `Error fetching ${selectAIService} API response:`,
