@@ -288,8 +288,8 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
 
       {/* 螢幕中央提示語 */}
       {showStartPrompt && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center">
-          <div className="bg-black/80 text-white px-8 py-6 rounded-lg text-center max-w-md mx-4">
+        <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+          <div className="bg-black/80 text-white px-8 py-6 rounded-lg text-center max-w-md mx-4 pointer-events-auto">
             <div className="text-2xl font-bold mb-4">已偵測到面試者</div>
             <div className="text-lg mb-6">如您準備好請按下開始面試</div>
             <button

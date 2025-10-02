@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Form } from '@/components/form'
 import MessageReceiver from '@/components/messageReceiver'
@@ -49,6 +49,33 @@ const Interview = () => {
 
   // 面試流程管理
   const interviewFlow = useInterviewFlow()
+  
+  // 面試設定（從 localStorage 讀取）
+  const [enableRecording, setEnableRecording] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('interview_enableRecording')
+      return saved === 'true'
+    }
+    return false
+  })
+
+  // 監聽 localStorage 變化
+  useEffect(() => {
+    const handleStorageChange = () => {
+      if (typeof window !== 'undefined') {
+        const saved = localStorage.getItem('interview_enableRecording')
+        setEnableRecording(saved === 'true')
+        console.log('📝 錄製設定已更新:', saved === 'true')
+      }
+    }
+
+    // 監聽自定義事件（從 InterviewControls 觸發）
+    window.addEventListener('interviewSettingsChanged', handleStorageChange)
+    
+    return () => {
+      window.removeEventListener('interviewSettingsChanged', handleStorageChange)
+    }
+  }, [])
 
   // 調試：檢查面試狀態變化
   useEffect(() => {
@@ -132,7 +159,7 @@ const Interview = () => {
       interviewFlow.interviewStatus === 'detecting' ||
       interviewFlow.interviewStatus === 'ready' ? (
         <div className="absolute inset-0 z-50">
-          <div className="absolute top-4 left-4 bg-red-500 text-white p-2 rounded z-50">
+          <div className="absolute top-4 left-4 bg-red-500 text-white p-2 rounded z-[60]">
             面試模式已啟動 - 狀態: {interviewFlow.interviewStatus}
           </div>
           <PersonDetection
@@ -143,7 +170,7 @@ const Interview = () => {
 
 
           {/* 面試控制面板 */}
-          <div className="absolute top-20 left-4 z-60">
+          <div className="absolute top-20 left-4 z-[60]">
             <InterviewControls />
           </div>
         </div>
@@ -153,6 +180,7 @@ const Interview = () => {
           onInterviewComplete={(result) => {
             interviewFlow.completeInterview(result)
           }}
+          enableRecording={enableRecording}
         />
       ) : interviewFlow.interviewStatus === 'completed' || interviewFlow.showResults ? (
         /* 顯示面試結果 */

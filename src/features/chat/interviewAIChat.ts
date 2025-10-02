@@ -140,16 +140,19 @@ function formatConversationHistory(messages: Message[]): string {
 /**
  * 創建AnswerScore對象
  */
-function createAnswerScore(scoreData: any): AnswerScore | null {
+function createAnswerScore(scoreData: any, questionIndex?: number): AnswerScore | null {
   // 驗證必要的字段
   if (!scoreData.scores || typeof scoreData.scores !== 'object') {
     console.warn('評分數據缺少scores字段或格式不正確')
     return null
   }
   
+  // 如果有 questionIndex，生成正確的 ID (Q1, Q2, Q3...)
+  const questionId = questionIndex ? `Q${questionIndex}` : (scoreData.questionId || generateMessageId())
+  
   return {
-    answerId: scoreData.questionId || generateMessageId(),
-    questionId: scoreData.questionId || '',
+    answerId: questionId,
+    questionId: questionId,
     questionText: scoreData.questionText || '',
     answerText: scoreData.answerText || '',
     timestamp: new Date(),
@@ -177,7 +180,7 @@ function createAnswerScore(scoreData: any): AnswerScore | null {
 /**
  * 解析AI回應中的評分信息
  */
-function parseScoreFromResponse(response: string): AnswerScore | null {
+function parseScoreFromResponse(response: string, questionIndex?: number): AnswerScore | null {
   const scoreStartPattern = /\[SCORE_START\]([\s\S]*?)\[SCORE_END\]/
   const match = response.match(scoreStartPattern)
   
@@ -248,7 +251,7 @@ function parseScoreFromResponse(response: string): AnswerScore | null {
       
       console.log('🔍 嘗試解析的JSON字符串:', jsonString)
       const scoreData = JSON.parse(jsonString)
-      return createAnswerScore(scoreData)
+      return createAnswerScore(scoreData, questionIndex)
     }
     
     // 解析多個JSON對象，返回最後一個（最新的評分）
@@ -257,14 +260,14 @@ function parseScoreFromResponse(response: string): AnswerScore | null {
     console.log('🔍 最後一個JSON字符串:', lastJsonString)
     
     const scoreData = JSON.parse(lastJsonString)
-    return createAnswerScore(scoreData)
+    return createAnswerScore(scoreData, questionIndex)
   } catch (error) {
     console.error('解析評分信息失敗:', error)
     console.error('原始JSON字符串:', match[1])
     
     // 嘗試備用解析方法
     try {
-      return parseScoreFromResponseFallback(match[1])
+      return parseScoreFromResponseFallback(match[1], questionIndex)
     } catch (fallbackError) {
       console.error('備用解析方法也失敗:', fallbackError)
       return null
@@ -275,7 +278,7 @@ function parseScoreFromResponse(response: string): AnswerScore | null {
 /**
  * 備用評分解析方法 - 使用正則表達式提取分數
  */
-function parseScoreFromResponseFallback(jsonString: string): AnswerScore | null {
+function parseScoreFromResponseFallback(jsonString: string, questionIndex?: number): AnswerScore | null {
   try {
     console.log('🔄 使用備用解析方法')
     
@@ -310,9 +313,12 @@ function parseScoreFromResponseFallback(jsonString: string): AnswerScore | null 
     const answerTextMatch = jsonString.match(/"answerText":\\s*"([^"]*)"/)
     const questionIdMatch = jsonString.match(/"questionId":\\s*"([^"]*)"/)
     
+    // 如果有 questionIndex，生成正確的 ID (Q1, Q2, Q3...)
+    const questionId = questionIndex ? `Q${questionIndex}` : (questionIdMatch ? questionIdMatch[1] : generateMessageId())
+    
     return {
-      answerId: questionIdMatch ? questionIdMatch[1] : generateMessageId(),
-      questionId: questionIdMatch ? questionIdMatch[1] : '',
+      answerId: questionId,
+      questionId: questionId,
       questionText: questionTextMatch ? questionTextMatch[1] : '',
       answerText: answerTextMatch ? answerTextMatch[1] : '',
       timestamp: new Date(),
@@ -400,7 +406,7 @@ function triggerInterviewTTS(text: string) {
 /**
  * 獲取面試AI的回覆（包含TTS）
  */
-export async function getInterviewAIResponse(messages: Message[]) {
+export async function getInterviewAIResponse(messages: Message[], questionIndex?: number) {
   const {
     aiApiKey,
     selectAIService,
@@ -499,7 +505,7 @@ export async function getInterviewAIResponse(messages: Message[]) {
     
     // 解析評分信息
     if (data.text) {
-      const scoreResult = parseScoreFromResponse(data.text)
+      const scoreResult = parseScoreFromResponse(data.text, questionIndex)
       if (scoreResult) {
         logScoreResult(scoreResult)
       }

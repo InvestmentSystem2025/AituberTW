@@ -7,6 +7,7 @@ import { useInterviewVoiceRecognition } from '@/hooks/useInterviewVoiceRecogniti
 import { InterviewScoringEngine } from '@/features/interview/interviewScoring'
 import { InterviewScoringSettings } from '@/components/interview/InterviewScoringSettings'
 import { ScoringCriteria, AnswerScore, DEFAULT_SCORING_CRITERIA } from '@/types/interviewScoring'
+import { useInterviewRecording } from '@/hooks/useInterviewRecording'
 
 // 直接在組件內定義面試問題
 const INTERVIEW_QUESTIONS = [
@@ -80,10 +81,12 @@ interface ChatMessage {
 
 interface InterviewInterfaceProps {
   onInterviewComplete: (result?: any) => void
+  enableRecording?: boolean
 }
 
 export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   onInterviewComplete,
+  enableRecording = false,
 }) => {
   const modelType = settingsStore((s) => s.modelType)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -100,6 +103,14 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   const [answerScores, setAnswerScores] = useState<AnswerScore[]>([])
   const [showScoringSettings, setShowScoringSettings] = useState(false)
   const [currentQuestionId, setCurrentQuestionId] = useState<string>('')
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0)
+  
+  // 錄製功能
+  const recording = useInterviewRecording({ enableRecording })
+  
+  // 使用 ref 儲存錄製控制，避免依賴問題
+  const recordingRef = useRef(recording)
+  recordingRef.current = recording
   
   // 使用 ref 來避免閉包問題
   const handleUserAnswerRef = useRef<(answer: string) => void>()
@@ -157,8 +168,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         content: userAnswer
       })
       
-      // 調用AI API獲取回應
-      const aiResponse = await getInterviewAIResponse(conversationMessages)
+      // 調用AI API獲取回應，傳遞當前問題編號
+      const aiResponse = await getInterviewAIResponse(conversationMessages, currentQuestionIndex + 1)
       
       if (aiResponse.text) {
         addAIMessage(aiResponse.text)
@@ -168,6 +179,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           setAnswerScores(prev => [...prev, aiResponse.scoreResult!])
           // 直接將已評分的結果添加到評分引擎
           scoringEngine.addScoredAnswer(aiResponse.scoreResult)
+          // 增加問題索引
+          setCurrentQuestionIndex(prev => prev + 1)
         }
         
         // 檢查是否為面試結束的回應
@@ -176,11 +189,21 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         
         if (isInterviewEnding) {
           console.log('🎯 檢測到面試結束信號，準備生成最終結果...')
+          console.log('🔍 當前錄製狀態:', recording.isRecording)
+          
+          // 先等待 3 秒讓 AI 最後的回覆完全顯示，再停止錄製
+          setTimeout(() => {
+            console.log('📹 準備停止錄製（AI 回覆已完整顯示）...')
+            recording.stopRecording()
+            console.log('📹 stopRecording() 已調用，等待處理完成...')
+          }, 3000)
+          
+          // 總共等待 6 秒後再顯示結果頁面
           setTimeout(() => {
             const finalResult = scoringEngine.generateFinalResult('candidate-001')
             console.log('📊 最終面試結果:', finalResult)
             onInterviewComplete(finalResult)
-          }, 3000)
+          }, 6000) // 給更多時間：3秒顯示 + 3秒處理錄製
         } else {
           setIsWaitingForAnswer(true)
         }
@@ -231,9 +254,21 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   const startInterview = useCallback(async () => {
     const firstQuestion = INTERVIEW_QUESTIONS[0]
     setCurrentQuestionId(firstQuestion.id)
+    setCurrentQuestionIndex(0)
     addAIMessage(firstQuestion.question)
     setIsWaitingForAnswer(true)
-  }, [addAIMessage])
+    
+    // 如果啟用錄製，開始錄製
+    console.log('🎥 檢查錄製設定:', { enableRecording })
+    if (enableRecording) {
+      console.log('🎬 準備開始錄製...')
+      setTimeout(() => {
+        recording.startRecording()
+      }, 1000) // 延遲 1 秒開始錄製，確保畫面已完全載入
+    } else {
+      console.log('⏸️ 錄製功能未啟用')
+    }
+  }, [addAIMessage, enableRecording, recording])
 
   // 語音識別功能
   const {
@@ -250,9 +285,10 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     interviewLanguage
   )
 
-  // 初始化面試
+  // 初始化面試（只執行一次）
   useEffect(() => {
     if (!isInitializedRef.current) {
+      console.log('🎬 InterviewInterface 組件初始化')
       // 初始化鏡頭
       initializeCamera()
       
@@ -263,6 +299,17 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       isInitializedRef.current = true
     }
   }, [initializeCamera, startInterview])
+
+  // 組件卸載時的清理（使用獨立的 effect）
+  useEffect(() => {
+    return () => {
+      console.log('🧹 InterviewInterface 組件真正卸載，檢查錄製狀態...')
+      if (recordingRef.current.isRecording) {
+        console.log('⚠️ 組件卸載時錄製仍在進行，強制停止錄製')
+        recordingRef.current.stopRecording()
+      }
+    }
+  }, []) // 空依賴，只在組件真正卸載時執行
 
   // 發送文字訊息
   const sendMessage = () => {
@@ -428,14 +475,40 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             <button
               onClick={() => {
                 console.log('🎯 手動結束面試，準備生成最終結果...')
-                const finalResult = scoringEngine.generateFinalResult('candidate-001')
-                console.log('📊 最終面試結果:', finalResult)
-                onInterviewComplete(finalResult)
+                console.log('🔍 當前錄製狀態:', recording.isRecording)
+                
+                // 等待 2 秒再停止錄製（給最後的對話時間錄製）
+                setTimeout(() => {
+                  console.log('📹 準備停止錄製...')
+                  recording.stopRecording()
+                  console.log('📹 stopRecording() 已調用，等待處理完成...')
+                }, 2000)
+                
+                // 總共等待 5 秒後顯示結果
+                setTimeout(() => {
+                  const finalResult = scoringEngine.generateFinalResult('candidate-001')
+                  console.log('📊 最終面試結果:', finalResult)
+                  onInterviewComplete(finalResult)
+                }, 5000)
               }}
               className="px-4 py-2 rounded-lg text-white font-medium bg-gray-500 hover:bg-gray-600"
             >
               結束面試
             </button>
+            
+            {/* 錄製狀態指示 */}
+            {recording.isRecording && (
+              <div className="flex items-center gap-2 px-3 py-1 bg-red-500 text-white rounded-lg text-sm">
+                <span className="animate-pulse">●</span>
+                錄製中
+              </div>
+            )}
+            
+            {recording.recordingError && (
+              <div className="text-xs text-red-500 mt-1">
+                {recording.recordingError}
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             <input
