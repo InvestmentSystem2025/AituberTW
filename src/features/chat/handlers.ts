@@ -170,10 +170,18 @@ const handleSpeakAndStateUpdate = (
   currentAssistantMessageListRef: { current: string[] },
   currentSlideMessagesRef: { current: string[] }
 ) => {
+  // 🔍 調試：記錄語音合成調用
+  console.log('🎤 [DEBUG] 語音合成調用')
+  console.log('📝 [DEBUG] 句子:', sentence)
+  console.log('🎭 [DEBUG] 情緒標籤:', emotionTag)
+  
   const hs = homeStore.getState()
   const emotion = emotionTag.includes('[')
     ? (emotionTag.slice(1, -1).toLowerCase() as EmotionType)
     : 'neutral'
+  
+  // 🔍 調試：記錄最終情緒
+  console.log('😊 [DEBUG] 最終情緒:', emotion)
 
   // 発話不要/不可能な文字列だった場合はスキップ
   if (
@@ -211,6 +219,10 @@ const handleSpeakAndStateUpdate = (
  * @param receivedMessage 処理する文字列
  */
 export const speakMessageHandler = async (receivedMessage: string) => {
+  // 🔍 調試：記錄接收到的完整訊息
+  console.log('📨 [DEBUG] 接收到的完整AI回應:', receivedMessage)
+  console.log('📏 [DEBUG] 回應長度:', receivedMessage.length)
+  
   const sessionId = generateSessionId()
   const currentSlideMessagesRef = { current: [] as string[] }
   const assistantMessageListRef = { current: [] as string[] }
@@ -267,18 +279,36 @@ export const speakMessageHandler = async (receivedMessage: string) => {
     }
 
     if (processableText.length > 0) {
+      // 🔍 調試：記錄原始處理文字
+      console.log('🔍 [DEBUG] 處理文字:', processableText)
+      
       let localRemaining = processableText.trimStart()
       while (localRemaining.length > 0) {
         const prevLocalRemaining = localRemaining
         const { emotionTag, remainingText: textAfterEmotion } =
           extractEmotion(localRemaining)
+        
+        // 🔍 調試：記錄情緒標籤提取結果
+        if (emotionTag) {
+          console.log('🎭 [DEBUG] 找到情緒標籤:', emotionTag)
+          console.log('📝 [DEBUG] 剩餘文字:', textAfterEmotion)
+        }
+        
         const { sentence, remainingText: textAfterSentence } =
           extractSentence(textAfterEmotion)
 
         if (sentence) {
+          // 🔍 調試：記錄句子處理結果
+          console.log('💬 [DEBUG] 提取句子:', sentence)
+          console.log('🎭 [DEBUG] 使用情緒標籤:', emotionTag)
+          
           assistantMessageListRef.current.push(sentence)
           const aiText = emotionTag ? `${emotionTag} ${sentence}` : sentence
           accumulatedAssistantText += aiText + ' '
+          
+          // 🔍 調試：記錄最終AI文字
+          console.log('📄 [DEBUG] 最終AI文字:', aiText)
+          
           handleSpeakAndStateUpdate(
             sessionId,
             sentence,
@@ -290,11 +320,19 @@ export const speakMessageHandler = async (receivedMessage: string) => {
         } else {
           if (localRemaining === prevLocalRemaining && localRemaining) {
             const finalSentence = localRemaining
+            // 🔍 調試：記錄最終句子處理
+            console.log('🏁 [DEBUG] 最終句子:', finalSentence)
+            console.log('🎭 [DEBUG] 最終情緒標籤:', emotionTag)
+            
             assistantMessageListRef.current.push(finalSentence)
             const aiText = emotionTag
               ? `${emotionTag} ${finalSentence}`
               : finalSentence
             accumulatedAssistantText += aiText + ' '
+            
+            // 🔍 調試：記錄最終AI文字
+            console.log('📄 [DEBUG] 最終AI文字:', aiText)
+            
             handleSpeakAndStateUpdate(
               sessionId,
               finalSentence,
@@ -591,9 +629,21 @@ export const processAIResponse = async (messages: Message[]) => {
         if (receivedChunksForSpeech.length > 0) {
           if (!isCodeBlock) {
             const finalSentence = receivedChunksForSpeech
+            // 🔍 調試：記錄串流結束時的最終處理
+            console.log('🏁 [DEBUG] 串流結束，最終句子:', finalSentence)
+            
             const { emotionTag: extractedEmotion, remainingText: finalText } =
               extractEmotion(finalSentence)
-            if (extractedEmotion) currentEmotionTag = extractedEmotion
+            
+            // 🔍 調試：記錄最終情緒標籤提取
+            if (extractedEmotion) {
+              console.log('🎭 [DEBUG] 串流結束時找到情緒標籤:', extractedEmotion)
+              currentEmotionTag = extractedEmotion
+            } else {
+              console.log('❌ [DEBUG] 串流結束時未找到情緒標籤')
+            }
+            
+            console.log('📝 [DEBUG] 最終純文字:', finalText)
 
             handleSpeakAndStateUpdate(
               sessionId,

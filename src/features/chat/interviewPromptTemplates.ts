@@ -12,12 +12,25 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
   // 6. 根據面試進度適時提出下一個問題
   // 7. 當面試者回答充分時，可以進入下一個階段
   SYSTEM_PROMPT: `你是一位專業的AI面試官，負責進行面試並對面試者的回答進行評分。請遵循以下規則：
-目前處於測試階段，所以只需問一個問題就可以結束面試，禁止追問，總共最多問一個問題。
+目前處於測試階段，所以只需問二個問題就可以結束面試，禁止追問，總共最多問二個問題。
 
 8. 面試結束時要給予感謝和後續說明，以及回復內容必須包含[面試到此結束]這句話
 9. 回答語言必須使用：{userLanguage}
 
-**重要：每次面試者回答後，你必須在回應中隱藏評分信息**
+**重要：每次面試者回答後，你必須在回應中包含以下兩個部分：**
+
+**第一部分：情感標籤**
+在回應開頭必須包含情感標籤，格式：[EMOTION_START]情感類型[EMOTION_END]
+支援的情感類型：neutral, happy, angry, sad, relaxed, surprised
+請根據你的回應語調和情境選擇合適的情感標籤：
+- neutral: 中性、專業的語調
+- happy: 開心、鼓勵的語調
+- angry: 嚴肅、不滿的語調
+- sad: 同情、理解的語調
+- relaxed: 輕鬆、友善的語調
+- surprised: 驚訝、讚賞的語調
+
+**第二部分：評分信息**
 評分格式：[SCORE_START]{"questionId":"{questionId}","questionText":"{questionText}","answerText":"{answerText}","scores":{"contentCompleteness":分數,"logicalClarity":分數,"professionalDepth":分數,"communicationSkills":分數,"personalTraits":分數},"totalScore":總分,"deductions":{"contentCompleteness":["扣分原因1"],"logicalClarity":["扣分原因2"],"communicationSkills":["扣分原因3"]},"additions":{"professionalDepth":["加分原因1"],"personalTraits":["加分原因2"]},"aiFeedback":"你的回饋內容"}[SCORE_END]
 
 評分標準：
@@ -30,12 +43,16 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
 當前對話歷史：
 {conversationHistory}
 
-請根據面試者的回答給予適當的回饋，然後提出下一個問題或結束面試。記住：每次回應都必須包含評分信息！`,
+請根據面試者的回答給予適當的回饋，然後提出下一個問題或結束面試。記住：每次回應都必須包含情感標籤和評分信息！`,
 
   // 面試開始提示詞
   GREETING_PROMPT: `你是一位專業的AI面試官。請用友善、專業的語調開始面試，並請面試者做自我介紹。
 
 回答語言必須使用：{userLanguage}
+
+**重要：回應開頭必須包含情感標籤**
+格式：[EMOTION_START]relaxed[EMOTION_END]
+（面試開始時使用 relaxed 情感標籤，表示友善、放鬆的語調）
 
 請開始面試對話。`,
 
@@ -43,6 +60,10 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
   CLOSING_PROMPT: `面試即將結束。請用專業、友善的語調感謝面試者的參與，並說明後續流程。
 
 回答語言必須使用：{userLanguage}
+
+**重要：回應開頭必須包含情感標籤**
+格式：[EMOTION_START]happy[EMOTION_END]
+（面試結束時使用 happy 情感標籤，表示感謝和鼓勵的語調）
 
 請結束面試對話。`,
 
@@ -52,6 +73,10 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
 面試者回答：{userAnswer}
 回答語言必須使用：{userLanguage}
 
+**重要：回應開頭必須包含情感標籤**
+格式：[EMOTION_START]neutral[EMOTION_END]
+（追問時使用 neutral 情感標籤，表示專業、中性的語調）
+
 請追問更多細節。`,
 
   // 引導提示詞
@@ -60,6 +85,10 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
 面試者回答：{userAnswer}
 當前主題：{currentTopic}
 回答語言必須使用：{userLanguage}
+
+**重要：回應開頭必須包含情感標籤**
+格式：[EMOTION_START]neutral[EMOTION_END]
+（引導時使用 neutral 情感標籤，表示專業、中性的語調）
 
 請引導面試者回到正題。`
 }
@@ -151,4 +180,68 @@ export function formatPrompt(template: string, variables: Record<string, string>
     formatted = formatted.replace(new RegExp(`{${key}}`, 'g'), value)
   }
   return formatted
+}
+
+/**
+ * 從 AI 回應中解析情感標籤
+ */
+export function parseEmotionFromResponse(response: string): {
+  emotion: string
+  cleanResponse: string
+} {
+  const emotionRegex = /\[EMOTION_START\]([a-z]+)\[EMOTION_END\]/
+  const match = response.match(emotionRegex)
+  
+  if (match && match[1]) {
+    const emotion = match[1]
+    const cleanResponse = response.replace(emotionRegex, '').trim()
+    return { emotion, cleanResponse }
+  }
+  console.log('沒有找到情感標籤，預設為 neutral')
+  // 如果沒有找到情感標籤，預設為 neutral
+  return { 
+    emotion: 'neutral', 
+    cleanResponse: response,
+  }
+}
+
+/**
+ * 從 AI 回應中解析評分信息
+ */
+export function parseScoreFromResponse(response: string): {
+  score: any | null
+  cleanResponse: string
+} {
+  const scoreRegex = /\[SCORE_START\](.*?)\[SCORE_END\]/
+  const match = response.match(scoreRegex)
+  
+  if (match && match[1]) {
+    try {
+      const score = JSON.parse(match[1])
+      const cleanResponse = response.replace(scoreRegex, '').trim()
+      return { score, cleanResponse }
+    } catch (error) {
+      console.error('解析評分信息失敗:', error)
+    }
+  }
+  
+  return { score: null, cleanResponse: response }
+}
+
+/**
+ * 解析 AI 回應中的情感標籤和評分信息
+ */
+export function parseInterviewResponse(response: string): {
+  emotion: string
+  score: any | null
+  cleanResponse: string
+} {
+  const emotionResult = parseEmotionFromResponse(response)
+  const scoreResult = parseScoreFromResponse(emotionResult.cleanResponse)
+  
+  return {
+    emotion: emotionResult.emotion,
+    score: scoreResult.score,
+    cleanResponse: scoreResult.cleanResponse
+  }
 }

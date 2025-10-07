@@ -9,7 +9,8 @@ import settingsStore from '../stores/settings'
 import { 
   INTERVIEW_PROMPT_TEMPLATES, 
   INTERVIEW_STAGES, 
-  formatPrompt 
+  formatPrompt,
+  parseInterviewResponse
 } from './interviewPromptTemplates'
 import { InterviewScoringEngine } from '@/features/interview/interviewScoring'
 import { AnswerScore } from '@/types/interviewScoring'
@@ -379,26 +380,30 @@ function logScoreResult(answerScore: AnswerScore): void {
 }
 
 /**
- * 觸發面試AI的TTS播放
+ * 觸發面試AI的TTS播放（包含情感標籤）
+ * 注意：情感標籤會在 TTS 實際開始播放時（即 model.speak() 調用時）應用到 VRM 表情
  */
-function triggerInterviewTTS(text: string) {
+function triggerInterviewTTS(text: string, emotion: string = 'neutral') {
   if (!text || text.trim() === '') return
   
   const sessionId = generateMessageId()
   const talk: Talk = {
     message: text,
-    emotion: 'neutral'
+    emotion: emotion as any // 確保情感標籤符合 EmotionType
   }
   
+  console.log(`🎭 面試AI準備TTS播放，情感: ${emotion}`)
+  
   // 異步觸發TTS，不等待完成
+  // 情感表情會在 VRM model.speak() 方法中實際應用
   speakCharacter(
     sessionId,
     talk,
     () => {
-      console.log('面試AI TTS開始播放')
+      console.log(`🎤 面試AI TTS開始生成 (情感: ${emotion})`)
     },
     () => {
-      console.log('面試AI TTS播放完成')
+      console.log(`✅ 面試AI TTS播放完成 (情感: ${emotion})`)
     }
   )
 }
@@ -503,22 +508,28 @@ export async function getInterviewAIResponse(messages: Message[], questionIndex?
 
     const data = await response.json()
     
-    // 解析評分信息
+    // 解析情感標籤和評分信息
     if (data.text) {
-      const scoreResult = parseScoreFromResponse(data.text, questionIndex)
-      if (scoreResult) {
-        logScoreResult(scoreResult)
+      const parsedResponse = parseInterviewResponse(data.text)
+      const { emotion, score, cleanResponse } = parsedResponse
+      
+      // 處理評分結果
+      let scoreResult = null
+      if (score) {
+        scoreResult = createAnswerScore(score, questionIndex)
+        if (scoreResult) {
+          logScoreResult(scoreResult)
+        }
       }
       
-      // 移除評分標記，只返回純文字回應
-      const cleanText = data.text.replace(/\[SCORE_START\][\s\S]*?\[SCORE_END\]/, '').trim()
+      console.log(`🎭 解析到情感標籤: ${emotion}`)
       
-      //一時停止TTS
-      // 如果AI回應成功，觸發TTS
-      // triggerInterviewTTS(cleanText)
+      // 如果AI回應成功，觸發TTS（包含情感標籤）
+      triggerInterviewTTS(cleanResponse, emotion)
       
       return { 
-        text: cleanText,
+        text: cleanResponse,
+        emotion: emotion,
         scoreResult: scoreResult || undefined
       }
     }
@@ -730,19 +741,24 @@ export async function getInterviewAIResponseStream(
               }
             }
           }
-          // 解析評分信息
+          // 解析情感標籤和評分信息
           if (fullResponse.trim()) {
-            const scoreResult = parseScoreFromResponse(fullResponse)
-            if (scoreResult) {
-              logScoreResult(scoreResult)
+            const parsedResponse = parseInterviewResponse(fullResponse)
+            const { emotion, score, cleanResponse } = parsedResponse
+            
+            // 處理評分結果
+            if (score) {
+              const scoreResult = createAnswerScore(score)
+              if (scoreResult) {
+                logScoreResult(scoreResult)
+              }
             }
             
-            // 移除評分標記，只返回純文字回應
-            const cleanResponse = fullResponse.replace(/\[SCORE_START\][\s\S]*?\[SCORE_END\]/, '').trim()
+            console.log(`🎭 串流解析到情感標籤: ${emotion}`)
             
-            //一時停止TTS
-            // 串流結束後觸發TTS
-            // triggerInterviewTTS(cleanResponse)
+            //一時停止暫停TTS
+            // 串流結束後觸發TTS（包含情感標籤）
+            triggerInterviewTTS(cleanResponse, emotion)
           }
         } catch (error) {
           console.error(

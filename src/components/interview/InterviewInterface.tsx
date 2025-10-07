@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { InterviewModelViewer } from '@/components/interview/InterviewModelViewer'
 import settingsStore from '@/features/stores/settings'
+import homeStore from '@/features/stores/home'
 import { getInterviewAIResponse, getInterviewAIResponseStream } from '@/features/chat/interviewAIChat'
 import { Message } from '@/features/messages/messages'
 import { useInterviewVoiceRecognition } from '@/hooks/useInterviewVoiceRecognition'
@@ -174,6 +175,12 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       if (aiResponse.text) {
         addAIMessage(aiResponse.text)
         
+        // 情感標籤已包含在 aiResponse.emotion 中
+        // 表情會在 TTS 播放時（model.speak()）自動應用，不需要在這裡手動設置
+        if (aiResponse.emotion) {
+          console.log(`🎭 面試AI情感標籤: ${aiResponse.emotion}（將在TTS播放時應用）`)
+        }
+        
         // 處理評分結果
         if (aiResponse.scoreResult) {
           setAnswerScores(prev => [...prev, aiResponse.scoreResult!])
@@ -215,7 +222,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     } finally {
       setIsAIResponding(false)
     }
-  }, [isAIResponding, messages, addAIMessage, onInterviewComplete])
+  }, [isAIResponding, messages, addAIMessage, onInterviewComplete, modelType])
 
   // 處理用戶回答
   const handleUserAnswer = useCallback((answer: string) => {
@@ -258,6 +265,9 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     addAIMessage(firstQuestion.question)
     setIsWaitingForAnswer(true)
     
+    // 初始表情會在首次 TTS 播放時自動應用（根據 AI 回應中的情感標籤）
+    console.log('🎬 面試開始，等待 TTS 播放時應用表情')
+    
     // 如果啟用錄製，開始錄製
     console.log('🎥 檢查錄製設定:', { enableRecording })
     if (enableRecording) {
@@ -268,7 +278,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     } else {
       console.log('⏸️ 錄製功能未啟用')
     }
-  }, [addAIMessage, enableRecording, recording])
+  }, [addAIMessage, enableRecording, recording, modelType])
 
   // 語音識別功能
   const {
