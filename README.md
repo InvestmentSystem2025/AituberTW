@@ -1,345 +1,244 @@
-# AITuberKit
+## AITuberKit 快速安裝與一鍵啟動（Docker + Ollama）
 
-<img style="max-width: 100%;" src="./public/ogp.png">
+本文件提供團隊新人可一鍵完成本專案開發環境的指引，包含：Ollama 模型下載、Embedding 模型下載、ChromaDB、n8n（手動匯入工作流程），以及應用啟動與測試方式。
 
-**お知らせ: 本プロジェクトはバージョン v2.0.0 以降、カスタムライセンスを採用しています。商用目的でご利用の場合は、[利用規約](#利用規約) セクションをご確認ください。**
+參考並整合了既有文件與腳本：`docker-compose.ollama.yml`、`scripts/*`、`docs/*`、`README_OLD.md`。
 
-<p align="center">
-   <a href="https://github.com/tegnike/aituber-kit"><img alt="GitHub Last Commit" src="https://img.shields.io/github/last-commit/tegnike/aituber-kit"></a>
-   <a href="https://github.com/tegnike/aituber-kit"><img alt="GitHub Top Language" src="https://img.shields.io/github/languages/top/tegnike/aituber-kit"></a>
-   <img alt="GitHub Tag" src="https://img.shields.io/github/v/tag/tegnike/aituber-kit?sort=semver&color=orange">
-   <a href="https://github.com/tegnike/aituber-kit/blob/main/LICENSE"><img alt="License: Custom" src="https://img.shields.io/badge/License-Custom-blue"></a>
-</p>
-<p align="center">
-   <a href="https://github.com/tegnike/aituber-kit/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/tegnike/aituber-kit"></a>
-   <a href="https://github.com/tegnike/aituber-kit/network/members"><img alt="GitHub forks" src="https://img.shields.io/github/forks/tegnike/aituber-kit"></a>
-   <a href="https://github.com/tegnike/aituber-kit/graphs/contributors"><img alt="GitHub contributors" src="https://img.shields.io/github/contributors/tegnike/aituber-kit"></a>
-   <a href="https://github.com/tegnike/aituber-kit/issues"><img alt="GitHub issues" src="https://img.shields.io/github/issues/tegnike/aituber-kit"></a>
-   <a href="https://coderabbit.ai/tegnike/aituber-kit"><img alt="CodeRabbit Pull Request Reviews" src="https://img.shields.io/coderabbit/prs/github/tegnike/aituber-kit?utm_source=oss&utm_medium=github&utm_campaign=tegnike%2Faituber-kit&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews"></a>
-</p>
-<p align="center">
-   <a href="https://x.com/tegnike"><img alt="X (Twitter)" src="https://img.shields.io/badge/X-tegnike-1DA1F2?logo=x&style=flat&logoColor=white"/></a>
-   <a href="https://discord.gg/5rHEue52nZ"><img alt="Discord" src="https://img.shields.io/badge/Discord-AITuberKit-7289DA?logo=discord&style=flat&logoColor=white"/></a>
-   <a href="https://github.com/sponsors/tegnike"><img alt="GitHub Sponsor" src="https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=flat&logo=github"/></a>
-   <a href="https://deepwiki.com/tegnike/aituber-kit"><img src="https://img.shields.io/badge/DeepWiki-tegnike%2Faituber--kit-blue.svg?logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK/AIi+QuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06/uv1saEDv4O3n3dV60RfP947Mm9/SQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH//PB8mnKqScAhsD0kYP3j/Yt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY/56ebRWeraTjMt/00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ+fXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB/imwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE+gO0SsWmPiXB+jikdf6SizrT5qKasx5j8ABbHpFTx+vFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa+Ax283gghmj+vj7feE2KBBRMW3FzOpLOADl0Isb5587h/U4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5/XFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb/vA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU+3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26/HfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr/FGaKiG+T+v+TQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r/cKaoqr+27/XcrS5UwSMbQAAAABJRU5ErkJggg==" alt="DeepWiki"></a>
-</p>
+---
 
-<div align="center">
-   <h3>
-      🌟 <a href="https://aituberkit.com">デモサイトへ</a> 🌟
-   </h3>
-</div>
+### 前置需求
 
-<div align="center">
-   <h3>
-      📚 <a href="https://docs.aituberkit.com/">ドキュメントサイトへ</a> 📚
-   </h3>
-</div>
+- Docker Desktop（Windows 建議啟用 WSL2）
+- PowerShell（Windows，建議在 VSCode 內使用）
+- 建議配備 NVIDIA GPU（`docker-compose.ollama.yml` 預設啟用 GPU）。若無 GPU，請參考「疑難排解」調整為 CPU 模式。
 
-<h3 align="center">
-   <a href="./docs/README_en.md">English</a>｜
-   <a href="./docs/README_zh.md">中文</a>｜
-   <a href="./docs/README_ko.md">한국어</a>｜
-   <a href="./docs/README_pl.md">Polski</a>
-</h3>
+---
 
-## 概要
+### 一鍵安裝（建議優先使用）
 
-AITuberKitは、誰でも簡単にAIキャラクターとチャットできるWebアプリケーションを構築できるオープンソースのツールキットです。<br>
-豊富なAIサービス、キャラクターモデル、音声合成エンジンに対応し、高いカスタマイズ性を備えた対話機能とAITuber配信機能を中心に、様々な拡張モードを提供しています。
+- 執行環境：VSCode PowerShell 終端（不是在 Docker 容器內）
 
-<img src="./docs/images/architecture.svg" alt="AITuberKit Architecture">
+1) 允許腳本執行（若第一次執行 PowerShell 腳本）
 
-詳細な使用方法や設定方法については、[ドキュメントサイト](https://docs.aituberkit.com/)をご覧ください。
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=tegnike/aituber-kit&type=Date)](https://star-history.com/#tegnike/aituber-kit&Date)
-
-## 主な機能
-
-### 1. AIキャラとの対話
-
-- 各種LLMのAPIキーを使って、AIキャラクターと簡単に会話可能
-- マルチモーダル対応で、カメラからの映像やアップロードした画像を認識して回答を生成
-- 直近の会話文を記憶として保持
-
-### 2. AITuber配信
-
-- YouTubeの配信コメントを取得して、AIキャラクターが自動で応答
-- 会話継続モードでコメントがなくても自発的に発言可能
-- "#"から始まるコメントは読まれない機能
-
-### 3. その他の機能
-
-- **外部連携モード**: WebSocketでサーバーアプリと連携し、より高度な機能を実現
-- **スライドモード**: AIキャラクターがスライドを自動で発表するモード
-- **Realtime API**: OpenAIのRealtime APIを使用した低遅延対話と関数実行
-- **オーディオモード**: OpenAIのAudio API機能を活用した自然な音声対話
-- **メッセージ受信機能**: 専用APIを通じて外部から指示を受け付け、AIキャラクターに発言させることが可能
-
-## 対応モデル・サービス
-
-### キャラクターモデル
-
-- **3Dモデル**: VRMファイル
-- **2Dモデル**: Live2Dファイル（Cubism 3以降）
-
-### 対応LLM
-
-- OpenAI
-- Anthropic
-- Google Gemini
-- Azure OpenAI
-- Groq
-- Cohere
-- Mistral AI
-- Perplexity
-- Fireworks
-- ローカルLLM
-- Dify
-
-### 対応音声合成エンジン
-
-- VOICEVOX
-- Koeiromap
-- Google Text-to-Speech
-- Style-Bert-VITS2
-- AivisSpeech
-- Aivis Cloud API
-- Cartesia
-- GSVI TTS
-- ElevenLabs
-- OpenAI
-- Azure OpenAI
-- にじボイス
-
-## クイックスタート
-
-### 開発環境
-
-- Node.js: ^20.0.0
-- npm: ^10.0.0
-
-### インストール手順
-
-1. リポジトリをローカルにクローンします。
-
-```bash
-git clone https://github.com/tegnike/aituber-kit.git
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
-2. フォルダを開きます。
+2) 一鍵啟動（預設會下載聊天與嵌入模型，並啟動所有服務）
 
-```bash
-cd aituber-kit
+```powershell
+./scripts/setup-all.ps1
 ```
 
-3. パッケージインストールします。
+可選參數：
 
-```bash
-npm install
+- 跳過測試：
+
+```powershell
+./scripts/setup-all.ps1 -SkipTests
 ```
 
-4. 開発モードでアプリケーションを起動します。
+- 不啟動 n8n：
 
-```bash
-npm run dev
+```powershell
+./scripts/setup-all.ps1 -SkipN8N
 ```
 
-5. URLを開きます。[http://localhost:3000](http://localhost:3000)
+- 指定模型：
 
-6. 必要に応じて.envファイルを作成します。
-
-```bash
-cp .env.example .env
+```powershell
+./scripts/setup-all.ps1 -ChatModel "gpt-oss:20b" -EmbeddingModel "jeffh/intfloat-multilingual-e5-large-instruct:f16"
 ```
 
-詳細な設定方法や使用方法については、[ドキュメントサイト](https://docs.aituberkit.com/)をご覧ください。
+腳本會執行：
 
-## ⚠️ セキュリティに関する重要な注意事項
+- 檢查 Docker 是否運作
+- 檢查/建立 `.env`（若有 `.env.example` 會自動複製）
+- 以 `docker-compose.ollama.yml` 啟動 `ollama`、`chromadb`、`n8n`、`app`
+- 等待各服務就緒（11434/8000/5678/3000）
+- 下載/確認聊天模型與 Embedding 模型
+- 可選執行驗證測試（`test-ollama.ps1`、`test-embedding.ps1`、`test-integration.ps1`）
 
-このリポジトリは、個人利用やローカル環境での開発はもちろん、適切なセキュリティ対策を施した上での商用利用も想定しています。ただし、Web環境にデプロイする際は以下の点にご注意ください：
+---
 
-- **APIキーの取り扱い**: バックエンドサーバーを経由してAIサービス（OpenAI, Anthropic等）やTTSサービスのAPIを呼び出す仕様となっているため、APIキーの適切な管理が必要です。
+### 手動步驟（必要時）
 
-### 本番環境での利用について
+- 執行環境：VSCode PowerShell 終端（不是在 Docker 容器內）
 
-本番環境で利用する場合は、以下のいずれかの対応を推奨します：
+1) 安裝依賴並啟動核心服務（Ollama + ChromaDB）
 
-1. **バックエンドサーバーの実装**: APIキーの管理をサーバーサイドで行い、クライアントからの直接的なAPIアクセスを避ける
-2. **利用者への適切な説明**: 各利用者が自身のAPIキーを使用する場合は、セキュリティ上の注意点について説明する
-3. **アクセス制限の実装**: 必要に応じて、適切な認証・認可の仕組みを実装する
+```powershell
+docker compose -f docker-compose.ollama.yml up -d ollama chromadb
+# 若舊版 Docker：docker-compose -f docker-compose.ollama.yml up -d ollama chromadb
+```
 
-## スポンサー募集
+2) 下載聊天模型與嵌入模型（在容器內執行）
 
-開発を継続するためにスポンサーの方を募集しています。<br>
-あなたの支援は、AITuberKitの開発と改善に大きく貢献します。
+- 執行環境：Docker 容器內（`ollama`）
 
-[![GitHub Sponsor](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=for-the-badge&logo=github)](https://github.com/sponsors/tegnike)
+```powershell
+docker exec ollama ollama pull gpt-oss:20b
+docker exec ollama ollama pull jeffh/intfloat-multilingual-e5-large-instruct:f16
+```
 
-[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/fdanv1k6iz)
+3) 啟動 n8n（可選）與主應用
 
-### 協力者の皆様（ご支援いただいた順）
+```powershell
+docker compose -f docker-compose.ollama.yml up -d n8n app
+```
 
-<p>
-  <a href="https://github.com/morioki3" title="morioki3">
-    <img src="https://github.com/morioki3.png" width="40" height="40" alt="morioki3">
-  </a>
-  <a href="https://github.com/hodachi-axcxept" title="hodachi-axcxept">
-    <img src="https://github.com/hodachi-axcxept.png" width="40" height="40" alt="hodachi-axcxept">
-  </a>
-  <a href="https://github.com/coderabbitai" title="coderabbitai">
-    <img src="https://github.com/coderabbitai.png" width="40" height="40" alt="coderabbitai">
-  </a>
-  <a href="https://github.com/ai-bootcamp-tokyo" title="ai-bootcamp-tokyo">
-    <img src="https://github.com/ai-bootcamp-tokyo.png" width="40" height="40" alt="ai-bootcamp-tokyo">
-  </a>
-  <a href="https://github.com/wmoto-ai" title="wmoto-ai">
-    <img src="https://github.com/wmoto-ai.png" width="40" height="40" alt="wmoto-ai">
-  </a>
-  <a href="https://github.com/JunzoKamahara" title="JunzoKamahara">
-    <img src="https://github.com/JunzoKamahara.png" width="40" height="40" alt="JunzoKamahara">
-  </a>
-  <a href="https://github.com/darkgaldragon" title="darkgaldragon">
-    <img src="https://github.com/darkgaldragon.png" width="40" height="40" alt="darkgaldragon">
-  </a>
-  <a href="https://github.com/usagi917" title="usagi917">
-    <img src="https://github.com/usagi917.png" width="40" height="40" alt="usagi917">
-  </a>
-  <a href="https://github.com/ochisamu" title="ochisamu">
-    <img src="https://github.com/ochisamu.png" width="40" height="40" alt="ochisamu">
-  </a>
-  <a href="https://github.com/mo0013" title="mo0013">
-    <img src="https://github.com/mo0013.png" width="40" height="40" alt="mo0013">
-  </a>
-  <a href="https://github.com/tsubouchi" title="tsubouchi">
-    <img src="https://github.com/tsubouchi.png" width="40" height="40" alt="tsubouchi">
-  </a>
-  <a href="https://github.com/bunkaich" title="bunkaich">
-    <img src="https://github.com/bunkaich.png" width="40" height="40" alt="bunkaich">
-  </a>
-  <a href="https://github.com/seiki-aliveland" title="seiki-aliveland">
-    <img src="https://github.com/seiki-aliveland.png" width="40" height="40" alt="seiki-aliveland">
-  </a>
-  <a href="https://github.com/rossy8417" title="rossy8417">
-    <img src="https://github.com/rossy8417.png" width="40" height="40" alt="rossy8417">
-  </a>
-  <a href="https://github.com/gijigae" title="gijigae">
-    <img src="https://github.com/gijigae.png" width="40" height="40" alt="gijigae">
-  </a>
-  <a href="https://github.com/takm-reason" title="takm-reason">
-    <img src="https://github.com/takm-reason.png" width="40" height="40" alt="takm-reason">
-  </a>
-  <a href="https://github.com/haoling" title="haoling">
-    <img src="https://github.com/haoling.png" width="40" height="40" alt="haoling">
-  </a>
-  <a href="https://github.com/FoundD-oka" title="FoundD-oka">
-    <img src="https://github.com/FoundD-oka.png" width="40" height="40" alt="FoundD-oka">
-  </a>
-  <a href="https://github.com/terisuke" title="terisuke">
-    <img src="https://github.com/terisuke.png" width="40" height="40" alt="terisuke">
-  </a>
-  <a href="https://github.com/konpeita" title="konpeita">
-    <img src="https://github.com/konpeita.png" width="40" height="40" alt="konpeita">
-  </a>
-  <a href="https://github.com/MojaX2" title="MojaX2">
-    <img src="https://github.com/MojaX2.png" width="40" height="40" alt="MojaX2">
-  </a>
-  <a href="https://github.com/micchi99" title="micchi99">
-    <img src="https://github.com/micchi99.png" width="40" height="40" alt="micchi99">
-  </a>
-  <a href="https://github.com/nekomeowww" title="nekomeowww">
-    <img src="https://github.com/nekomeowww.png" width="40" height="40" alt="nekomeowww">
-  </a>
-  <a href="https://github.com/yfuku" title="yfuku">
-    <img src="https://github.com/yfuku.png" width="40" height="40" alt="yfuku">
-  </a>
-  <a href="https://x.com/8484ff_42" title="8484ff_42">
-    <img src="https://pbs.twimg.com/profile_images/1869378029786656768/m_K1Cjqx_normal.jpg" width="40" height="40" alt="8484ff_42">
-  </a>
-  <a href="https://github.com/sher1ock-jp" title="sher1ock-jp">
-    <img src="https://github.com/sher1ock-jp.png" width="40" height="40" alt="sher1ock-jp">
-  </a>
-  <a href="https://github.com/uwaguchi" title="uwaguchi">
-    <img src="https://github.com/uwaguchi.png" width="40" height="40" alt="uwaguchi">
-  </a>
-  <a href="https://x.com/M1RA_A_Project" title="M1RA_A_Project">
-    <img src="https://pbs.twimg.com/profile_images/1903385253504507904/ceBSG9Wl_400x400.jpg" width="40" height="40" alt="M1RA_A_Project">
-  </a>
-  <a href="https://github.com/teruPP" title="teruPP">
-    <img src="https://github.com/teruPP.png" width="40" height="40" alt="teruPP">
-  </a>
-  <a href="https://github.com/aituber-akari" title="aituber-akari">
-    <img src="https://github.com/aituber-akari.png" width="40" height="40" alt="aituber-akari">
-  </a>
-  <a href="https://github.com/harumeri" title="harumeri">
-    <img src="https://github.com/harumeri.png" width="40" height="40" alt="harumeri">
-  </a>
-  <a href="https://github.com/spring-hh" title="spring-hh">
-    <img src="https://github.com/spring-hh.png" width="40" height="40" alt="spring-hh">
-  </a>
-  <a href="https://github.com/dotneet" title="dotneet">
-    <img src="https://github.com/dotneet.png" width="40" height="40" alt="dotneet">
-  </a>
-  <a href="https://github.com/schroneko" title="schroneko">
-    <img src="https://github.com/schroneko.png" width="40" height="40" alt="schroneko">
-  </a>
-</p>
+4) 檢查服務健康狀態
 
-他、プライベートスポンサー 複数名
+```powershell
+docker compose -f docker-compose.ollama.yml ps
+docker logs ollama
+docker logs chromadb
+docker logs app
+docker logs n8n
+```
 
-## 貢献
+---
 
-AITuberKitの発展にご協力いただき、ありがとうございます。コミュニティからの貢献を歓迎しています。
+### 環境變數
 
-### イシューの報告
+一鍵腳本會自動建立最小化 `.env`（或從 `.env.example` 複製）。關鍵變數如下：
 
-バグを見つけたり、新機能のアイデアがある場合は、GitHubの[Issues](https://github.com/tegnike/aituber-kit/issues)ページからぜひ教えてください。
+```
+OLLAMA_BASE_URL=http://ollama:11434
+CHROMA_URL=http://chromadb:8000
+OLLAMA_EMBEDDING_MODEL=jeffh/intfloat-multilingual-e5-large-instruct:f16
+```
 
-イシューを作成する際に、以下の情報を含めていただけると対応がスムーズになります：
+若需自訂模型，可於執行 `setup-all.ps1` 時帶入參數，或修改 `.env`/`docker-compose.ollama.yml`。
 
-- 問題や新機能の詳細な説明
-- 再現手順（バグの場合）
-- 期待される動作と実際の動作
-- 使用環境（ブラウザ、OS、Node.jsのバージョンなど）
-- スクリーンショットや動画（可能であれば）
+---
 
-### プルリクエスト
+### 驗證與測試
 
-コードの改善や新機能の追加をしたい場合は、フォークしたリポジトリで変更を加え、プルリクエストを作成してください。
+- 執行環境：VSCode PowerShell 終端（不是在 Docker 容器內）
 
-- 1つのプルリクエストでは、1つの機能または修正に焦点を当てるようにしてください。
-- プルリクエストの説明には、変更内容と理由を書いてください。
-- マージ先のブランチは必ず `develop` に設定してください。
-- コンフリクトは無理に解消しなくても問題ありません。開発チームが対応します。
+1) 測試 Ollama（列出模型、對話、串流）
 
-## 利用規約
+```powershell
+./scripts/test-ollama.ps1
+```
 
-### ライセンス
+2) 測試 Embedding（多語、維度、效能）
 
-本プロジェクトは、バージョン v2.0.0 以降、**カスタムライセンス**を採用しています。
+```powershell
+./scripts/test-embedding.ps1
+```
 
-- **無償利用**
+3) 整合測試（聊天 + 嵌入 + 併發 + 應用健康檢查）
 
-  - 営利目的以外での個人利用、教育目的、非営利目的での使用は無償で利用可能です。
+```powershell
+./scripts/test-integration.ps1
+```
 
-- **商用ライセンス**
-  - 商用目的での使用に関しては、別途商用ライセンスの取得が必要です。
-  - 詳細は、[ライセンスについて](./docs/license.md)をご確認ください。
+4) 瀏覽器測試頁面（執行環境：瀏覽器）
 
-### その他
+- `http://localhost:3000/test-embedding-manual.html`
+- `http://localhost:3000/test-rag-integration.html`
+- `http://localhost:3000/test-news.html`
 
-- [ロゴの利用規約](./docs/logo_licence.md)
-- [VRMおよびLive2Dモデルの利用規約](./docs/character_model_licence.md)
+---
 
-## 優先実装について
+### n8n 手動設定（RSS 新聞自動化）
 
-本プロジェクトでは、有償での機能優先実装を受け付けています。
+- 執行環境：瀏覽器（管理介面），VSCode PowerShell（啟動/檢查）
 
-- 企業や個人の方から要望のあった機能を、優先的に実装することが可能です。
-- 実装された機能は、本OSSプロジェクトの一部として公開されます。
-- 料金は機能の複雑さや実装に要する時間に応じて個別見積もりとなります。
-- この優先実装は商用ライセンスとは別の取り組みです。実装された機能を商用利用する場合は、別途商用ライセンスの取得が必要です。
+1) 確認 n8n 已啟動：
 
-詳細については、support@aituberkit.com までお問い合わせください。
+```powershell
+docker compose -f docker-compose.ollama.yml up -d n8n
+```
+
+2) 開啟 `http://localhost:5678`，於 UI 匯入：`n8n-workflows/RSS_News_Automation.json`
+
+3) 依需求調整 RSS 來源（`n8n-workflows/RSS_Sources.md`），啟用工作流程並測試。
+
+補充腳本：
+
+```powershell
+# 快速啟動與基本檢查
+./scripts/setup-n8n.ps1
+
+# 等待 n8n 就緒並測試新聞 API 串接
+./scripts/setup-n8n-workflow.ps1
+```
+
+---
+
+### RAG（檢索增強生成）
+
+- 主要服務：ChromaDB（`http://localhost:8000`）
+- 相關指南：`docs/rag-integration-guide.md`
+
+快速檢查 ChromaDB 心跳（執行環境：VSCode PowerShell）：
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/api/v1/heartbeat" -Method Get
+```
+
+若需加入示例文件或進一步檢查，可參考：
+
+```powershell
+./scripts/setup-rag.ps1
+```
+
+---
+
+### 常見問題與疑難排解
+
+- 服務啟動失敗或逾時：
+  - 檢查 Docker 是否運作、記憶體分配（建議 ≥ 8GB）
+  - 查看日誌：`docker logs ollama`、`docker logs chromadb`、`docker logs app`、`docker logs n8n`
+  - 重新啟動：`docker compose -f docker-compose.ollama.yml restart`
+
+- 模型下載很慢或失敗：
+  - 重試：`docker exec ollama ollama pull gpt-oss:20b`
+  - 先確認網路與可用空間（建議 ≥ 20GB）
+
+- GPU 相關錯誤：
+  - 確認安裝 NVIDIA 驅動與 Docker Desktop 的 GPU 支援（Windows 需 WSL2）
+  - 無 GPU 環境可改 CPU：在 `docker-compose.ollama.yml` 移除 `gpus` 與 `nvidia` 相關設定，並刪除 `CUDA_VISIBLE_DEVICES`、`NVIDIA_VISIBLE_DEVICES`
+
+- 埠號衝突：
+  - 調整 `docker-compose.ollama.yml` 中對應 `ports` 對映
+
+---
+
+### 重要連結與授權
+
+- 架構與詳細文件：`docs/README_zh.md`、`docs/ollama-setup-guide.md`、`docs/rag-integration-guide.md`
+- 進階功能：`public/test-rag-integration.html`、`public/test-embedding-manual.html`
+- 授權與條款：`docs/license.md`、`docs/logo_licence.md`、`docs/character_model_licence.md`
+
+---
+
+### 開發者常用指令（全在 VSCode PowerShell 執行）
+
+```powershell
+# 啟動全部（含 n8n）
+docker compose -f docker-compose.ollama.yml up -d
+
+# 停止並移除
+docker compose -f docker-compose.ollama.yml down
+
+# 僅啟動 app
+docker compose -f docker-compose.ollama.yml up -d app
+
+# 查看狀態 / 日誌
+docker compose -f docker-compose.ollama.yml ps
+docker logs app
+
+# 重新建置 app（若修改 Dockerfile 或依賴）
+docker compose -f docker-compose.ollama.yml build app
+docker compose -f docker-compose.ollama.yml up -d app
+```
+
+---
+
+如有缺漏或需要新增自動化步驟，請先提出 Issue 或 PR；本 README 將隨腳本更新持續完善。
+
+
