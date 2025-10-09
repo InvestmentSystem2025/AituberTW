@@ -147,7 +147,11 @@ Ensure-DockerRunning
 Ensure-EnvFile
 
 # 1) Start core services
-Write-Host "Starting services (Ollama, ChromaDB$([string]::IsNullOrEmpty($SkipN8N) -or -not $SkipN8N ? ', n8n' : '') )..." -ForegroundColor Yellow
+if ($SkipN8N) {
+  Write-Host "Starting services (Ollama, ChromaDB)..." -ForegroundColor Yellow
+} else {
+  Write-Host "Starting services (Ollama, ChromaDB, n8n)..." -ForegroundColor Yellow
+}
 try {
   if ($SkipN8N) {
     Invoke-Compose "-f docker-compose.ollama.yml up -d ollama chromadb"
