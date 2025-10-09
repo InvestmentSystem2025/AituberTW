@@ -29,16 +29,16 @@ Write-Host "Environment: Windows PowerShell (VSCode Terminal recommended)" -Fore
 Write-Host ""
 
 function Invoke-Compose {
-  param([string] $Args)
+  param([string] $ComposeArgs)
   $composeCmd = $null
   # Prefer new syntax first
   $ver = (& docker compose version) 2>$null
   if ($LASTEXITCODE -eq 0) {
-    $composeCmd = "docker compose $Args"
+    $composeCmd = "docker compose $ComposeArgs"
   } else {
     $ver = (& docker-compose version) 2>$null
     if ($LASTEXITCODE -eq 0) {
-      $composeCmd = "docker-compose $Args"
+      $composeCmd = "docker-compose $ComposeArgs"
     }
   }
   if (-not $composeCmd) {
