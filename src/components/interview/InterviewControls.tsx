@@ -13,7 +13,6 @@ export const InterviewControls: React.FC<InterviewControlsProps> = ({
   const [showSettings, setShowSettings] = useState(false)
 
   const handleSettingsSave = (settings: InterviewSettingsData) => {
-    console.log('面試設置已保存:', settings)
     // 保存設置到 localStorage
     if (typeof window !== 'undefined') {
       localStorage.setItem('interview_enablePersonDetection', String(settings.enablePersonDetection))
@@ -21,10 +20,6 @@ export const InterviewControls: React.FC<InterviewControlsProps> = ({
       
       // 觸發自定義事件通知設定已更新
       window.dispatchEvent(new Event('interviewSettingsChanged'))
-      console.log('✅ 設定已保存並通知:', {
-        enablePersonDetection: settings.enablePersonDetection,
-        enableRecording: settings.enableRecording,
-      })
     }
   }
 

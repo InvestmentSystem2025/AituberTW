@@ -250,15 +250,12 @@ function parseScoreFromResponse(response: string, questionIndex?: number): Answe
       jsonString = jsonString.replace(/\n/g, ' ').replace(/\s+/g, ' ')
       jsonString = jsonString.replace(/'/g, '"')
       
-      console.log('🔍 嘗試解析的JSON字符串:', jsonString)
       const scoreData = JSON.parse(jsonString)
       return createAnswerScore(scoreData, questionIndex)
     }
     
     // 解析多個JSON對象，返回最後一個（最新的評分）
-    console.log(`🔍 找到 ${jsonObjects.length} 個JSON對象，解析最後一個`)
     const lastJsonString = jsonObjects[jsonObjects.length - 1]
-    console.log('🔍 最後一個JSON字符串:', lastJsonString)
     
     const scoreData = JSON.parse(lastJsonString)
     return createAnswerScore(scoreData, questionIndex)
@@ -281,8 +278,6 @@ function parseScoreFromResponse(response: string, questionIndex?: number): Answe
  */
 function parseScoreFromResponseFallback(jsonString: string, questionIndex?: number): AnswerScore | null {
   try {
-    console.log('🔄 使用備用解析方法')
-    
     // 使用正則表達式提取各個分數
     const extractNumber = (pattern: string): number => {
       const match = jsonString.match(new RegExp(pattern + '":\\s*(\\d+(?:\\.\\d+)?)'))
@@ -392,20 +387,9 @@ function triggerInterviewTTS(text: string, emotion: string = 'neutral') {
     emotion: emotion as any // 確保情感標籤符合 EmotionType
   }
   
-  console.log(`🎭 面試AI準備TTS播放，情感: ${emotion}`)
-  
   // 異步觸發TTS，不等待完成
   // 情感表情會在 VRM model.speak() 方法中實際應用
-  speakCharacter(
-    sessionId,
-    talk,
-    () => {
-      console.log(`🎤 面試AI TTS開始生成 (情感: ${emotion})`)
-    },
-    () => {
-      console.log(`✅ 面試AI TTS播放完成 (情感: ${emotion})`)
-    }
-  )
+  speakCharacter(sessionId, talk)
 }
 
 /**
@@ -521,8 +505,6 @@ export async function getInterviewAIResponse(messages: Message[], questionIndex?
           logScoreResult(scoreResult)
         }
       }
-      
-      console.log(`🎭 解析到情感標籤: ${emotion}`)
       
       // 如果AI回應成功，觸發TTS（包含情感標籤）
       triggerInterviewTTS(cleanResponse, emotion)
@@ -754,11 +736,9 @@ export async function getInterviewAIResponseStream(
               }
             }
             
-            console.log(`🎭 串流解析到情感標籤: ${emotion}`)
-            
             //一時停止暫停TTS
             // 串流結束後觸發TTS（包含情感標籤）
-            triggerInterviewTTS(cleanResponse, emotion)
+            // triggerInterviewTTS(cleanResponse, emotion)
           }
         } catch (error) {
           console.error(

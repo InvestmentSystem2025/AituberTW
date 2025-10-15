@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  mcp-server-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: mcp-server-dev
+    ports:
+      - "3001:3001"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/test  # 保護測試目錄不被主機覆蓋
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - MAX_FILE_SIZE=50mb
+      - ALLOWED_FILE_TYPES=.pdf,.doc,.docx,.txt
+      - OCR_SERVICE_URL=http://ocr-service:5000  # OCR 服務的內部 URL
+    command: npm run dev
+    restart: unless-stopped
+    depends_on:
+      - ocr-service
+    networks:
+      - aituber-kit_default  # 加入 aituber-kit 的網絡以便通訊
+
+  ocr-service:
+    build:
+      context: ./ocr-service
+      dockerfile: Dockerfile
+    container_name: ocr-service
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./ocr-service:/app
+      - ./uploads:/app/uploads  # 共享 uploads 目錄
+    environment:
+      - PYTHONUNBUFFERED=1
+      - FLASK_ENV=development
+    restart: unless-stopped
+    networks:
+      - aituber-kit_default
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  aituber-kit_default:
+    external: true  # 使用外部已存在的網絡
+

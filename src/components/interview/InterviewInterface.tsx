@@ -83,11 +83,13 @@ interface ChatMessage {
 interface InterviewInterfaceProps {
   onInterviewComplete: (result?: any) => void
   enableRecording?: boolean
+  initialGreeting?: string  // 預先生成的 AI 問候語
 }
 
 export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   onInterviewComplete,
   enableRecording = false,
+  initialGreeting,
 }) => {
   const modelType = settingsStore((s) => s.modelType)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -98,6 +100,21 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const isInitializedRef = useRef(false)
+  const greetingShownRef = useRef(false)
+  
+  // 初始化時顯示預先生成的問候語
+  useEffect(() => {
+    if (initialGreeting && messages.length === 0 && !greetingShownRef.current) {
+      const greetingMessage: ChatMessage = {
+        id: `ai-${Date.now()}`,
+        type: 'ai',
+        content: initialGreeting,
+        timestamp: new Date(),
+      }
+      setMessages([greetingMessage])
+      greetingShownRef.current = true
+    }
+  }, [initialGreeting])
   
   // 評分系統狀態
   const [scoringEngine] = useState(() => new InterviewScoringEngine(DEFAULT_SCORING_CRITERIA))
@@ -177,9 +194,6 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         
         // 情感標籤已包含在 aiResponse.emotion 中
         // 表情會在 TTS 播放時（model.speak()）自動應用，不需要在這裡手動設置
-        if (aiResponse.emotion) {
-          console.log(`🎭 面試AI情感標籤: ${aiResponse.emotion}（將在TTS播放時應用）`)
-        }
         
         // 處理評分結果
         if (aiResponse.scoreResult) {
@@ -195,20 +209,14 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         const isInterviewEnding = endKeywords.some(keyword => aiResponse.text.includes(keyword))
         
         if (isInterviewEnding) {
-          console.log('🎯 檢測到面試結束信號，準備生成最終結果...')
-          console.log('🔍 當前錄製狀態:', recording.isRecording)
-          
           // 先等待 3 秒讓 AI 最後的回覆完全顯示，再停止錄製
           setTimeout(() => {
-            console.log('📹 準備停止錄製（AI 回覆已完整顯示）...')
             recording.stopRecording()
-            console.log('📹 stopRecording() 已調用，等待處理完成...')
           }, 3000)
           
           // 總共等待 6 秒後再顯示結果頁面
           setTimeout(() => {
             const finalResult = scoringEngine.generateFinalResult('candidate-001')
-            console.log('📊 最終面試結果:', finalResult)
             onInterviewComplete(finalResult)
           }, 6000) // 給更多時間：3秒顯示 + 3秒處理錄製
         } else {
@@ -259,26 +267,28 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
 
   // 開始面試
   const startInterview = useCallback(async () => {
+    // 如果有預先生成的問候語，跳過預設的 greeting
+    if (initialGreeting) {
+      setCurrentQuestionIndex(0)
+      setCurrentQuestionId('custom-greeting')
+      setIsWaitingForAnswer(true)
+      return
+    }
+    
+    // 使用預設的 greeting
     const firstQuestion = INTERVIEW_QUESTIONS[0]
     setCurrentQuestionId(firstQuestion.id)
     setCurrentQuestionIndex(0)
     addAIMessage(firstQuestion.question)
     setIsWaitingForAnswer(true)
     
-    // 初始表情會在首次 TTS 播放時自動應用（根據 AI 回應中的情感標籤）
-    console.log('🎬 面試開始，等待 TTS 播放時應用表情')
-    
     // 如果啟用錄製，開始錄製
-    console.log('🎥 檢查錄製設定:', { enableRecording })
     if (enableRecording) {
-      console.log('🎬 準備開始錄製...')
       setTimeout(() => {
         recording.startRecording()
       }, 1000) // 延遲 1 秒開始錄製，確保畫面已完全載入
-    } else {
-      console.log('⏸️ 錄製功能未啟用')
     }
-  }, [addAIMessage, enableRecording, recording, modelType])
+  }, [initialGreeting, addAIMessage, enableRecording, recording, modelType])
 
   // 語音識別功能
   const {
@@ -298,7 +308,6 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   // 初始化面試（只執行一次）
   useEffect(() => {
     if (!isInitializedRef.current) {
-      console.log('🎬 InterviewInterface 組件初始化')
       // 初始化鏡頭
       initializeCamera()
       
@@ -313,9 +322,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   // 組件卸載時的清理（使用獨立的 effect）
   useEffect(() => {
     return () => {
-      console.log('🧹 InterviewInterface 組件真正卸載，檢查錄製狀態...')
       if (recordingRef.current.isRecording) {
-        console.log('⚠️ 組件卸載時錄製仍在進行，強制停止錄製')
         recordingRef.current.stopRecording()
       }
     }
@@ -484,20 +491,14 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             </button>
             <button
               onClick={() => {
-                console.log('🎯 手動結束面試，準備生成最終結果...')
-                console.log('🔍 當前錄製狀態:', recording.isRecording)
-                
                 // 等待 2 秒再停止錄製（給最後的對話時間錄製）
                 setTimeout(() => {
-                  console.log('📹 準備停止錄製...')
                   recording.stopRecording()
-                  console.log('📹 stopRecording() 已調用，等待處理完成...')
                 }, 2000)
                 
                 // 總共等待 5 秒後顯示結果
                 setTimeout(() => {
                   const finalResult = scoringEngine.generateFinalResult('candidate-001')
-                  console.log('📊 最終面試結果:', finalResult)
                   onInterviewComplete(finalResult)
                 }, 5000)
               }}

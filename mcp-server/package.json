@@ -1,0 +1,40 @@
+{
+  "name": "mcp-server",
+  "version": "1.0.0",
+  "description": "MCP Server for AI Tuber interview system with PDF reading and file management",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "docker:start": "powershell -ExecutionPolicy Bypass -File ./scripts/docker-start.ps1",
+    "docker:dev": "powershell -ExecutionPolicy Bypass -File ./scripts/docker-start-dev.ps1",
+    "docker:build": "docker build -t mcp-server .",
+    "docker:up": "docker-compose up -d --build",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker logs -f mcp-server",
+    "docker:logs:dev": "docker logs -f mcp-server-dev",
+    "setup": "powershell -ExecutionPolicy Bypass -File ./scripts/setup.ps1",
+    "test:api": "powershell -ExecutionPolicy Bypass -File ./scripts/test-api.ps1"
+  },
+  "keywords": ["mcp", "pdf", "interview", "file-management", "ai-tuber"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "express": "^4.18.2",
+    "form-data": "^4.0.0",
+    "multer": "^1.4.5-lts.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.11",
+    "@types/cors": "^2.8.17",
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}

@@ -78,7 +78,6 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
       if (response.ok && result.success) {
         setSaveStatus('success')
         setSaveMessage(`✅ 面試記錄已保存: ${result.fileName}`)
-        console.log('面試記錄保存成功:', result)
       } else {
         throw new Error(result.message || '保存失敗')
       }
@@ -100,7 +99,6 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
   useEffect(() => {
     // 使用 ref 確保即使在 React Strict Mode 下也只執行一次
     if (!hasAutoSavedRef.current && (answers.length > 0 || interviewResult)) {
-      console.log('📝 自動保存面試記錄...')
       hasAutoSavedRef.current = true
       handleSaveRecord()
     }

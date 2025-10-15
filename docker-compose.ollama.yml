@@ -62,6 +62,43 @@
     depends_on:
       - chromadb
 
+  # OCR 服務
+  ocr-service:
+    build:
+      context: ./mcp-server/ocr-service
+      dockerfile: Dockerfile
+    container_name: ocr-service
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mcp-server/ocr-service:/app
+      - ./mcp-server/uploads:/app/uploads
+    environment:
+      - PYTHONUNBUFFERED=1
+      - FLASK_ENV=production
+    restart: unless-stopped
+
+  # MCP 服務
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    container_name: mcp-server
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./mcp-server/uploads:/app/uploads
+      - ./mcp-server/data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - MAX_FILE_SIZE=50mb
+      - ALLOWED_FILE_TYPES=.pdf,.doc,.docx,.txt
+      - OCR_SERVICE_URL=http://ocr-service:5000
+    restart: unless-stopped
+    depends_on:
+      - ocr-service
+
   # 主應用服務
   app:
     build: .
@@ -76,9 +113,11 @@
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_EMBEDDING_MODEL=jeffh/intfloat-multilingual-e5-large-instruct:f16
       - CHROMA_URL=http://chromadb:8000
+      - NEXT_PUBLIC_MCP_SERVER_URL=http://localhost:3001
     depends_on:
       - ollama
       - chromadb
+      - mcp-server
     command: npm run dev
     networks:
       - default
@@ -87,6 +126,8 @@ volumes:
   ollama_data:
   chroma_data:
   n8n_data:
+  mcp_uploads:
+  mcp_data:
 
 networks:
   default:

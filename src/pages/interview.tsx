@@ -24,6 +24,7 @@ import { InterviewControls } from '@/components/interview/InterviewControls'
 // import { InterviewQuestions } from '@/components/interview/InterviewQuestions'
 import { InterviewResults } from '@/components/interview/InterviewResults'
 import { InterviewInterface } from '@/components/interview/InterviewInterface'
+import { ResumeUpload } from '@/components/interview/ResumeUpload'
 import { useInterviewFlow } from '@/components/interview/hooks/useInterviewFlow'
 import homeStore from '@/features/stores/home'
 import settingsStore from '@/features/stores/settings'
@@ -31,6 +32,7 @@ import '@/lib/i18n'
 import { buildUrl } from '@/utils/buildUrl'
 import { YoutubeManager } from '@/components/youtubeManager'
 import toastStore from '@/features/stores/toast'
+import { ResumeInfo } from '@/lib/mcpClient'
 
 const Interview = () => {
   const webcamStatus = homeStore((s) => s.webcamStatus)
@@ -50,6 +52,32 @@ const Interview = () => {
   // 面試流程管理
   const interviewFlow = useInterviewFlow()
   
+  // 履歷資料狀態
+  const [resumeData, setResumeData] = useState<{
+    info: ResumeInfo | null
+    questions: string[]
+    aiGreeting: string | null  // AI 預先生成的問候語
+  }>({
+    info: null,
+    questions: [],
+    aiGreeting: null,
+  })
+
+  // 處理履歷上傳完成
+  const handleResumeProcessed = (resumeInfo: ResumeInfo, questions: string[], aiGreeting: string) => {
+    setResumeData({
+      info: resumeInfo,
+      questions,
+      aiGreeting,
+    })
+    
+    toastStore.getState().addToast({
+      message: '✓ 履歷分析完成！AI 面試官已準備好歡迎您',
+      type: 'success',
+      tag: 'resume-processed',
+    })
+  }
+  
   // 面試設定（從 localStorage 讀取）
   const [enableRecording, setEnableRecording] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -65,7 +93,6 @@ const Interview = () => {
       if (typeof window !== 'undefined') {
         const saved = localStorage.getItem('interview_enableRecording')
         setEnableRecording(saved === 'true')
-        console.log('📝 錄製設定已更新:', saved === 'true')
       }
     }
 
@@ -77,13 +104,6 @@ const Interview = () => {
     }
   }, [])
 
-  // 調試：檢查面試狀態變化
-  useEffect(() => {
-    console.log(
-      '🔍 Interview 頁面載入，當前面試狀態:',
-      interviewFlow.interviewStatus
-    )
-  }, [interviewFlow.interviewStatus])
   const characterPresets = [
     {
       key: 'characterPreset1',
@@ -168,6 +188,10 @@ const Interview = () => {
             onStartInterview={interviewFlow.startInterviewManually}
           />
 
+          {/* 履歷上傳組件 */}
+          <div className="absolute top-4 right-4 z-[60]" style={{ maxWidth: '420px' }}>
+            <ResumeUpload onResumeProcessed={handleResumeProcessed} />
+          </div>
 
           {/* 面試控制面板 */}
           <div className="absolute top-20 left-4 z-[60]">
@@ -181,6 +205,7 @@ const Interview = () => {
             interviewFlow.completeInterview(result)
           }}
           enableRecording={enableRecording}
+          initialGreeting={resumeData.aiGreeting || undefined}
         />
       ) : interviewFlow.interviewStatus === 'completed' || interviewFlow.showResults ? (
         /* 顯示面試結果 */

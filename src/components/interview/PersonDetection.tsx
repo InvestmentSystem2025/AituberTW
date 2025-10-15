@@ -1,4 +1,3 @@
-console.log('👀 This is client-side log')
 import React, { useRef, useEffect, useState, useCallback } from 'react'
 
 interface PersonDetectionProps {
@@ -23,11 +22,6 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
   const faceDetectorRef = useRef<any>(null)
   const animationFrameIdRef = useRef<number | null>(null)
 
-  // 調試：確認組件被渲染（只在初始化時顯示）
-  useEffect(() => {
-    console.log('🎬 PersonDetection 組件被渲染！')
-  }, [])
-
   // 初始化 MediaPipe FaceDetector
   const initializeFaceDetector = useCallback(async () => {
     try {
@@ -36,11 +30,9 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
       const { FilesetResolver, FaceDetector } = await import(
         '@mediapipe/tasks-vision'
       )
-      console.log('✅ MediaPipe 模組載入成功')
       const vision = await FilesetResolver.forVisionTasks(
         'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm'
       )
-      console.log('✅ FilesetResolver 初始化成功')
 
       faceDetectorRef.current = await FaceDetector.createFromOptions(vision, {
         baseOptions: {
@@ -51,8 +43,6 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
         minDetectionConfidence: 0.3, // 降低信心度要求
         minSuppressionThreshold: 0.3,
       })
-
-      console.log('✅ FaceDetector 創建成功')
       setIsInitialized(true)
       setDetectionStatus('模型載入完成，等待鏡頭權限...')
     } catch (error) {
@@ -65,16 +55,12 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
   // 初始化鏡頭
   const initializeCamera = useCallback(async () => {
     try {
-      console.log('📹 開始初始化鏡頭')
-
       if (!navigator.mediaDevices) {
         throw new Error('此瀏覽器不支援 MediaDevices API')
       }
 
-      console.log('🔍 檢查 MediaDevices API 支援:', !!navigator.mediaDevices)
       setDetectionStatus('請求鏡頭權限中...')
 
-      console.log('🎥 請求鏡頭權限...')
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: 640 },
@@ -82,29 +68,14 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
           facingMode: 'user',
         },
       })
-      console.log('✅ 鏡頭權限獲取成功')
 
       if (videoRef.current) {
-        console.log('📺 設置視頻流到 video 元素')
         videoRef.current.srcObject = stream
 
-        console.log('▶️ 開始播放視頻')
         await videoRef.current.play()
 
-        console.log('🎯 視頻播放成功，開始檢測')
         setDetectionStatus('鏡頭已啟動，開始檢測...')
-        console.log('🔧 設置 isDetecting = true')
         setIsDetecting(true)
-
-        // 等待視頻載入完成
-        videoRef.current.addEventListener('loadedmetadata', () => {
-          console.log(
-            '📏 視頻尺寸:',
-            videoRef.current?.videoWidth,
-            'x',
-            videoRef.current?.videoHeight
-          )
-        })
       }
     } catch (error) {
       console.error('❌ 鏡頭初始化失敗:', error)
@@ -116,11 +87,6 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
   // 執行人臉檢測
   const detectFaces = useCallback(async () => {
     if (!faceDetectorRef.current || !videoRef.current || !canvasRef.current) {
-      console.log('檢測條件不滿足:', {
-        faceDetector: !!faceDetectorRef.current,
-        video: !!videoRef.current,
-        canvas: !!canvasRef.current,
-      })
       return
     }
 
@@ -130,7 +96,6 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
       const ctx = canvas.getContext('2d')
 
       if (!ctx) {
-        console.log('無法獲取 canvas context')
         return
       }
 
@@ -151,14 +116,12 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
         // 如果是第一次檢測到人臉，記錄開始時間
         if (!detectionStartTime) {
           setDetectionStartTime(currentTime)
-          console.log('✅ 檢測到人臉，開始計時...')
         }
         
         // 檢查是否已經檢測超過3秒
         const detectionDuration = currentTime - (detectionStartTime || currentTime)
         
         if (detectionDuration >= 3000 && !showStartPrompt) {
-          console.log('✅ 檢測到人臉超過3秒，顯示開始提示')
           setShowStartPrompt(true)
           setDetectionStatus('已偵測到面試者，如您準備好請按下開始面試')
           setIsDetecting(false) // 停止檢測循環
@@ -186,7 +149,6 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
       } else {
         // 未檢測到人臉，重置計時
         if (detectionStartTime) {
-          console.log('❌ 人臉消失，重置檢測計時')
           setDetectionStartTime(null)
           setShowStartPrompt(false)
           setDetectionStatus('未檢測到人員')
@@ -204,21 +166,14 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
     if (isDetecting && faceDetectorRef.current) {
       detectFaces()
       animationFrameIdRef.current = requestAnimationFrame(detectionLoop)
-    } else {
-      console.log('檢測循環停止:', {
-        isDetecting,
-        faceDetector: !!faceDetectorRef.current,
-      })
     }
   }, [isDetecting, detectFaces])
 
   // 組件初始化
   useEffect(() => {
-    console.log('🎬 PersonDetection 組件初始化')
     initializeFaceDetector()
 
     return () => {
-      console.log('🧹 PersonDetection 組件清理')
       if (animationFrameIdRef.current) {
         cancelAnimationFrame(animationFrameIdRef.current)
       }
@@ -231,29 +186,14 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
   // 當初始化完成後啟動鏡頭
   useEffect(() => {
     if (isInitialized) {
-      console.log('✅ MediaPipe 初始化完成，開始初始化鏡頭')
       initializeCamera()
-    } else {
-      console.log('⏳ 等待 MediaPipe 初始化完成...')
     }
   }, [isInitialized, initializeCamera])
 
   // 當檢測狀態改變時啟動/停止檢測循環
   useEffect(() => {
-    console.log('🔍 檢測狀態檢查:', {
-      isDetecting,
-      faceDetector: !!faceDetectorRef.current,
-      faceDetectorType: typeof faceDetectorRef.current
-    })
-    
     if (isDetecting && faceDetectorRef.current) {
-      console.log('🔄 開始檢測循環')
       detectionLoop()
-    } else {
-      console.log('⏸️ 檢測循環暫停:', {
-        isDetecting,
-        faceDetector: !!faceDetectorRef.current,
-      })
     }
 
     return () => {
@@ -265,7 +205,6 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
 
   // 手動開始面試
   const handleStartInterview = useCallback(() => {
-    console.log('🎯 手動開始面試')
     setShowStartPrompt(false)
     setDetectionStartTime(null)
     setDetectionStatus('面試即將開始...')
