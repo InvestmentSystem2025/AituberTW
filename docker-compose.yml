@@ -1,13 +1,388 @@
-version: '3'
+﻿services:
+  # Ollama 服務
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_VISIBLE_DEVICES=0
+    restart: unless-stopped
+    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: serve
 
-services:
+  # ChromaDB 服務
+  chromadb:
+    image: ghcr.io/chroma-core/chroma:0.5.0
+    container_name: chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - CHROMA_DB_DIR=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=FALSE
+    command: uvicorn chromadb.app:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+
+  # n8n 自動化服務（步驟4）
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n-workflows:/home/node/.n8n/workflows
+      - ./news-data:/app/news-data
+    environment:
+      - TZ=Asia/Taipei
+      - N8N_BASIC_AUTH_ACTIVE=false
+      - N8N_USER_MANAGEMENT_DISABLED=true
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_VERSION_NOTIFICATIONS_ENABLED=false
+      - N8N_TEMPLATES_ENABLED=false
+      - N8N_ONBOARDING_FLOW_DISABLED=true
+      - WEBHOOK_URL=http://n8n:5678
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+    restart: unless-stopped
+    depends_on:
+      - chromadb
+
+  # OCR 服務
+  ocr-service:
+    build:
+      context: ./mcp-server/ocr-service
+      dockerfile: Dockerfile
+    container_name: ocr-service
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mcp-server/ocr-service:/app
+      - ./mcp-server/uploads:/app/uploads
+    environment:
+      - PYTHONUNBUFFERED=1
+      - FLASK_ENV=production
+    restart: unless-stopped
+
+  # MCP 服務
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    container_name: mcp-server
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./mcp-server/uploads:/app/uploads
+      - ./mcp-server/data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - MAX_FILE_SIZE=50mb
+      - ALLOWED_FILE_TYPES=.pdf,.doc,.docx,.txt
+      - OCR_SERVICE_URL=http://ocr-service:5000
+    restart: unless-stopped
+    depends_on:
+      - ocr-service
+
+  # 主應用服務
   app:
     build: .
     ports:
-      - '3000:3000'
+      - "3000:3000"
     volumes:
       - .:/app
       - /app/node_modules
     env_file:
       - .env
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_EMBEDDING_MODEL=jeffh/intfloat-multilingual-e5-large-instruct:f16
+      - CHROMA_URL=http://chromadb:8000
+      - NEXT_PUBLIC_MCP_SERVER_URL=http://localhost:3001
+      - TZ=Asia/Taipei
+      - SUPABASE_INTERNAL_URL=http://supabase-kong:8000
+    depends_on:
+      - ollama
+      - chromadb
+      - mcp-server
     command: npm run dev
+    networks:
+      - default
+
+  # Supabase PostgreSQL 資料庫
+  supabase-db:
+    image: supabase/postgres:15.6.1.101
+    container_name: supabase-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      TZ: Asia/Taipei
+      APP_SEED_ADMIN_EMAIL: ${APP_SEED_ADMIN_EMAIL}
+    # 確保 pg_stat_statements 與邏輯複寫設定啟用，並對外監聽
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - listen_addresses=*
+      - -c
+      - search_path="$user", public, auth, storage, extensions
+    volumes:
+      - supabase_db_data:/var/lib/postgresql/data
+      - ./supabase/init.sql:/docker-entrypoint-initdb.d/init-scripts/99_user_init.sql:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+
+  # Supabase Auth (GoTrue)
+  supabase-auth:
+    image: supabase/gotrue:v2.150.0
+    container_name: supabase-auth
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:8001}
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      GOTRUE_DB_DRIVER: postgres
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres?search_path=auth,public,storage,extensions
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_API_EXTERNAL_URL: ${SITE_URL:-http://localhost:8001}
+      API_EXTERNAL_URL: ${SITE_URL:-http://localhost:8001}
+      TZ: Asia/Taipei
+    restart: unless-stopped
+
+  # Supabase REST API (PostgREST)
+  supabase-rest:
+    image: postgrest/postgrest:v12.0.2
+    container_name: supabase-rest
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      PGRST_DB_URI: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_DB_SCHEMAS: public,storage
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      TZ: Asia/Taipei
+    restart: unless-stopped
+
+  # Supabase Realtime
+  supabase-realtime:
+    image: supabase/realtime:v2.30.34
+    container_name: supabase-realtime
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_HOST: supabase-db
+      DB_NAME: postgres
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      PORT: 4000
+      API_JWT_SECRET: ${JWT_SECRET}
+      SECRET_KEY_BASE: ${REALTIME_SECRET_KEY_BASE:-dev-secret-key-base-change-me}
+      APP_NAME: supabase-realtime
+      REALTIME_CLUSTER_STRATEGY: none
+      RELEASE_DISTRIBUTION: none
+      RLIMIT_NOFILE: "100000"
+      ELIXIR_ERL_OPTIONS: "-logger level error -kernel logger_level error"
+      # 避免與其他服務共用的 schema_migrations 衝突（Ecto 專用）
+      DB_MIGRATIONS_TABLE: realtime_schema_migrations
+      TZ: Asia/Taipei
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    restart: unless-stopped
+
+  # Supabase Storage
+  supabase-storage:
+    image: supabase/storage-api:v1.0.11
+    container_name: supabase-storage
+    depends_on: 
+      supabase-db:
+        condition: service_started
+      supabase-auth:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      ANON_KEY: ${SUPABASE_ANON_KEY}
+      SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      POSTGREST_URL: http://supabase-rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres?search_path=auth,public,storage,extensions
+      FILE_STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      STORAGE_S3_REGION: us-east-1
+      STORAGE_S3_BUCKET: storage
+      STORAGE_S3_ENDPOINT: http://localhost:9000
+      STORAGE_S3_FORCE_PATH_STYLE: "true"
+      STORAGE_S3_ACCESS_KEY_ID: minioadmin
+      STORAGE_S3_SECRET_ACCESS_KEY: minioadmin
+      TZ: Asia/Taipei
+    restart: unless-stopped
+    volumes:
+      - supabase_storage_data:/var/lib/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Supabase Postgres Meta (pg-meta)
+  supabase-meta:
+    image: supabase/postgres-meta:v0.80.1
+    container_name: supabase-meta
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres?search_path=auth,public,storage,extensions
+      PG_META_DB_HOST: supabase-db
+      PG_META_DB_PORT: "5432"
+      PG_META_DB_NAME: postgres
+      PG_META_DB_USER: postgres
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Taipei
+    restart: unless-stopped
+
+  # Supabase Studio (管理介面)
+  supabase-studio:
+    image: supabase/studio:2025.06.09-sha-4c1349f
+    container_name: supabase-studio
+    depends_on: [supabase-db, supabase-rest, supabase-auth, supabase-storage, supabase-meta]
+    env_file:
+      - .env
+    environment:
+      STUDIO_PG_META_URL: http://supabase-meta:8080
+      SUPABASE_URL: ${SITE_URL:-http://localhost:8001}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      STUDIO_DEFAULT_DB_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
+      TZ: Asia/Taipei
+    ports:
+      - "54323:3000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000',res=>process.exit(res.statusCode===200?0:1)).on('error',()=>process.exit(1))\" "]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  # Kong API Gateway
+  supabase-kong:
+    image: kong:2.8.1
+    container_name: supabase-kong
+    depends_on: [supabase-auth, supabase-rest, supabase-realtime, supabase-storage]
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME,SRV
+      KONG_LOG_LEVEL: notice
+      KONG_PLUGINS: bundled,cors
+      KONG_PROXY_LISTEN: 0.0.0.0:8000
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+    ports:
+      - "8001:8000"  # 使用 8001 避免與 ChromaDB 的 8000 衝突
+    volumes:
+      - ./supabase/kong.yml:/var/lib/kong/kong.yml:ro
+    restart: unless-stopped
+
+  # 一次性啟動的 Seed 服務：等待 Storage 就緒後自動建立預設 buckets
+  supabase-bootstrap:
+    image: alpine:3.20
+    container_name: supabase-bootstrap
+    depends_on:
+      supabase-storage:
+        condition: service_started
+      supabase-rest:
+        condition: service_started
+    env_file:
+      - .env
+    command: >
+      sh -lc "set -e;
+      apk add --no-cache curl >/dev/null;
+      for i in $(seq 1 60); do curl -sf http://supabase-storage:5000/status && break || sleep 2; done;
+      for i in $(seq 1 60); do curl -sf http://supabase-rest:3000/ && break || sleep 2; done;
+      echo Seeding buckets...;
+      curl -s -o /dev/null -w '%{http_code}\n' \
+        -H 'Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}' \
+        -H 'apikey: ${SUPABASE_SERVICE_ROLE_KEY}' \
+        -H 'Content-Type: application/json' \
+        -d '{"name":"avatars","public":true}' \
+        http://supabase-storage:5000/bucket || true;
+      curl -s -o /dev/null -w '%{http_code}\n' \
+        -H 'Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}' \
+        -H 'apikey: ${SUPABASE_SERVICE_ROLE_KEY}' \
+        -H 'Content-Type: application/json' \
+        -d '{"name":"private","public":false}' \
+        http://supabase-storage:5000/bucket || true;
+      if [ -n "${APP_SEED_ADMIN_EMAIL}" ]; then \
+        echo Seeding app_admins...; \
+        curl -s -o /dev/null -w '%{http_code}\n' \
+          -H 'Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}' \
+          -H 'apikey: ${SUPABASE_SERVICE_ROLE_KEY}' \
+          -H 'Content-Type: application/json' \
+          -H 'Prefer: resolution=merge-duplicates' \
+          -d '[{"email":"'"${APP_SEED_ADMIN_EMAIL}"'"}]' \
+          'http://supabase-rest:3000/app_admins?on_conflict=email' || true; \
+      fi;
+      echo Done."
+    restart: "no"
+
+volumes:
+  ollama_data:
+  chroma_data:
+  n8n_data:
+  mcp_uploads:
+  mcp_data:
+  supabase_db_data:
+  supabase_storage_data:
+
+networks:
+  default:
+    driver: bridge
