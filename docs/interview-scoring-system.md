@@ -7,7 +7,12 @@
 ## 核心功能
 
 ### 1. 五大評分維度
-
+- **DB對應欄位**
+內容完整性	content_integrity	
+邏輯清晰度	logical_clarity	
+專業深度	professional_depth	
+溝通表達	communication	
+個人特質	personal_attributes
 - **內容完整性** (0-10分，扣分制)
   - 答非所問：-2分
   - 回答不完整：-1分

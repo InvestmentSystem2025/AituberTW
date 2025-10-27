@@ -1,0 +1,22 @@
+{
+  "name": "supabase-examples",
+  "version": "1.0.0",
+  "description": "Supabase 連線範例",
+  "main": "index.js",
+  "scripts": {
+    "signup": "ts-node signup.ts",
+    "login": "ts-node login.ts",
+    "admin": "ts-node admin.ts",
+    "build": "tsc",
+    "dev": "ts-node --watch"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.0"
+  }
+}
