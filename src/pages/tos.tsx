@@ -13,6 +13,7 @@ export default function TosAndSignupPage() {
   const [role, setRole] = useState<'jobSeeker' | 'recruiter'>('jobSeeker')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [token, setToken] = useState<string | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -29,6 +30,19 @@ export default function TosAndSignupPage() {
     load()
   }, [])
 
+  // 取得目前登入使用者的 access token（如已登入）
+  useEffect(() => {
+    const fetchSession = async () => {
+      try {
+        const s = await supabase.auth.getSession()
+        setToken(s.data.session?.access_token || null)
+      } catch {
+        setToken(null)
+      }
+    }
+    fetchSession()
+  }, [])
+
   const onAgree = async () => {
     setLoading(true)
     setMessage(null)
@@ -41,6 +55,44 @@ export default function TosAndSignupPage() {
       })
       if (!resp.ok) throw new Error('PRECONSENT_FAILED')
       const json = (await resp.json()) as PreconsentResp
+
+      // 已登入：直接 claim 並導向 /me
+      let claimToken = token
+      if (!claimToken) {
+        // 再次嘗試取得最新 session（避免競態）
+        const s = await supabase.auth.getSession()
+        claimToken = s.data.session?.access_token || null
+      }
+
+      if (claimToken) {
+        const claimResp = await fetch('/api/tos/claim', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${claimToken}`,
+          },
+          body: JSON.stringify({ nonce: json.nonce }),
+        })
+        if (!claimResp.ok) {
+          // 如果是 401，可能是 token 失效（如數據庫被重置）
+          if (claimResp.status === 401) {
+            // 清除舊的 session
+            await supabase.auth.signOut()
+            setToken(null)
+            // 清除 nonce 但重新設置（因為 preconsent 已成功），直接顯示註冊表單
+            setNonceInfo(json)
+            setMessage('セッションが無効になりました。下記フォームからアカウントを作成してください。')
+            setLoading(false)
+            return
+          }
+          const j = await claimResp.json().catch(() => ({}))
+          throw new Error(j?.error || 'CLAIM_FAILED')
+        }
+        window.location.href = '/me'
+        return
+      }
+
+      // 未登入：顯示註冊表單
       setNonceInfo(json)
     } catch (e: any) {
       setMessage(e?.message || '同意処理に失敗しました')

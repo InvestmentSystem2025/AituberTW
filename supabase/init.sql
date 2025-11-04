@@ -120,15 +120,23 @@ CREATE TABLE public.evaluation_criteria (
   display_name TEXT NOT NULL,
   weight NUMERIC NOT NULL CHECK (weight >= 0 AND weight <= 1),
   max_score INTEGER NOT NULL DEFAULT 10 CHECK (max_score > 0),
+  scoring_logic TEXT NOT NULL DEFAULT 'deduction' CHECK (scoring_logic IN ('addition', 'deduction')),
+  addition_rules JSONB,
+  deduction_rules JSONB,
   sort_order INTEGER NOT NULL CHECK (sort_order > 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (job_opening_id, key)
+  UNIQUE (job_opening_id, key),
+  CONSTRAINT evaluation_criteria_rules_check CHECK (
+    (scoring_logic = 'addition' AND addition_rules IS NOT NULL) OR
+    (scoring_logic = 'deduction' AND deduction_rules IS NOT NULL)
+  )
 );
 
 -- question_bank
 CREATE TABLE public.question_bank (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID REFERENCES public.company(id) ON DELETE SET NULL,
+  name TEXT,
   source public.question_source_type NOT NULL,
   detail JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -215,13 +223,13 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   INSERT INTO public.evaluation_criteria
-    (company_id, job_opening_id, key, display_name, weight, max_score, sort_order)
+    (company_id, job_opening_id, key, display_name, weight, max_score, scoring_logic, deduction_rules, addition_rules, sort_order)
   VALUES
-    (NEW.company_id, NEW.id, 'content_integrity',   'Content Integrity',   0.20, 10, 1),
-    (NEW.company_id, NEW.id, 'logical_clarity',     'Logical Clarity',     0.20, 10, 2),
-    (NEW.company_id, NEW.id, 'professional_depth',  'Professional Depth',  0.20, 10, 3),
-    (NEW.company_id, NEW.id, 'communication',       'Communication',       0.20, 10, 4),
-    (NEW.company_id, NEW.id, 'personal_attributes', 'Personal Attributes', 0.20, 10, 5);
+    (NEW.company_id, NEW.id, 'content_integrity',   '內容完整性',   0.20, 10, 'deduction', '["答非所問-2分", "回答不完整-1分"]'::jsonb, NULL, 1),
+    (NEW.company_id, NEW.id, 'logical_clarity',     '邏輯清晰度',   0.20, 10, 'deduction', '["條理不清-2分", "邏輯錯誤-1分"]'::jsonb, NULL, 2),
+    (NEW.company_id, NEW.id, 'professional_depth',  '專業深度',     0.20, 10, 'addition',  NULL, '["正確回答專業問題+2.5分", "展現深度理解+1分"]'::jsonb, 3),
+    (NEW.company_id, NEW.id, 'communication',       '溝通表達',     0.20, 10, 'deduction', '["表達不清晰-1分", "表達不流暢-1分"]'::jsonb, NULL, 4),
+    (NEW.company_id, NEW.id, 'personal_attributes', '個人特質',     0.20, 10, 'addition',  NULL, '["向上心求知慾+2.5分", "持續學習+2.5分", "活潑外向+2.5分", "堅強抗壓+2.5分"]'::jsonb, 5);
   RETURN NEW;
 END;
 $$;
@@ -278,7 +286,7 @@ ALTER TABLE public.interviews            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.interview_sessions    ENABLE ROW LEVEL SECURITY;
 
 -- 権限付与（RLS 下での操作を有効化）。列レベル制御は行わず、ポリシーで制限。
-GRANT SELECT, UPDATE ON public.profiles TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.profiles TO authenticated;
 GRANT SELECT, UPDATE ON public.company TO authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.company_members TO authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.ai_interviewer TO authenticated;
@@ -293,53 +301,166 @@ GRANT SELECT ON public.interview_sessions TO authenticated; -- video_path は参
 -- profiles
 -- ============
 
--- jobSeeker: 自分のプロフィールのみ参照/更新可
-CREATE POLICY profiles_jobseeker_select_self
+-- Helper function to get user role without RLS recursion
+CREATE OR REPLACE FUNCTION public.get_user_role(user_auth_id UUID)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+STABLE
+AS $$
+DECLARE
+  v_role TEXT;
+BEGIN
+  SELECT role INTO v_role
+  FROM public.profiles
+  WHERE auth_id = user_auth_id
+  LIMIT 1;
+  RETURN COALESCE(v_role, 'jobSeeker');
+END;
+$$;
+
+-- Helper function to get user profile id without RLS recursion
+CREATE OR REPLACE FUNCTION public.get_user_profile_id(user_auth_id UUID)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+STABLE
+AS $$
+DECLARE
+  v_profile_id UUID;
+BEGIN
+  SELECT id INTO v_profile_id
+  FROM public.profiles
+  WHERE auth_id = user_auth_id
+  LIMIT 1;
+  RETURN v_profile_id;
+END;
+$$;
+
+-- Helper function to get user's company IDs (avoids RLS recursion)
+CREATE OR REPLACE FUNCTION public.get_user_company_ids(user_auth_id UUID)
+RETURNS UUID[]
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+STABLE
+AS $$
+DECLARE
+  v_profile_id UUID;
+  v_company_ids UUID[];
+BEGIN
+  -- 獲取用戶的 profile_id
+  v_profile_id := public.get_user_profile_id(user_auth_id);
+  IF v_profile_id IS NULL THEN
+    RETURN ARRAY[]::UUID[];
+  END IF;
+  
+  -- 獲取用戶所屬的公司 ID 列表（使用 SECURITY DEFINER 繞過 RLS）
+  SELECT ARRAY_AGG(company_id) INTO v_company_ids
+  FROM public.company_members
+  WHERE profile_id = v_profile_id;
+  
+  RETURN COALESCE(v_company_ids, ARRAY[]::UUID[]);
+END;
+$$;
+
+-- Helper function to check if user is a member of a company (avoids RLS recursion)
+CREATE OR REPLACE FUNCTION public.is_company_member(user_auth_id UUID, p_company_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+STABLE
+AS $$
+DECLARE
+  v_profile_id UUID;
+  v_is_member BOOLEAN := FALSE;
+BEGIN
+  -- 獲取用戶的 profile_id
+  v_profile_id := public.get_user_profile_id(user_auth_id);
+  IF v_profile_id IS NULL THEN
+    RETURN FALSE;
+  END IF;
+  
+  -- 檢查是否為該公司的成員（使用 SECURITY DEFINER 繞過 RLS）
+  SELECT EXISTS (
+    SELECT 1 FROM public.company_members
+    WHERE company_id = p_company_id
+      AND profile_id = v_profile_id
+  ) INTO v_is_member;
+  
+  RETURN v_is_member;
+END;
+$$;
+
+-- Helper function to check if user is a viewer of a company (avoids RLS recursion)
+CREATE OR REPLACE FUNCTION public.is_company_viewer(user_auth_id UUID, p_company_id UUID)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+STABLE
+AS $$
+DECLARE
+  v_profile_id UUID;
+  v_is_viewer BOOLEAN := FALSE;
+BEGIN
+  -- 獲取用戶的 profile_id
+  v_profile_id := public.get_user_profile_id(user_auth_id);
+  IF v_profile_id IS NULL THEN
+    RETURN FALSE;
+  END IF;
+  
+  -- 檢查是否為該公司的 viewer（使用 SECURITY DEFINER 繞過 RLS）
+  SELECT EXISTS (
+    SELECT 1 FROM public.company_members
+    WHERE company_id = p_company_id
+      AND profile_id = v_profile_id
+      AND company_role = 'viewer'
+  ) INTO v_is_viewer;
+  
+  RETURN v_is_viewer;
+END;
+$$;
+
+-- 每個用戶只能查詢和更新自己的 profile
+-- 查看其他用戶的 profiles 應該通過後端 API（service_role）來實現
+CREATE POLICY profiles_select_self
 ON public.profiles
 FOR SELECT
 TO authenticated
 USING (auth_id = auth.uid());
 
-CREATE POLICY profiles_jobseeker_update_self
+CREATE POLICY profiles_update_self
 ON public.profiles
 FOR UPDATE
 TO authenticated
 USING (auth_id = auth.uid())
 WITH CHECK (auth_id = auth.uid());
 
--- recruiter: 自社メンバーのプロフィールのみ参照可
-CREATE POLICY profiles_recruiter_select_company_members
+-- 允許觸發器函數創建 profile
+-- SECURITY DEFINER 函數會以函數擁有者權限執行，但仍需要策略允許插入
+-- 此策略允許在註冊時由觸發器創建 profile（觸發器會設置正確的 auth_id）
+CREATE POLICY profiles_insert_trigger
 ON public.profiles
-FOR SELECT
+FOR INSERT
 TO authenticated
-USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND EXISTS (
-    SELECT 1
-    FROM public.company_members cm
-    WHERE cm.profile_id = public.profiles.id
-      AND cm.company_id IN (
-        SELECT company_id FROM public.company_members
-        WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-      )
-  )
-);
+WITH CHECK (auth_id IS NOT NULL);
 
 -- ============
 -- company
 -- ============
 
--- recruiter: 自社 company のみ参照/更新可
+-- recruiter: 自社 company のみ参照/更新可（使用安全函數避免遞歸）
 CREATE POLICY company_recruiter_select_own
 ON public.company
 FOR SELECT
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY company_recruiter_update_own
@@ -347,34 +468,25 @@ ON public.company
 FOR UPDATE
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND id = ANY(public.get_user_company_ids(auth.uid()))
 )
 WITH CHECK (
-  id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 -- ============
 -- company_members
 -- ============
 
--- recruiter: 自社 company のみ参照/作成/更新可
+-- recruiter: 自社 company のみ参照/作成/更新可（使用安全函數避免遞歸）
 CREATE POLICY company_members_recruiter_select
 ON public.company_members
 FOR SELECT
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY company_members_recruiter_insert
@@ -382,11 +494,8 @@ ON public.company_members
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY company_members_recruiter_update
@@ -394,17 +503,20 @@ ON public.company_members
 FOR UPDATE
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 )
 WITH CHECK (
-  company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  company_id = ANY(public.get_user_company_ids(auth.uid()))
+);
+
+-- viewer/jobSeeker: 可以讀取自己的 company_members 記錄
+CREATE POLICY company_members_viewer_select_self
+ON public.company_members
+FOR SELECT
+TO authenticated
+USING (
+  profile_id = public.get_user_profile_id(auth.uid())
 );
 
 -- ============
@@ -416,11 +528,8 @@ ON public.ai_interviewer
 FOR SELECT
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY ai_interviewer_recruiter_insert
@@ -428,11 +537,8 @@ ON public.ai_interviewer
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY ai_interviewer_recruiter_update
@@ -440,17 +546,11 @@ ON public.ai_interviewer
 FOR UPDATE
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 )
 WITH CHECK (
-  company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 -- ============
@@ -462,11 +562,8 @@ ON public.job_opening
 FOR SELECT
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY job_opening_recruiter_insert
@@ -474,11 +571,8 @@ ON public.job_opening
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY job_opening_recruiter_update
@@ -486,17 +580,11 @@ ON public.job_opening
 FOR UPDATE
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 )
 WITH CHECK (
-  company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 -- ====================
@@ -508,11 +596,8 @@ ON public.evaluation_criteria
 FOR SELECT
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY evaluation_criteria_recruiter_insert
@@ -520,11 +605,8 @@ ON public.evaluation_criteria
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY evaluation_criteria_recruiter_update
@@ -532,17 +614,11 @@ ON public.evaluation_criteria
 FOR UPDATE
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 )
 WITH CHECK (
-  company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 -- ============
@@ -554,13 +630,8 @@ ON public.question_bank
 FOR SELECT
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND (
-    company_id IN (
-      SELECT company_id FROM public.company_members
-      WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-    )
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY question_bank_recruiter_insert
@@ -568,11 +639,8 @@ ON public.question_bank
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY question_bank_recruiter_update
@@ -580,17 +648,11 @@ ON public.question_bank
 FOR UPDATE
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 )
 WITH CHECK (
-  company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 -- ======================
@@ -602,11 +664,8 @@ ON public.job_opening_questions
 FOR SELECT
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY joq_recruiter_insert
@@ -614,11 +673,8 @@ ON public.job_opening_questions
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY joq_recruiter_update
@@ -626,17 +682,11 @@ ON public.job_opening_questions
 FOR UPDATE
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 )
 WITH CHECK (
-  company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 -- ============
@@ -649,11 +699,8 @@ ON public.interviews
 FOR SELECT
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY interviews_recruiter_insert
@@ -661,11 +708,8 @@ ON public.interviews
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 CREATE POLICY interviews_recruiter_update
@@ -673,17 +717,11 @@ ON public.interviews
 FOR UPDATE
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 )
 WITH CHECK (
-  company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 -- jobSeeker: 自分の面接のみ参照可
@@ -692,7 +730,7 @@ ON public.interviews
 FOR SELECT
 TO authenticated
 USING (
-  profiles_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
+  profiles_id = public.get_user_profile_id(auth.uid())
 );
 
 -- ==================
@@ -705,11 +743,8 @@ ON public.interview_sessions
 FOR SELECT
 TO authenticated
 USING (
-  (SELECT role FROM public.profiles WHERE auth_id = auth.uid()) = 'recruiter'
-  AND company_id IN (
-    SELECT company_id FROM public.company_members
-    WHERE profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
-  )
+  public.get_user_role(auth.uid()) = 'recruiter'
+  AND company_id = ANY(public.get_user_company_ids(auth.uid()))
 );
 
 -- jobSeeker: 自分の面接回のみ参照可
@@ -721,7 +756,24 @@ USING (
   EXISTS (
     SELECT 1 FROM public.interviews i
     WHERE i.id = public.interview_sessions.interviews_id
-      AND i.profiles_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
+      AND i.profiles_id = public.get_user_profile_id(auth.uid())
+  )
+);
+
+-- viewer: 可以讀取自己作為面試者的 interview_sessions（通過 is_company_viewer 函數避免 RLS 遞歸）
+CREATE POLICY interview_sessions_viewer_select
+ON public.interview_sessions
+FOR SELECT
+TO authenticated
+USING (
+  public.is_company_viewer(auth.uid(), company_id)
+  AND EXISTS (
+    SELECT 1 FROM public.interviews i
+    WHERE i.id = public.interview_sessions.interviews_id
+      AND (
+        i.profiles_id = public.get_user_profile_id(auth.uid())
+        OR i.candidate_email = (SELECT email FROM public.profiles WHERE auth_id = auth.uid())
+      )
   )
 );
 
@@ -747,12 +799,25 @@ BEGIN
     v_role := NEW.raw_app_meta_data->>'role';
   END IF;
   
+  -- 使用 SECURITY DEFINER 權限直接插入，繞過 RLS
   INSERT INTO public.profiles (auth_id, email, role)
   VALUES (NEW.id, NEW.email, COALESCE(v_role, 'jobSeeker'))
   ON CONFLICT (auth_id) DO NOTHING;
   RETURN NEW;
+EXCEPTION
+  WHEN OTHERS THEN
+    -- 記錄錯誤但不中斷註冊流程
+    RAISE WARNING 'Failed to create profile for user %: %', NEW.id, SQLERRM;
+    RETURN NEW;
 END;
 $$;
+
+-- 確保函數擁有者（通常是 postgres）有足夠權限
+-- 在 Supabase 中，postgres 超級用戶應該能夠繞過 RLS
+ALTER FUNCTION public.handle_new_auth_user() OWNER TO postgres;
+
+-- 授予 postgres 用戶對 profiles 表的完整權限（觸發器需要）
+GRANT ALL ON public.profiles TO postgres;
 
 -- 既存トリガがあれば削除して再作成
 DROP TRIGGER IF EXISTS trg_on_auth_user_create_profile ON auth.users;
@@ -790,14 +855,101 @@ FOR EACH ROW
 EXECUTE FUNCTION public.link_interviews_on_signup();
 
 -- 3) 評価スコア集計用（Stub）
-CREATE OR REPLACE FUNCTION public.evaluate_interview_total(interviews_id uuid)
+CREATE OR REPLACE FUNCTION public.evaluate_interview_total(p_interviews_id uuid)
 RETURNS numeric
 LANGUAGE plpgsql
-STABLE
 AS $$
+DECLARE
+  v_company_id uuid;
+  v_job_opening_id uuid;
+  v_policy jsonb;
+  v_overall_threshold numeric := 0;
+  v_weighted_sum numeric := 0;
+  v_total numeric := 0;
+  v_fail boolean := false;
+  v_ai_evals jsonb := '[]'::jsonb;
+  v_reason text := '';
+  r RECORD;
+  v_score numeric;
+  v_norm numeric;
+  v_min_map jsonb;
 BEGIN
-  -- 後続で実装予定の空 stub。現状は NULL を返す。
-  RETURN NULL;
+  SELECT i.company_id, i.job_opening_id
+    INTO v_company_id, v_job_opening_id
+  FROM public.interviews i
+  WHERE i.id = p_interviews_id;
+
+  IF v_job_opening_id IS NULL THEN
+    RAISE EXCEPTION 'Interview not found: %', p_interviews_id;
+  END IF;
+
+  SELECT evaluation_policy INTO v_policy FROM public.job_opening WHERE id = v_job_opening_id;
+  IF v_policy ? 'overall_threshold' THEN
+    v_overall_threshold := NULLIF((v_policy->>'overall_threshold')::numeric, NULL);
+  END IF;
+  IF v_overall_threshold IS NULL THEN v_overall_threshold := 0; END IF;
+
+  SELECT ai_evaluations INTO v_ai_evals FROM public.interview_sessions WHERE interviews_id = p_interviews_id;
+  IF v_ai_evals IS NULL THEN v_ai_evals := '[]'::jsonb; END IF;
+
+  FOR r IN (
+    SELECT key, weight, max_score
+    FROM public.evaluation_criteria
+    WHERE job_opening_id = v_job_opening_id
+    ORDER BY sort_order
+  ) LOOP
+    v_score := COALESCE(
+      (SELECT (e->>'score')::numeric FROM jsonb_array_elements(v_ai_evals) e WHERE e->>'key' = r.key LIMIT 1),
+      0
+    );
+    IF r.max_score IS NULL OR r.max_score <= 0 THEN
+      v_norm := 0;
+    ELSE
+      v_norm := v_score / r.max_score;
+    END IF;
+    IF v_norm < 0 THEN v_norm := 0; END IF;
+    v_weighted_sum := v_weighted_sum + (v_norm * r.weight);
+
+    IF v_policy ? 'per_criteria_minimums' THEN
+      v_min_map := v_policy->'per_criteria_minimums';
+      IF v_min_map ? r.key THEN
+        IF v_norm < ((v_min_map->>r.key)::numeric) THEN
+          v_fail := true;
+          v_reason := COALESCE(v_reason,'') || format('%s below minimum; ', r.key);
+        END IF;
+      END IF;
+    END IF;
+  END LOOP;
+
+  v_total := round(v_weighted_sum * 100, 2);
+
+  IF v_policy ? 'must_meet' THEN
+    FOR r IN SELECT jsonb_array_elements_text(v_policy->'must_meet') AS key LOOP
+      v_norm := COALESCE(
+        (SELECT ((e->>'score')::numeric) / NULLIF(ec.max_score,0)
+         FROM jsonb_array_elements(v_ai_evals) e
+         JOIN public.evaluation_criteria ec
+           ON ec.job_opening_id = v_job_opening_id AND ec.key = r.key
+         WHERE e->>'key' = r.key LIMIT 1), 0);
+      IF v_norm <= 0 THEN
+        v_fail := true;
+        v_reason := COALESCE(v_reason,'') || format('%s missing; ', r.key);
+      END IF;
+    END LOOP;
+  END IF;
+
+  UPDATE public.interview_sessions
+  SET total_score = v_total,
+      interview_result = CASE WHEN v_fail THEN 'rejected'::public.interview_result_type
+                              WHEN v_total >= v_overall_threshold THEN 'hired'::public.interview_result_type
+                              ELSE 'rejected'::public.interview_result_type END,
+      result_reason = CASE WHEN v_fail THEN 'per_criteria_minimums/must_meet not satisfied'
+                           WHEN v_total >= v_overall_threshold THEN 'passed threshold'
+                           ELSE 'below threshold' END,
+      review_type = COALESCE(review_type, 'AI'::public.review_type_type)
+  WHERE interviews_id = p_interviews_id;
+
+  RETURN v_total;
 END;
 $$;
 
@@ -1277,7 +1429,7 @@ ON public.profile_tos_acceptances
 FOR SELECT
 TO authenticated
 USING (
-  profile_id = (SELECT id FROM public.profiles WHERE auth_id = auth.uid())
+  profile_id = public.get_user_profile_id(auth.uid())
 );
 
 -- app_admins: 自分の email のみ参照/削除できる。INSERT はサービス経由想定
@@ -1300,7 +1452,7 @@ ON public.company
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 CREATE POLICY company_gate_tos_update
@@ -1308,10 +1460,10 @@ ON public.company
 FOR UPDATE
 TO authenticated
 USING (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 )
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 -- company_members
@@ -1320,7 +1472,7 @@ ON public.company_members
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 CREATE POLICY company_members_gate_tos_update
@@ -1328,10 +1480,10 @@ ON public.company_members
 FOR UPDATE
 TO authenticated
 USING (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 )
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 -- ai_interviewer
@@ -1340,7 +1492,7 @@ ON public.ai_interviewer
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 CREATE POLICY ai_interviewer_gate_tos_update
@@ -1348,10 +1500,10 @@ ON public.ai_interviewer
 FOR UPDATE
 TO authenticated
 USING (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 )
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 -- job_opening
@@ -1360,7 +1512,7 @@ ON public.job_opening
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 CREATE POLICY job_opening_gate_tos_update
@@ -1368,10 +1520,10 @@ ON public.job_opening
 FOR UPDATE
 TO authenticated
 USING (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 )
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 -- evaluation_criteria
@@ -1380,7 +1532,7 @@ ON public.evaluation_criteria
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 CREATE POLICY evaluation_criteria_gate_tos_update
@@ -1388,10 +1540,10 @@ ON public.evaluation_criteria
 FOR UPDATE
 TO authenticated
 USING (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 )
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 -- question_bank
@@ -1400,7 +1552,7 @@ ON public.question_bank
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 CREATE POLICY question_bank_gate_tos_update
@@ -1408,10 +1560,10 @@ ON public.question_bank
 FOR UPDATE
 TO authenticated
 USING (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 )
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 -- job_opening_questions
@@ -1420,7 +1572,7 @@ ON public.job_opening_questions
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 CREATE POLICY job_opening_questions_gate_tos_update
@@ -1428,10 +1580,10 @@ ON public.job_opening_questions
 FOR UPDATE
 TO authenticated
 USING (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 )
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 -- interviews
@@ -1440,7 +1592,7 @@ ON public.interviews
 FOR INSERT
 TO authenticated
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 CREATE POLICY interviews_gate_tos_update
@@ -1448,10 +1600,10 @@ ON public.interviews
 FOR UPDATE
 TO authenticated
 USING (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 )
 WITH CHECK (
-  public.is_profile_tos_accepted((SELECT id FROM public.profiles WHERE auth_id = auth.uid()))
+  public.is_profile_tos_accepted(public.get_user_profile_id(auth.uid()))
 );
 
 -- interview_sessions（更新禁止のため ToS ゲート不要）

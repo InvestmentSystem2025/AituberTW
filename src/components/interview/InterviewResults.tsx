@@ -163,10 +163,13 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
                 </div>
               </div>
               
-              <div className="grid grid-cols-5 gap-4 mb-4">
+              <div className={`grid gap-4 mb-4 ${Object.keys(interviewResult.finalScores).length <= 5 ? 'grid-cols-5' : 'grid-cols-3'}`}>
                 {Object.entries(interviewResult.finalScores).map(([key, score]) => {
                   const level = getScoreLevel(score)
-                  const criteriaNames = {
+                  
+                  // 嘗試從 answerScores 中查找評估項目的顯示名稱
+                  // 或者使用預設名稱映射
+                  const criteriaNames: Record<string, string> = {
                     contentCompleteness: '內容完整性',
                     logicalClarity: '邏輯清晰度',
                     professionalDepth: '專業深度',
@@ -174,13 +177,20 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
                     personalTraits: '個人特質'
                   }
                   
+                  // 查找是否存在於 answerScores 中（可能包含更多信息）
+                  let displayName = criteriaNames[key] || key
+                  
+                  // 如果 key 看起來像是 DB key（下劃線分隔），嘗試查找更友好的名稱
+                  // 但由於我們現在已經使用 criteria.key，應該直接顯示即可
+                  // 如果有需要，可以從其他地方獲取顯示名稱
+                  
                   return (
                     <div key={key} className="text-center">
                       <div className={`text-lg font-bold ${SCORE_LEVEL_COLORS[level].split(' ')[0]}`}>
                         {score.toFixed(1)}
                       </div>
                       <div className="text-xs text-gray-600 mb-1">
-                        {criteriaNames[key as keyof typeof criteriaNames]}
+                        {displayName}
                       </div>
                       <div className={`text-xs px-2 py-1 rounded-full ${SCORE_LEVEL_COLORS[level]}`}>
                         {SCORE_LEVEL_DESCRIPTIONS[level]}
@@ -262,26 +272,24 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
                   <div className="bg-blue-50 p-4 rounded-lg">
                     <div className="text-sm font-medium text-blue-800 mb-3">📊 評分詳情</div>
                     <div className="grid grid-cols-2 gap-3 text-sm">
-                      <div className="flex justify-between">
-                        <span>內容完整性:</span>
-                        <span className="font-medium">{scoreResult.scores.contentCompleteness}/10</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>邏輯清晰度:</span>
-                        <span className="font-medium">{scoreResult.scores.logicalClarity}/10</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>專業深度:</span>
-                        <span className="font-medium">{scoreResult.scores.professionalDepth}/10</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>溝通表達:</span>
-                        <span className="font-medium">{scoreResult.scores.communicationSkills}/10</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>個人特質:</span>
-                        <span className="font-medium">{scoreResult.scores.personalTraits}/10</span>
-                      </div>
+                      {Object.entries(scoreResult.scores).map(([key, score]) => {
+                        // 嘗試查找評估項目的顯示名稱
+                        const criteriaNames: Record<string, string> = {
+                          contentCompleteness: '內容完整性',
+                          logicalClarity: '邏輯清晰度',
+                          professionalDepth: '專業深度',
+                          communicationSkills: '溝通表達',
+                          personalTraits: '個人特質'
+                        }
+                        const displayName = criteriaNames[key] || key
+                        
+                        return (
+                          <div key={key} className="flex justify-between">
+                            <span>{displayName}:</span>
+                            <span className="font-medium">{score.toFixed(1)}/10</span>
+                          </div>
+                        )
+                      })}
                       <div className="flex justify-between col-span-2 border-t pt-2">
                         <span className="font-medium">總分:</span>
                         <span className="font-bold text-blue-600">{scoreResult.totalScore.toFixed(1)}/10</span>
@@ -289,33 +297,47 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
                     </div>
                     
                     {/* 扣分和加分原因 */}
-                    {(scoreResult.deductions.contentCompleteness.length > 0 || 
-                      scoreResult.deductions.logicalClarity.length > 0 || 
-                      scoreResult.deductions.communicationSkills.length > 0) && (
-                      <div className="mt-3 pt-3 border-t">
-                        <div className="text-xs text-red-600 font-medium mb-1">扣分原因:</div>
-                        <div className="text-xs text-red-600">
-                          {[
-                            ...scoreResult.deductions.contentCompleteness,
-                            ...scoreResult.deductions.logicalClarity,
-                            ...scoreResult.deductions.communicationSkills
-                          ].join(', ')}
-                        </div>
-                      </div>
-                    )}
+                    {(() => {
+                      const allDeductions: string[] = []
+                      Object.entries(scoreResult.deductions).forEach(([key, reasons]) => {
+                        if (Array.isArray(reasons) && reasons.length > 0) {
+                          allDeductions.push(...reasons)
+                        }
+                      })
+                      
+                      if (allDeductions.length > 0) {
+                        return (
+                          <div className="mt-3 pt-3 border-t">
+                            <div className="text-xs text-red-600 font-medium mb-1">扣分原因:</div>
+                            <div className="text-xs text-red-600">
+                              {allDeductions.join(', ')}
+                            </div>
+                          </div>
+                        )
+                      }
+                      return null
+                    })()}
                     
-                    {(scoreResult.additions.professionalDepth.length > 0 || 
-                      scoreResult.additions.personalTraits.length > 0) && (
-                      <div className="mt-2">
-                        <div className="text-xs text-green-600 font-medium mb-1">加分原因:</div>
-                        <div className="text-xs text-green-600">
-                          {[
-                            ...scoreResult.additions.professionalDepth,
-                            ...scoreResult.additions.personalTraits
-                          ].join(', ')}
-                        </div>
-                      </div>
-                    )}
+                    {(() => {
+                      const allAdditions: string[] = []
+                      Object.entries(scoreResult.additions).forEach(([key, reasons]) => {
+                        if (Array.isArray(reasons) && reasons.length > 0) {
+                          allAdditions.push(...reasons)
+                        }
+                      })
+                      
+                      if (allAdditions.length > 0) {
+                        return (
+                          <div className="mt-2">
+                            <div className="text-xs text-green-600 font-medium mb-1">加分原因:</div>
+                            <div className="text-xs text-green-600">
+                              {allAdditions.join(', ')}
+                            </div>
+                          </div>
+                        )
+                      }
+                      return null
+                    })()}
                   </div>
                 </div>
               ))

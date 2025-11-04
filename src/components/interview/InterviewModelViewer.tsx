@@ -11,20 +11,51 @@ export const InterviewModelViewer: React.FC<InterviewModelViewerProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isMounted, setIsMounted] = useState(false)
+  const selectedVrmPath = settingsStore((s) => s.selectedVrmPath)
+  const isSetupRef = useRef(false)
 
   useEffect(() => {
     setIsMounted(true)
   }, [])
 
-  // VRM 模型處理
-  const handleVrmCanvas = useCallback((canvas: HTMLCanvasElement) => {
-    if (canvas && modelType === 'vrm') {
+  // 初始化viewer setup（只執行一次）
+  useEffect(() => {
+    if (canvasRef.current && modelType === 'vrm' && !isSetupRef.current && isMounted) {
       const { viewer } = homeStore.getState()
-      const { selectedVrmPath } = settingsStore.getState()
-      viewer.setup(canvas)
-      viewer.loadVrm(selectedVrmPath)
+      const currentVrmPath = settingsStore.getState().selectedVrmPath
+      
+      // 確保 canvas 已經掛載
+      const timeoutId = setTimeout(() => {
+        if (canvasRef.current && !isSetupRef.current) {
+          try {
+            viewer.setup(canvasRef.current)
+            isSetupRef.current = true
+            
+            // 如果已經有 selectedVrmPath，立即載入模型
+            if (currentVrmPath) {
+              viewer.loadVrm(currentVrmPath)
+            }
+          } catch (error) {
+            console.error('Failed to setup viewer:', error)
+          }
+        }
+      }, 100)
+      
+      return () => clearTimeout(timeoutId)
     }
-  }, [modelType])
+  }, [modelType, isMounted])
+
+  // 當 selectedVrmPath 改變時，重新載入模型（setup 之後）
+  useEffect(() => {
+    if (canvasRef.current && modelType === 'vrm' && selectedVrmPath && isSetupRef.current) {
+      const { viewer } = homeStore.getState()
+      try {
+        viewer.loadVrm(selectedVrmPath)
+      } catch (error) {
+        console.error('Failed to load VRM model:', error)
+      }
+    }
+  }, [selectedVrmPath, modelType])
 
   if (!isMounted) {
     return (
@@ -38,7 +69,7 @@ export const InterviewModelViewer: React.FC<InterviewModelViewerProps> = ({
     return (
       <div className="w-full h-full relative">
         <canvas
-          ref={handleVrmCanvas}
+          ref={canvasRef}
           className="w-full h-full"
           style={{ display: 'block' }}
         />

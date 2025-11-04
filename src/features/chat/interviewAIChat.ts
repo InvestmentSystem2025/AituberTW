@@ -141,7 +141,7 @@ function formatConversationHistory(messages: Message[]): string {
 /**
  * 創建AnswerScore對象
  */
-function createAnswerScore(scoreData: any, questionIndex?: number): AnswerScore | null {
+function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCriteria?: any[]): AnswerScore | null {
   // 驗證必要的字段
   if (!scoreData.scores || typeof scoreData.scores !== 'object') {
     console.warn('評分數據缺少scores字段或格式不正確')
@@ -151,30 +151,265 @@ function createAnswerScore(scoreData: any, questionIndex?: number): AnswerScore 
   // 如果有 questionIndex，生成正確的 ID (Q1, Q2, Q3...)
   const questionId = questionIndex ? `Q${questionIndex}` : (scoreData.questionId || generateMessageId())
   
+  // 建立評分標準映射：max_score 與 scoring_logic
+  const criteriaMap: Record<string, number> = {}
+  const logicMap: Record<string, 'addition' | 'deduction'> = {}
+  if (evaluationCriteria && evaluationCriteria.length > 0) {
+    evaluationCriteria.forEach((criteria: any) => {
+      const criteriaKey = criteria.key
+      criteriaMap[criteriaKey] = criteria.max_score || 10
+      logicMap[criteriaKey] = (criteria.scoring_logic === 'addition' ? 'addition' : 'deduction')
+    })
+  }
+  
+  // 映射評分 key 對應關係（用於向後兼容預設的5個項目）
+  const scoreKeyMap: Record<string, string> = {
+    'contentCompleteness': 'content_integrity',
+    'logicalClarity': 'logical_clarity',
+    'professionalDepth': 'professional_depth',
+    'communicationSkills': 'communication',
+    'personalTraits': 'personal_attributes',
+  }
+  
+  // 處理分數 - 支持動態評估項目
+  const rawScores: Record<string, number> = {}
+  const scores: Record<string, number> = {}
+  const numericProvidedKeys = new Set<string>()
+  // 預先根據 scoring_logic 設定初始值（addition=0，deduction=max_score）
+  if (evaluationCriteria && evaluationCriteria.length > 0) {
+    evaluationCriteria.forEach((c: any) => {
+      const key = c.key
+      const max = criteriaMap[key] || 10
+      const init = (logicMap[key] === 'addition') ? 0 : max
+      scores[key] = init
+    })
+  }
+  
+  // 處理預設的5個項目（同時支援前端 key 與 DB key）
+  const defaultKeys = ['contentCompleteness', 'logicalClarity', 'professionalDepth', 'communicationSkills', 'personalTraits']
+  defaultKeys.forEach(key => {
+    if (!scoreData.scores) return
+    const dbKey = scoreKeyMap[key]
+    const candidateValues = [
+      scoreData.scores[key],            // 前端 key（camelCase）
+      scoreData.scores[dbKey]           // DB key（snake_case）
+    ]
+    const found = candidateValues.find(v => typeof v === 'number')
+    if (typeof found === 'number') {
+      rawScores[dbKey] = Number(found) || 0
+      const maxScore = criteriaMap[dbKey] || 10
+      // 若未在 evaluationCriteria 中（沒有 logicMap），預設扣分制視為滿分起始
+      if (typeof scores[dbKey] !== 'number') {
+        scores[dbKey] = (logicMap[dbKey] === 'addition') ? 0 : maxScore
+      }
+      scores[dbKey] = Math.max(0, Math.min(maxScore, rawScores[dbKey]))
+      numericProvidedKeys.add(dbKey)
+    }
+  })
+  
+  // 處理自訂評估項目（從 evaluationCriteria 中獲取）
+  if (evaluationCriteria && evaluationCriteria.length > 0) {
+    evaluationCriteria.forEach((criteria: any) => {
+      const criteriaKey = criteria.key
+      // 嘗試從 scoreData.scores 中獲取分數（可能使用 criteriaKey 或顯示名稱）
+      const displayName = criteria.display_name
+      
+      // 檢查是否已經在 scores 中（預設項目）
+      const isDefaultKey = defaultKeys.some(k => scoreKeyMap[k] === criteriaKey)
+      if (!isDefaultKey && scoreData.scores) {
+        // 嘗試用不同的 key 來匹配
+        let scoreValue: number | undefined
+        
+        // 1. 直接用 criteriaKey
+        if (scoreData.scores[criteriaKey] !== undefined) {
+          scoreValue = Number(scoreData.scores[criteriaKey]) || 0
+        }
+        // 2. 用顯示名稱
+        else if (scoreData.scores[displayName] !== undefined) {
+          scoreValue = Number(scoreData.scores[displayName]) || 0
+        }
+        // 3. 遍歷所有 scores 的 key，看是否有匹配的
+        else {
+          const matchedKey = Object.keys(scoreData.scores).find(k => 
+            k.toLowerCase() === criteriaKey.toLowerCase() || 
+            k.includes(displayName) || 
+            displayName.includes(k)
+          )
+          if (matchedKey) {
+            scoreValue = Number(scoreData.scores[matchedKey]) || 0
+          }
+        }
+        
+        // 如果找到了分數，加入 scores
+        if (scoreValue !== undefined) {
+          rawScores[criteriaKey] = scoreValue
+          const maxScore = criteria.max_score || 10
+          // 先確保有初始化（addition=0，deduction=max）
+          if (typeof scores[criteriaKey] !== 'number') {
+            scores[criteriaKey] = (logicMap[criteriaKey] === 'addition') ? 0 : maxScore
+          }
+          scores[criteriaKey] = Math.max(0, Math.min(maxScore, scoreValue))
+          if (rawScores[criteriaKey] !== scores[criteriaKey]) {
+            console.warn(`⚠️ 分數超過限制：${criteriaKey} 原始分數 ${rawScores[criteriaKey]} 已調整為 ${scores[criteriaKey]}`)
+          }
+          numericProvidedKeys.add(criteriaKey)
+        }
+      }
+    })
+  }
+
+  // 規範化：確保所有 evaluation_criteria 的 key 都存在於 scores（使用 scoring_logic 初始值）
+  if (evaluationCriteria && evaluationCriteria.length > 0) {
+    evaluationCriteria.forEach((criteria: any) => {
+      const k = criteria.key
+      if (typeof scores[k] !== 'number') {
+        const max = criteriaMap[k] || 10
+        scores[k] = (logicMap[k] === 'addition') ? 0 : max
+      }
+    })
+  }
+
+  // 若 AI 未提供數值分數，根據 additions/deductions 與 DB 規則自動推導分數
+  const getReasons = (container: any, key: string, displayName: string): string[] => {
+    if (!container) return []
+    if (Array.isArray(container[key])) return container[key]
+    if (Array.isArray(container[displayName])) return container[displayName]
+    // 嘗試鬆散匹配（名稱包含）
+    const matchedKey = Object.keys(container).find(k =>
+      k.toLowerCase() === key.toLowerCase() || k.includes(displayName) || displayName.includes(k)
+    )
+    if (matchedKey && Array.isArray(container[matchedKey])) return container[matchedKey]
+    return []
+  }
+  const parseDeltaFromRule = (rule: string): number => {
+    // 解析類似："搬得動磚頭+10分"、"展現深度理解+1分"、"表達不清晰-1分"
+    const m = rule.match(/[+\-]?\d+(?:\.\d+)?(?=\s*分)/)
+    return m ? Number(m[0]) : 0
+  }
+  if (evaluationCriteria && evaluationCriteria.length > 0) {
+    evaluationCriteria.forEach((c: any) => {
+      const key = c.key
+      if (numericProvidedKeys.has(key)) return // 已有數值，跳過
+      const max = criteriaMap[key] || 10
+      let value = (logicMap[key] === 'addition') ? 0 : max
+      const displayName = c.display_name || key
+      const adds = getReasons(scoreData.additions, key, displayName)
+      const deds = getReasons(scoreData.deductions, key, displayName)
+      if (Array.isArray(adds) && c.addition_rules) {
+        // addition_rules 可能是字串或陣列，統一成陣列
+        const rules: string[] = Array.isArray(c.addition_rules) ? c.addition_rules : [c.addition_rules]
+        adds.forEach((reason: string) => {
+          const rule = rules.find(r => typeof r === 'string' && r.includes(reason))
+          if (rule) value += parseDeltaFromRule(rule)
+        })
+      }
+      if (Array.isArray(deds) && c.deduction_rules) {
+        const rules: string[] = Array.isArray(c.deduction_rules) ? c.deduction_rules : [c.deduction_rules]
+        deds.forEach((reason: string) => {
+          const rule = rules.find(r => typeof r === 'string' && r.includes(reason))
+          if (rule) value += parseDeltaFromRule(rule) // 規則內含負號
+        })
+      }
+      // 限幅
+      scores[key] = Math.max(0, Math.min(max, value))
+    })
+  }
+  
+  // 如果原始分數超過限制，輸出警告（僅對預設項目）
+  defaultKeys.forEach(key => {
+    if (rawScores[key] !== undefined && scores[key] !== undefined && rawScores[key] !== scores[key]) {
+      console.warn(`⚠️ 分數超過限制：${key} 原始分數 ${rawScores[key]} 已調整為 ${scores[key]}`)
+    }
+  })
+  
   return {
     answerId: questionId,
     questionId: questionId,
     questionText: scoreData.questionText || '',
     answerText: scoreData.answerText || '',
     timestamp: new Date(),
-    scores: {
-      contentCompleteness: Number(scoreData.scores.contentCompleteness) || 0,
-      logicalClarity: Number(scoreData.scores.logicalClarity) || 0,
-      professionalDepth: Number(scoreData.scores.professionalDepth) || 0,
-      communicationSkills: Number(scoreData.scores.communicationSkills) || 0,
-      personalTraits: Number(scoreData.scores.personalTraits) || 0
-    },
+    scores,
     totalScore: Number(scoreData.totalScore) || 0,
-    deductions: {
-      contentCompleteness: Array.isArray(scoreData.deductions?.contentCompleteness) ? scoreData.deductions.contentCompleteness : [],
-      logicalClarity: Array.isArray(scoreData.deductions?.logicalClarity) ? scoreData.deductions.logicalClarity : [],
-      communicationSkills: Array.isArray(scoreData.deductions?.communicationSkills) ? scoreData.deductions.communicationSkills : []
-    },
-    additions: {
-      professionalDepth: Array.isArray(scoreData.additions?.professionalDepth) ? scoreData.additions.professionalDepth : [],
-      personalTraits: Array.isArray(scoreData.additions?.personalTraits) ? scoreData.additions.personalTraits : []
-    },
-    aiFeedback: String(scoreData.aiFeedback || '')
+    deductions: (() => {
+      const deductions: Record<string, string[]> = {}
+      // 處理預設項目的扣分原因（支援 DB key 與前端 key）
+      if (scoreData.deductions) {
+        const map: Record<string, string> = {
+          contentCompleteness: 'content_integrity',
+          logicalClarity: 'logical_clarity',
+          communicationSkills: 'communication'
+        }
+        Object.entries(map).forEach(([frontendKey, dbKey]) => {
+          const list = scoreData.deductions[frontendKey] || scoreData.deductions[dbKey]
+          if (Array.isArray(list)) {
+            deductions[dbKey] = list
+          }
+        })
+      }
+      // 處理自訂項目的扣分原因
+      if (evaluationCriteria) {
+        evaluationCriteria.forEach((criteria: any) => {
+          if (criteria.scoring_logic === 'deduction' && scoreData.deductions) {
+            const key = criteria.key
+            if (scoreData.deductions[key] && Array.isArray(scoreData.deductions[key])) {
+              deductions[key] = scoreData.deductions[key]
+            }
+            // 也嘗試用顯示名稱
+            if (scoreData.deductions[criteria.display_name] && Array.isArray(scoreData.deductions[criteria.display_name])) {
+              deductions[key] = scoreData.deductions[criteria.display_name]
+            }
+          }
+        })
+      }
+      // 去重每個項目的原因
+      Object.keys(deductions).forEach((k) => {
+        if (Array.isArray(deductions[k])) {
+          deductions[k] = Array.from(new Set(deductions[k]))
+        }
+      })
+      return deductions
+    })(),
+    additions: (() => {
+      const additions: Record<string, string[]> = {}
+      // 處理預設項目的加分原因（支援 DB key 與前端 key）
+      if (scoreData.additions) {
+        const map: Record<string, string> = {
+          professionalDepth: 'professional_depth',
+          personalTraits: 'personal_attributes'
+        }
+        Object.entries(map).forEach(([frontendKey, dbKey]) => {
+          const list = scoreData.additions[frontendKey] || scoreData.additions[dbKey]
+          if (Array.isArray(list)) {
+            additions[dbKey] = list
+          }
+        })
+      }
+      // 處理自訂項目的加分原因
+      if (evaluationCriteria) {
+        evaluationCriteria.forEach((criteria: any) => {
+          if (criteria.scoring_logic === 'addition' && scoreData.additions) {
+            const key = criteria.key
+            if (scoreData.additions[key] && Array.isArray(scoreData.additions[key])) {
+              additions[key] = scoreData.additions[key]
+            }
+            // 也嘗試用顯示名稱
+            if (scoreData.additions[criteria.display_name] && Array.isArray(scoreData.additions[criteria.display_name])) {
+              additions[key] = scoreData.additions[criteria.display_name]
+            }
+          }
+        })
+      }
+      // 去重每個項目的原因
+      Object.keys(additions).forEach((k) => {
+        if (Array.isArray(additions[k])) {
+          additions[k] = Array.from(new Set(additions[k]))
+        }
+      })
+      return additions
+    })(),
+    aiFeedback: String(scoreData.aiFeedback || ''),
+    additionsDetail: typeof scoreData.additions_detail === 'string' ? scoreData.additions_detail : undefined,
+    deductionsDetail: typeof scoreData.deductions_detail === 'string' ? scoreData.deductions_detail : undefined
   }
 }
 
@@ -257,8 +492,10 @@ function parseScoreFromResponse(response: string, questionIndex?: number): Answe
     // 解析多個JSON對象，返回最後一個（最新的評分）
     const lastJsonString = jsonObjects[jsonObjects.length - 1]
     
-    const scoreData = JSON.parse(lastJsonString)
-    return createAnswerScore(scoreData, questionIndex)
+      const scoreData = JSON.parse(lastJsonString)
+      // 注意：parseScoreFromResponse 中無法取得 evaluationCriteria，所以先不傳入
+      // 會在 getInterviewAIResponse 中再次調用 createAnswerScore 並傳入 evaluationCriteria
+      return createAnswerScore(scoreData, questionIndex)
   } catch (error) {
     console.error('解析評分信息失敗:', error)
     console.error('原始JSON字符串:', match[1])
@@ -345,30 +582,51 @@ function logScoreResult(answerScore: AnswerScore): void {
   console.log(`問題: ${answerScore.questionText}`)
   console.log(`回答: ${answerScore.answerText}`)
   console.log('--- 各項評分 ---')
-  console.log(`內容完整性: ${answerScore.scores.contentCompleteness}/10`)
-  console.log(`邏輯清晰度: ${answerScore.scores.logicalClarity}/10`)
-  console.log(`專業深度: ${answerScore.scores.professionalDepth}/10`)
-  console.log(`溝通表達: ${answerScore.scores.communicationSkills}/10`)
-  console.log(`個人特質: ${answerScore.scores.personalTraits}/10`)
+  
+  // 動態顯示所有評估項目的分數
+  Object.entries(answerScore.scores).forEach(([key, score]) => {
+    const criteriaNames: Record<string, string> = {
+      contentCompleteness: '內容完整性',
+      logicalClarity: '邏輯清晰度',
+      professionalDepth: '專業深度',
+      communicationSkills: '溝通表達',
+      personalTraits: '個人特質'
+    }
+    const displayName = criteriaNames[key] || key
+    console.log(`${displayName}: ${score}/10`)
+  })
+  
   console.log(`總分: ${answerScore.totalScore.toFixed(1)}/10`)
   
-  // 扣分原因
-  if (answerScore.deductions.contentCompleteness.length > 0) {
-    console.log('扣分原因 (內容完整性):', answerScore.deductions.contentCompleteness)
-  }
-  if (answerScore.deductions.logicalClarity.length > 0) {
-    console.log('扣分原因 (邏輯清晰度):', answerScore.deductions.logicalClarity)
-  }
-  if (answerScore.deductions.communicationSkills.length > 0) {
-    console.log('扣分原因 (溝通表達):', answerScore.deductions.communicationSkills)
+  // 扣分原因（動態顯示）
+  Object.entries(answerScore.deductions).forEach(([key, reasons]) => {
+    if (Array.isArray(reasons) && reasons.length > 0) {
+      const criteriaNames: Record<string, string> = {
+        contentCompleteness: '內容完整性',
+        logicalClarity: '邏輯清晰度',
+        communicationSkills: '溝通表達'
+      }
+      const displayName = criteriaNames[key] || key
+      console.log(`扣分原因 (${displayName}):`, reasons)
+    }
+  })
+  if (answerScore.deductionsDetail) {
+    console.log('扣分細節:', answerScore.deductionsDetail)
   }
   
-  // 加分原因
-  if (answerScore.additions.professionalDepth.length > 0) {
-    console.log('加分原因 (專業深度):', answerScore.additions.professionalDepth)
-  }
-  if (answerScore.additions.personalTraits.length > 0) {
-    console.log('加分原因 (個人特質):', answerScore.additions.personalTraits)
+  // 加分原因（動態顯示）
+  Object.entries(answerScore.additions).forEach(([key, reasons]) => {
+    if (Array.isArray(reasons) && reasons.length > 0) {
+      const criteriaNames: Record<string, string> = {
+        professionalDepth: '專業深度',
+        personalTraits: '個人特質'
+      }
+      const displayName = criteriaNames[key] || key
+      console.log(`加分原因 (${displayName}):`, reasons)
+    }
+  })
+  if (answerScore.additionsDetail) {
+    console.log('加分細節:', answerScore.additionsDetail)
   }
   
   console.log('==================')
@@ -395,7 +653,13 @@ function triggerInterviewTTS(text: string, emotion: string = 'neutral') {
 /**
  * 獲取面試AI的回覆（包含TTS）
  */
-export async function getInterviewAIResponse(messages: Message[], questionIndex?: number) {
+export async function getInterviewAIResponse(
+  messages: Message[], 
+  questionIndex?: number,
+  interviewQuestions?: string[],
+  evaluationCriteria?: any[],
+  trackingId?: string
+) {
   const {
     aiApiKey,
     selectAIService,
@@ -422,23 +686,73 @@ export async function getInterviewAIResponse(messages: Message[], questionIndex?
   // 格式化對話歷史
   const conversationHistory = formatConversationHistory(messages)
 
+  // 格式化問題列表
+  // 注意：這些問題需要在自我介紹完成後才開始提問
+  const questionsText = interviewQuestions && interviewQuestions.length > 0
+    ? `以下問題請在面試者完成自我介紹後，按照順序逐一提問：\n${interviewQuestions.map((q, idx) => `問題 ${idx + 1}：${q}`).join('\n')}\n\n提醒：這些問題不能在第一句話就問，必須先完成打招呼和請自我介紹的步驟。`
+    : '無特定問題列表，請根據對話內容自然提問。'
+
+  // 格式化評分標準
+  let scoringCriteriaText = ''
+  if (evaluationCriteria && evaluationCriteria.length > 0) {
+    scoringCriteriaText = evaluationCriteria.map((criteria: any) => {
+      const logic = criteria.scoring_logic || 'deduction'
+      const maxScore = criteria.max_score || 10
+      // 處理 JSONB 數組格式的規則
+      let rules = ''
+      if (logic === 'addition') {
+        const additionRules = Array.isArray(criteria.addition_rules) 
+          ? criteria.addition_rules 
+          : (criteria.addition_rules ? [criteria.addition_rules] : [])
+        rules = additionRules.filter((r: any) => r && r.trim()).join('，')
+      } else {
+        const deductionRules = Array.isArray(criteria.deduction_rules) 
+          ? criteria.deduction_rules 
+          : (criteria.deduction_rules ? [criteria.deduction_rules] : [])
+        rules = deductionRules.filter((r: any) => r && r.trim()).join('，')
+      }
+      
+      const initialValue = logic === 'addition' ? '0分' : `${maxScore}分（滿分）`
+      return `${criteria.display_name} (${criteria.key}) - 滿分${maxScore}分，${logic === 'addition' ? '加分制（初始值0分）' : '扣分制（初始值滿分）'}，初始值：${initialValue}，${logic === 'addition' ? '加分' : '扣分'}規則：${rules || '無特定規則'}`
+    }).join('\n')
+  } else {
+    // 理論上不會執行（資料庫 trigger 會自動插入預設值），僅作為備用
+    scoringCriteriaText = '請使用預設評分標準進行評分'
+  }
+
   // 創建面試專用的系統消息
   const interviewSystemMessage: Message = {
     role: 'system',
     content: formatPrompt(INTERVIEW_PROMPT_TEMPLATES.SYSTEM_PROMPT, {
       userLanguage,
       conversationHistory,
-      currentStage
+      currentStage,
+      interviewQuestions: questionsText,
+      scoringCriteria: scoringCriteriaText
     }),
   }
 
   // 將系統消息添加到消息列表開頭
   const processedMessages = [interviewSystemMessage, ...messages]
 
+  // 🔍 DEBUG: 在發送前輸出完整的 prompt 到 console
+  console.log('='.repeat(80))
+  console.log('📤 Interview System Prompt:')
+  console.log('='.repeat(80))
+  console.log(interviewSystemMessage.content)
+  console.log('='.repeat(80))
+
   // APIエンドポイントを決定
   const apiEndpoint = getApiEndpoint(selectAIService)
 
   try {
+    // 記錄 API 調用開始時間（如果傳入了 trackingId）
+    if (trackingId && typeof window !== 'undefined') {
+      // 這個時間點已經在 InterviewInterface 中記錄了，這裡可以記錄額外的處理時間
+      const apiCallStartTime = performance.now()
+      // 可以記錄到 sessionStorage 以便追蹤
+    }
+    
     // 共通リクエストデータ
     const requestData: any = {
       messages: processedMessages,
@@ -500,7 +814,7 @@ export async function getInterviewAIResponse(messages: Message[], questionIndex?
       // 處理評分結果
       let scoreResult = null
       if (score) {
-        scoreResult = createAnswerScore(score, questionIndex)
+        scoreResult = createAnswerScore(score, questionIndex, evaluationCriteria)
         if (scoreResult) {
           logScoreResult(scoreResult)
         }
@@ -530,7 +844,9 @@ export async function getInterviewAIResponse(messages: Message[], questionIndex?
  * 獲取面試AI的串流回覆（包含TTS）
  */
 export async function getInterviewAIResponseStream(
-  messages: Message[]
+  messages: Message[],
+  interviewQuestions?: string[],
+  evaluationCriteria?: any[]
 ): Promise<ReadableStream<string>> {
   const {
     aiApiKey,
@@ -558,13 +874,49 @@ export async function getInterviewAIResponseStream(
   // 格式化對話歷史
   const conversationHistory = formatConversationHistory(messages)
 
+  // 格式化問題列表
+  // 注意：這些問題需要在自我介紹完成後才開始提問
+  const questionsText = interviewQuestions && interviewQuestions.length > 0
+    ? `以下問題請在面試者完成自我介紹後，按照順序逐一提問：\n${interviewQuestions.map((q, idx) => `問題 ${idx + 1}：${q}`).join('\n')}\n\n提醒：這些問題不能在第一句話就問，必須先完成打招呼和請自我介紹的步驟。`
+    : '無特定問題列表，請根據對話內容自然提問。'
+
+  // 格式化評分標準
+  let scoringCriteriaText = ''
+  if (evaluationCriteria && evaluationCriteria.length > 0) {
+    scoringCriteriaText = evaluationCriteria.map((criteria: any) => {
+      const logic = criteria.scoring_logic || 'deduction'
+      const maxScore = criteria.max_score || 10
+      // 處理 JSONB 數組格式的規則
+      let rules = ''
+      if (logic === 'addition') {
+        const additionRules = Array.isArray(criteria.addition_rules) 
+          ? criteria.addition_rules 
+          : (criteria.addition_rules ? [criteria.addition_rules] : [])
+        rules = additionRules.filter((r: any) => r && r.trim()).join('，')
+      } else {
+        const deductionRules = Array.isArray(criteria.deduction_rules) 
+          ? criteria.deduction_rules 
+          : (criteria.deduction_rules ? [criteria.deduction_rules] : [])
+        rules = deductionRules.filter((r: any) => r && r.trim()).join('，')
+      }
+      
+      const initialValue = logic === 'addition' ? '0分' : `${maxScore}分（滿分）`
+      return `${criteria.display_name} (${criteria.key}) - 滿分${maxScore}分，${logic === 'addition' ? '加分制（初始值0分）' : '扣分制（初始值滿分）'}，初始值：${initialValue}，${logic === 'addition' ? '加分' : '扣分'}規則：${rules || '無特定規則'}`
+    }).join('\n')
+  } else {
+    // 理論上不會執行（資料庫 trigger 會自動插入預設值），僅作為備用
+    scoringCriteriaText = '請使用預設評分標準進行評分'
+  }
+
   // 創建面試專用的系統消息
   const interviewSystemMessage: Message = {
     role: 'system',
     content: formatPrompt(INTERVIEW_PROMPT_TEMPLATES.SYSTEM_PROMPT, {
       userLanguage,
       conversationHistory,
-      currentStage
+      currentStage,
+      interviewQuestions: questionsText,
+      scoringCriteria: scoringCriteriaText
     }),
   }
 
@@ -639,6 +991,9 @@ export async function getInterviewAIResponseStream(
         const decoder = new TextDecoder('utf-8')
         let buffer = ''
         let fullResponse = '' // 收集完整的回應用於TTS
+        // 緩衝評分區塊，避免在 [SCORE_START] 與 [SCORE_END] 之間的內容被直接輸出到UI
+        let inScoreBlock = false
+        let scoreBlockBuffer = ''
 
         try {
           while (true) {
@@ -653,8 +1008,18 @@ export async function getInterviewAIResponseStream(
               if (line.startsWith('0:')) {
                 const content = line.substring(2).trim()
                 const decodedContent = JSON.parse(content)
-                fullResponse += decodedContent
-                controller.enqueue(decodedContent)
+                const textChunk = String(decodedContent)
+                if (textChunk.includes('[SCORE_START]')) inScoreBlock = true
+                if (inScoreBlock) {
+                  scoreBlockBuffer += textChunk
+                  if (textChunk.includes('[SCORE_END]')) {
+                    inScoreBlock = false
+                    scoreBlockBuffer = ''
+                  }
+                } else {
+                  fullResponse += textChunk
+                  controller.enqueue(textChunk)
+                }
               } else if (line.startsWith('data:')) {
                 // OpenAI API形式のストリームデータに対応
                 const content = line.substring(5).trim() // 'data:' プレフィックスを除去
@@ -664,8 +1029,17 @@ export async function getInterviewAIResponseStream(
                   const data = JSON.parse(content)
                   const text = data.choices?.[0]?.delta?.content
                   if (text) {
-                    fullResponse += text
-                    controller.enqueue(text)
+                    if (text.includes('[SCORE_START]')) inScoreBlock = true
+                    if (inScoreBlock) {
+                      scoreBlockBuffer += text
+                      if (text.includes('[SCORE_END]')) {
+                        inScoreBlock = false
+                        scoreBlockBuffer = ''
+                      }
+                    } else {
+                      fullResponse += text
+                      controller.enqueue(text)
+                    }
                   }
                 } catch (error) {
                   console.error('Error parsing JSON:', error)

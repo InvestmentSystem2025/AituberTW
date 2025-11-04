@@ -19,10 +19,33 @@ export async function getAuthUserIdFromRequest(req: { headers?: any }): Promise<
   if (!authz || typeof authz !== 'string') return null
   const token = authz.replace(/^Bearer\s+/i, '')
   if (!token) return null
-  const anon = getAnonClient()
-  const { data, error } = await anon.auth.getUser(token)
-  if (error || !data?.user) return null
-  return data.user.id
+  
+  try {
+    // 先嘗試使用 service_role 來驗證（避免 RLS 問題）
+    const serviceClient = getServiceClient()
+    const { data, error } = await serviceClient.auth.getUser(token)
+    if (!error && data?.user) return data.user.id
+    
+    // 如果是特定錯誤（如用戶不存在），記錄更詳細的資訊
+    if (error && error.message?.includes('does not exist')) {
+      console.warn('getAuthUserIdFromRequest: User from JWT does not exist - token may be stale after database reset')
+    }
+    
+    // 如果 service_role 失敗，使用 anon client
+    const anon = getAnonClient()
+    const { data: anonData, error: anonError } = await anon.auth.getUser(token)
+    if (!anonError && anonData?.user) return anonData.user.id
+    
+    // 記錄 anon client 的錯誤（特別是用戶不存在的情況）
+    if (anonError && anonError.message?.includes('does not exist')) {
+      console.warn('getAuthUserIdFromRequest: User from JWT does not exist - token may be stale after database reset')
+    }
+    
+    return null
+  } catch (err) {
+    console.error('getAuthUserIdFromRequest error:', err)
+    return null
+  }
 }
 
 export async function getAuthEmailFromRequest(req: { headers?: any }): Promise<string | null> {

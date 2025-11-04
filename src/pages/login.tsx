@@ -64,7 +64,7 @@ export default function LoginPage() {
       </form>
       {message && <p style={{ marginTop: 12 }}>{message}</p>}
       <div style={{ marginTop: 16, textAlign: 'center' }}>
-        <Link href="/signup" style={{ color: '#007bff', textDecoration: 'none' }}>
+        <Link href="/tos" style={{ color: '#007bff', textDecoration: 'none' }}>
           還沒有帳號？立即註冊
         </Link>
       </div>

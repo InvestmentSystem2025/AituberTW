@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/router'
 import { InterviewModelViewer } from '@/components/interview/InterviewModelViewer'
 import settingsStore from '@/features/stores/settings'
 import homeStore from '@/features/stores/home'
@@ -7,8 +8,12 @@ import { Message } from '@/features/messages/messages'
 import { useInterviewVoiceRecognition } from '@/hooks/useInterviewVoiceRecognition'
 import { InterviewScoringEngine } from '@/features/interview/interviewScoring'
 import { InterviewScoringSettings } from '@/components/interview/InterviewScoringSettings'
-import { ScoringCriteria, AnswerScore, DEFAULT_SCORING_CRITERIA } from '@/types/interviewScoring'
+import { ResponseTimeAnalysis } from '@/components/interview/ResponseTimeAnalysis'
+import { ScoringCriteria, AnswerScore, DEFAULT_SCORING_CRITERIA, InterviewResult, getScoreLevel, SCORE_LEVEL_DESCRIPTIONS } from '@/types/interviewScoring'
 import { useInterviewRecording } from '@/hooks/useInterviewRecording'
+import { supabase } from '@/lib/supabaseClient'
+import toastStore from '@/features/stores/toast'
+import { responseTimeTracker } from '@/utils/responseTimeTracker'
 
 // 直接在組件內定義面試問題
 const INTERVIEW_QUESTIONS = [
@@ -78,29 +83,60 @@ interface ChatMessage {
   type: 'ai' | 'user'
   content: string
   timestamp: Date
+  aiFeedback?: string
+  aiAdditionsDetail?: string
+  aiDeductionsDetail?: string
+}
+
+interface InterviewConfig {
+  interview: any
+  ai_interviewer: any
+  questions: any[]
+  evaluation_criteria: any[]
 }
 
 interface InterviewInterfaceProps {
   onInterviewComplete: (result?: any) => void
   enableRecording?: boolean
   initialGreeting?: string  // 預先生成的 AI 問候語
+  interviewConfig?: InterviewConfig | null
+  interviewId?: string
 }
 
 export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   onInterviewComplete,
   enableRecording = false,
   initialGreeting,
+  interviewConfig,
+  interviewId,
 }) => {
   const modelType = settingsStore((s) => s.modelType)
+  const router = useRouter()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [userInput, setUserInput] = useState('')
   const [isWaitingForAnswer, setIsWaitingForAnswer] = useState(false)
   const [isAIResponding, setIsAIResponding] = useState(false)
   const [interviewLanguage, setInterviewLanguage] = useState('zh-TW') // 面試專用語言設定
+  const [showLocalVideo, setShowLocalVideo] = useState(true)
   const videoRef = useRef<HTMLVideoElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const isInitializedRef = useRef(false)
   const greetingShownRef = useRef(false)
+  const mediaStreamRef = useRef<MediaStream | null>(null) // 保存攝像機 stream 引用
+  
+  // 針對首句問候語做內容淨化，避免模型產生不友善/不合語境的句子
+  const sanitizeGreeting = useCallback((text: string | undefined | null): string => {
+    const fallback = '你好，我是今天的 AI 面試官，很高興見到你！開始前請你先做個簡短的自我介紹。'
+    if (!text || typeof text !== 'string') return fallback
+    let t = text
+    // 移除不必要的評語或系統化用語
+    t = t.replace(/不符合預期的打招呼[^。！？]*[。！？]?/g, '')
+    t = t.replace(/請面試者自我介紹，請分析原因[^。！？]*[。！？]?/g, '')
+    // 若清理後過短，回退成預設友善問候
+    t = t.trim()
+    if (t.length < 6) return fallback
+    return t
+  }, [])
   
   // 初始化時顯示預先生成的問候語
   useEffect(() => {
@@ -108,20 +144,91 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       const greetingMessage: ChatMessage = {
         id: `ai-${Date.now()}`,
         type: 'ai',
-        content: initialGreeting,
+        content: sanitizeGreeting(initialGreeting),
         timestamp: new Date(),
       }
       setMessages([greetingMessage])
       greetingShownRef.current = true
     }
-  }, [initialGreeting])
+  }, [initialGreeting, messages.length, sanitizeGreeting])
+
+  // 從配置中獲取問題，如果沒有則使用默認問題
+  const interviewQuestions = interviewConfig?.questions || []
+
+  const formattedQuestions = interviewQuestions.length > 0 
+    ? interviewQuestions.flatMap((q: any, idx: number) => {
+        // 處理 detail 字段，可能是字串、物件或陣列
+        const d = q?.detail
+        
+        // 如果 detail 是物件且包含 questions 陣列（合併後的格式）
+        if (d && typeof d === 'object' && Array.isArray(d.questions)) {
+          // 返回多個問題，每個問題都對應到同一個 job_opening_question
+          return d.questions.map((questionText: string, subIdx: number) => ({
+            id: q.id ? `${q.id}-${subIdx}` : `q-${idx}-${subIdx}`,
+            question: (typeof questionText === 'string' && questionText.trim()) || `問題 ${idx + 1}-${subIdx + 1}`,
+            category: d.category || d.type || 'general',
+          })).filter((item: any) => item.question && item.question.trim().length > 0)
+        }
+        
+        // 否則按原邏輯處理（單一問題）
+        let questionText = ''
+        if (typeof d === 'string') {
+          questionText = d
+        } else if (Array.isArray(d)) {
+          const first = d.find((x) => typeof x === 'string' && x.trim().length > 0)
+          questionText = first || d.map((x) => (typeof x === 'string' ? x : '')).filter(Boolean).join('\n')
+        } else if (d && typeof d === 'object') {
+          questionText = d.question || d.text || d.content || d.title || ''
+          if (!questionText && typeof d.prompt === 'string') questionText = d.prompt
+          if (!questionText) {
+            const v = Object.values(d).find((v) => typeof v === 'string' && v.trim().length > 0)
+            if (typeof v === 'string') questionText = v
+          }
+        }
+
+        const category = (d && typeof d === 'object' ? (d.category || d.type) : 'general') || 'general'
+
+        return [{
+          id: q.id || `q-${idx}`,
+          question: (questionText && questionText.trim()) || `問題 ${idx + 1}`,
+          category,
+        }].filter((item) => item.question && item.question.trim().length > 0)
+      })
+    : INTERVIEW_QUESTIONS
+
+  // 獲取evaluation_criteria並轉換為評分系統需要的格式
+  const evaluationCriteria = interviewConfig?.evaluation_criteria || []
   
-  // 評分系統狀態
-  const [scoringEngine] = useState(() => new InterviewScoringEngine(DEFAULT_SCORING_CRITERIA))
+  // 評分系統狀態 - 使用evaluation_criteria初始化
+  const [scoringEngine] = useState(() => {
+    if (evaluationCriteria.length > 0) {
+      // 建立 passingCriteria（使用 criteria key 作為 key）
+      const criteria: ScoringCriteria = {}
+      evaluationCriteria.forEach((c: any) => {
+        criteria[c.key] = c.max_score || 10
+      })
+      
+      // 建立 evaluationCriteria 資訊
+      const criteriaInfo = evaluationCriteria.map((c: any) => ({
+        key: c.key,
+        display_name: c.display_name,
+        scoring_logic: c.scoring_logic || 'deduction',
+        max_score: c.max_score || 10
+      }))
+      
+      return new InterviewScoringEngine(criteria, criteriaInfo)
+    }
+    return new InterviewScoringEngine(DEFAULT_SCORING_CRITERIA)
+  })
+  
   const [answerScores, setAnswerScores] = useState<AnswerScore[]>([])
   const [showScoringSettings, setShowScoringSettings] = useState(false)
+  const [showResponseTimeAnalysis, setShowResponseTimeAnalysis] = useState(false)
   const [currentQuestionId, setCurrentQuestionId] = useState<string>('')
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0)
+  
+  // 面試開始時間記錄
+  const interviewStartTimeRef = useRef<number>(Date.now())
   
   // 錄製功能
   const recording = useInterviewRecording({ enableRecording })
@@ -133,6 +240,146 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   // 使用 ref 來避免閉包問題
   const handleUserAnswerRef = useRef<(answer: string) => void>()
 
+  // 停止並釋放攝像機資源（需要在 processAIResponse 之前定義）
+  const stopCamera = useCallback(() => {
+    if (mediaStreamRef.current) {
+      // 停止所有 tracks（video 和 audio）
+      mediaStreamRef.current.getTracks().forEach(track => {
+        track.stop()
+        console.log('🛑 已停止攝像機 track:', track.kind)
+      })
+      mediaStreamRef.current = null
+    }
+    if (videoRef.current) {
+      try {
+        // 清空並暫停影片，避免仍占用裝置
+        videoRef.current.srcObject = null as any
+        videoRef.current.pause()
+        // 觸發一次載入以釋放影像資源
+        videoRef.current.load()
+      } catch {}
+    }
+  }, [])
+
+  // 保存面試session到資料庫
+  const saveInterviewSession = useCallback(async (finalResult: InterviewResult): Promise<'hired' | 'rejected' | 'pending' | undefined> => {
+    if (!interviewId) return
+
+    try {
+      const { data: session } = await supabase.auth.getSession()
+      const token = session.session?.access_token
+      if (!token) return
+
+      // 轉換評分結果為DB格式的ai_evaluations（含整場面試該項目的證據敘述）
+      const aiEvaluations = evaluationCriteria.map((criteria: any) => {
+        const key = criteria.key
+        const displayName = criteria.display_name || key
+        const maxScore = criteria.max_score || 10
+        const finalScore = Math.max(0, Math.min(maxScore, finalResult?.finalScores?.[key] || 0))
+
+        // 彙總整場面試的加/扣分原因（依 DB key 匹配）
+        const allAdditions: string[] = []
+        const allDeductions: string[] = []
+        if (Array.isArray(finalResult?.answerScores)) {
+          finalResult.answerScores.forEach((s) => {
+            // additions/deductions 皆為 Record<string, string[]>
+            const adds = (s.additions && s.additions[key]) || []
+            const deds = (s.deductions && s.deductions[key]) || []
+            if (Array.isArray(adds) && adds.length) allAdditions.push(...adds)
+            if (Array.isArray(deds) && deds.length) allDeductions.push(...deds)
+          })
+        }
+
+        // 去重
+        const uniqueAdds = Array.from(new Set(allAdditions))
+        const uniqueDeds = Array.from(new Set(allDeductions))
+
+        // 分數等級描述
+        const level = getScoreLevel(finalScore)
+        const levelText = SCORE_LEVEL_DESCRIPTIONS[level]
+
+        // 組裝 evidence 敘述
+        const parts: string[] = []
+        parts.push(`${displayName}表現${levelText} (${finalScore.toFixed(1)}分)`) // 主句
+        if (uniqueAdds.length > 0) parts.push(`加分：${uniqueAdds.join('、')}`)
+        if (uniqueDeds.length > 0) parts.push(`扣分：${uniqueDeds.join('、')}`)
+
+        const evidence = parts.join('；')
+
+        return {
+          key,
+          score: Math.round(finalScore * 10) / 10,
+          evidence,
+        }
+      })
+
+      // 準備transcript
+      const transcript = messages.map(msg => ({
+        role: msg.type,
+        content: msg.content,
+        timestamp: msg.timestamp.toISOString(),
+        aiFeedback: msg.type === 'ai' ? (msg.aiFeedback || '') : '',
+        additions_detail: msg.type === 'ai' ? (msg.aiAdditionsDetail || '') : '',
+        deductions_detail: msg.type === 'ai' ? (msg.aiDeductionsDetail || '') : ''
+      }))
+
+      // 計算duration
+      const durationSeconds = Math.floor((Date.now() - interviewStartTimeRef.current) / 1000)
+
+      const response = await fetch('/api/interviews/save-session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          interviews_id: interviewId,
+          interview_transcript: transcript,
+          ai_evaluations: aiEvaluations,
+          duration_seconds: durationSeconds,
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        console.error('Save interview session error:', error)
+        toastStore.getState().addToast({
+          message: '保存面試記錄時發生錯誤',
+          type: 'error',
+        })
+        return undefined
+      }
+
+      // 儲存成功後，直接使用 API 回傳的 session.interview_result
+      try {
+        const body = await response.json()
+        const interviewResultFromDb = body?.session?.interview_result as string | undefined
+        if (interviewResultFromDb === 'hired') return 'hired'
+        if (interviewResultFromDb === 'rejected') return 'rejected'
+        if (interviewResultFromDb) return 'pending'
+      } catch {}
+
+      // 後備：讀取最新 session 以取得 DB 決策（interview_result）
+      try {
+        const check = await fetch(`/api/interviews/get-session?interview_id=${encodeURIComponent(interviewId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (check.ok) {
+          const data = await check.json()
+          const interviewResultFromDb = data?.session?.interview_result as string | undefined
+          if (interviewResultFromDb === 'hired') return 'hired'
+          if (interviewResultFromDb === 'rejected') return 'rejected'
+          return 'pending'
+        }
+      } catch (e) {
+        console.warn('Fetch interview session result failed:', e)
+      }
+      return undefined
+    } catch (error) {
+      console.error('Save interview session exception:', error)
+    }
+  }, [interviewId, evaluationCriteria, messages])
+
   // 滾動到底部
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
@@ -143,12 +390,17 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   }, [])
 
   // 添加AI訊息
-  const addAIMessage = useCallback((content: string) => {
+  const addAIMessage = useCallback((content: string, aiFeedback?: string, aiAdditionsDetail?: string, aiDeductionsDetail?: string) => {
+    // 最終保險閘：顯示前剝離任意評分區塊
+    const cleaned = content.replace(/\[SCORE_START\]([\s\S]*?)\[SCORE_END\]/g, '').trim()
     const newMessage: ChatMessage = {
       id: Date.now().toString(),
       type: 'ai',
-      content,
+      content: cleaned,
       timestamp: new Date(),
+      aiFeedback,
+      aiAdditionsDetail,
+      aiDeductionsDetail,
     }
     setMessages((prev) => [...prev, newMessage])
     scrollToBottom()
@@ -173,6 +425,20 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     setIsAIResponding(true)
     setIsWaitingForAnswer(false)
     
+    // 獲取 AI 服務配置
+    const aiService = settingsStore.getState().selectAIService
+    const aiModel = settingsStore.getState().selectAIModel
+    
+    // 開始追蹤回應時間
+    const trackingId = responseTimeTracker.startTracking(
+      userAnswer,
+      aiService,
+      aiModel,
+      messages.length,
+      currentQuestionIndex,
+      formattedQuestions[currentQuestionIndex]?.category
+    )
+    
     try {
       // 將對話轉換為Message格式
       const conversationMessages: Message[] = messages.map(msg => ({
@@ -186,11 +452,39 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         content: userAnswer
       })
       
-      // 調用AI API獲取回應，傳遞當前問題編號
-      const aiResponse = await getInterviewAIResponse(conversationMessages, currentQuestionIndex + 1)
+      // 準備問題列表供 AI 使用
+      const questionsList = formattedQuestions.map(q => q.question)
+      
+      // 🔍 DEBUG: Client-side log（幫助偵錯）
+      console.log('📋 即將發送問題列表到 AI:', questionsList)
+      console.log('📊 當前對話歷史:', conversationMessages.map(m => `${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 50) : '...'}`))
+      console.log('📊 當前對話歷史長度:', conversationMessages.length)
+      
+      // 記錄 API 調用開始時間
+      responseTimeTracker.recordApiCallStart(trackingId)
+      
+      // 調用AI API獲取回應，傳遞當前問題編號、問題列表和評分標準
+      const aiResponse = await getInterviewAIResponse(
+        conversationMessages, 
+        currentQuestionIndex + 1,
+        questionsList,
+        evaluationCriteria,
+        trackingId // 傳遞追蹤 ID
+      )
+      
+      // 記錄 API 調用結束時間
+      responseTimeTracker.recordApiCallEnd(trackingId)
       
       if (aiResponse.text) {
-        addAIMessage(aiResponse.text)
+        // 完成追蹤並記錄指標
+        responseTimeTracker.completeTracking(trackingId, aiResponse.text)
+        
+        addAIMessage(
+          aiResponse.text,
+          aiResponse.scoreResult?.aiFeedback,
+          aiResponse.scoreResult?.additionsDetail,
+          aiResponse.scoreResult?.deductionsDetail
+        )
         
         // 情感標籤已包含在 aiResponse.emotion 中
         // 表情會在 TTS 播放時（model.speak()）自動應用，不需要在這裡手動設置
@@ -215,9 +509,41 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           }, 3000)
           
           // 總共等待 6 秒後再顯示結果頁面
-          setTimeout(() => {
+          setTimeout(async () => {
             const finalResult = scoringEngine.generateFinalResult('candidate-001')
-            onInterviewComplete(finalResult)
+            // 保存到資料庫並讀取DB決策
+            if (interviewId) {
+              const outcome = await saveInterviewSession(finalResult)
+              if (outcome) {
+                // 以 DB 的 interview_result 為準統一顯示
+                finalResult.isPassed = outcome === 'hired'
+              }
+            }
+            // 停止攝像機
+            try { stopListening() } catch {}
+            stopCamera()
+            setShowLocalVideo(false)
+            if (interviewId) {
+              // 在新分頁打開結果頁面（立即執行，避免被彈出視窗阻擋器阻擋）
+              const resultUrl = `/interview/result?id=${encodeURIComponent(interviewId)}`
+              const newWindow = window.open(resultUrl, '_blank')
+              if (newWindow) {
+                newWindow.focus() // 確保新分頁獲得焦點
+                // 將當前頁面完整重新載入到首頁（像 F5 一樣），確保組件完全卸載並釋放攝影機資源
+                setTimeout(() => {
+                  console.log('準備完整重新載入到首頁')
+                  window.location.replace('/')
+                }, 1000) // 增加延遲時間，確保新分頁已打開
+              } else {
+                // 如果被阻擋，則在當前頁面完整重新載入結果頁面（像 F5 一樣）
+                console.warn('新分頁被阻擋，改為在當前頁面完整重新載入結果')
+                console.log('準備完整重新載入到:', resultUrl)
+                // 使用 replace 強制完整重新載入，繞過 Next.js 路由
+                window.location.replace(resultUrl)
+              }
+            } else {
+              onInterviewComplete(finalResult)
+            }
           }, 6000) // 給更多時間：3秒顯示 + 3秒處理錄製
         } else {
           setIsWaitingForAnswer(true)
@@ -230,7 +556,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     } finally {
       setIsAIResponding(false)
     }
-  }, [isAIResponding, messages, addAIMessage, onInterviewComplete, modelType])
+  }, [isAIResponding, messages, addAIMessage, onInterviewComplete, scoringEngine, currentQuestionIndex, recording, interviewId, saveInterviewSession, formattedQuestions, stopCamera])
 
   // 處理用戶回答
   const handleUserAnswer = useCallback((answer: string) => {
@@ -257,6 +583,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           facingMode: 'user',
         },
       })
+      mediaStreamRef.current = stream // 保存 stream 引用
       if (videoRef.current) {
         videoRef.current.srcObject = stream
       }
@@ -267,20 +594,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
 
   // 開始面試
   const startInterview = useCallback(async () => {
-    // 如果有預先生成的問候語，跳過預設的 greeting
-    if (initialGreeting) {
-      setCurrentQuestionIndex(0)
-      setCurrentQuestionId('custom-greeting')
-      setIsWaitingForAnswer(true)
-      return
-    }
-    
-    // 使用預設的 greeting
-    const firstQuestion = INTERVIEW_QUESTIONS[0]
-    setCurrentQuestionId(firstQuestion.id)
-    setCurrentQuestionIndex(0)
-    addAIMessage(firstQuestion.question)
-    setIsWaitingForAnswer(true)
+    interviewStartTimeRef.current = Date.now()
     
     // 如果啟用錄製，開始錄製
     if (enableRecording) {
@@ -288,7 +602,69 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         recording.startRecording()
       }, 1000) // 延遲 1 秒開始錄製，確保畫面已完全載入
     }
-  }, [initialGreeting, addAIMessage, enableRecording, recording, modelType])
+
+    // 如果有預先生成的問候語，直接使用
+    if (initialGreeting) {
+      setCurrentQuestionIndex(0)
+      setCurrentQuestionId(formattedQuestions[0]?.id || 'custom-greeting')
+      setIsWaitingForAnswer(true)
+      return
+    }
+
+    // 如果沒有 initialGreeting，觸發 AI 產生第一句話（打招呼和自我介紹）
+    // 此時 messages 應該是空的，所以 AI 會根據 prompt 產生打招呼
+    console.log('🚀 開始面試：initialGreeting =', initialGreeting, 'messages.length =', messages.length)
+    
+    if (messages.length === 0 && !initialGreeting) {
+      console.log('✅ 觸發 AI 產生第一句話（打招呼）')
+      setIsWaitingForAnswer(false) // 先不允許用戶輸入，等 AI 回應
+      setIsAIResponding(true)
+      
+      try {
+        const questionsList = formattedQuestions.length > 0 
+          ? formattedQuestions.map(q => q.question)
+          : []
+        
+        console.log('📋 問題列表 (將傳給 AI):', questionsList)
+        console.log('📊 對話歷史長度:', 0)
+        console.log('📊 evaluationCriteria 數量:', evaluationCriteria.length)
+        
+        // 調用 AI 產生第一句話（空對話歷史，AI 應該會產生打招呼）
+        const aiResponse = await getInterviewAIResponse(
+          [], // 空的對話歷史，觸發打招呼
+          0,  // questionIndex = 0（還未開始問問題）
+          questionsList,
+          evaluationCriteria
+        )
+        
+        console.log('✅ AI 回應:', aiResponse.text?.substring(0, 100) + '...')
+        
+        if (aiResponse.text) {
+          addAIMessage(
+            aiResponse.text,
+            aiResponse.scoreResult?.aiFeedback,
+            aiResponse.scoreResult?.additionsDetail,
+            aiResponse.scoreResult?.deductionsDetail
+          )
+          setIsWaitingForAnswer(true)
+        } else {
+          // 如果沒有回應，使用預設問候語
+          console.warn('⚠️ AI 沒有返回回應，使用預設問候語')
+          addAIMessage('你好，我是今天的AI面試官，很高興見到你！首先請你做個簡短的自我介紹。')
+          setIsWaitingForAnswer(true)
+        }
+      } catch (error) {
+        console.error('❌ AI回應錯誤:', error)
+        // 如果失敗，使用預設問候語
+        addAIMessage('你好，我是今天的AI面試官，很高興見到你！首先請你做個簡短的自我介紹。')
+        setIsWaitingForAnswer(true)
+      } finally {
+        setIsAIResponding(false)
+      }
+    } else {
+      console.log('⚠️ 跳過 AI 打招呼：initialGreeting =', initialGreeting, 'messages.length =', messages.length)
+    }
+  }, [initialGreeting, formattedQuestions, addAIMessage, enableRecording, recording, messages.length, evaluationCriteria])
 
   // 語音識別功能
   const {
@@ -311,8 +687,10 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       // 初始化鏡頭
       initializeCamera()
       
-      // 開始面試流程
-      startInterview()
+      // 開始面試流程（延遲一小段時間確保組件完全初始化）
+      setTimeout(() => {
+        startInterview()
+      }, 100)
       
       // 標記為已初始化
       isInitializedRef.current = true
@@ -322,8 +700,25 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   // 組件卸載時的清理（使用獨立的 effect）
   useEffect(() => {
     return () => {
+      // 停止錄製
       if (recordingRef.current.isRecording) {
         recordingRef.current.stopRecording()
+      }
+      // 停止語音聆聽/麥克風
+      try { stopListening() } catch {}
+      // 停止攝像機
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => {
+          track.stop()
+        })
+        mediaStreamRef.current = null
+      }
+      if (videoRef.current) {
+        try {
+          videoRef.current.srcObject = null as any
+          videoRef.current.pause()
+          videoRef.current.load()
+        } catch {}
       }
     }
   }, []) // 空依賴，只在組件真正卸載時執行
@@ -347,18 +742,24 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   return (
     <div className="h-[100svh] flex bg-gray-100">
       {/* 左側：面試者視訊 (1/3) */}
-      <div className="w-1/3 bg-black relative">
-        <video
-          ref={videoRef}
-          className="w-full h-full object-cover"
-          playsInline
-          muted
-          autoPlay
-        />
-        <div className="absolute bottom-4 left-4 bg-black/70 text-white px-3 py-2 rounded-lg text-sm">
-          面試者
+      {showLocalVideo ? (
+        <div className="w-1/3 bg-black relative">
+          <video
+            ref={videoRef}
+            className="w-full h-full object-cover"
+            playsInline
+            muted
+            autoPlay
+          />
+          <div className="absolute bottom-4 left-4 bg-black/70 text-white px-3 py-2 rounded-lg text-sm">
+            面試者
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="w-1/3 bg-black relative flex items-center justify-center">
+          <div className="text-white/70 text-sm">攝像機已關閉</div>
+        </div>
+      )}
 
       {/* 中間：對話記錄 (1/3) */}
       <div className="w-1/3 flex flex-col bg-white">
@@ -372,6 +773,12 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                 className="px-2 py-1 bg-white/20 hover:bg-white/30 rounded text-sm transition-colors"
               >
                 評分設定
+              </button>
+              <button
+                onClick={() => setShowResponseTimeAnalysis(true)}
+                className="px-2 py-1 bg-white/20 hover:bg-white/30 rounded text-sm transition-colors"
+              >
+                📊 回應時間分析
               </button>
               <label className="text-sm">語音語言:</label>
               <select
@@ -436,31 +843,24 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                   </div>
                 </div>
                 
-                {/* 顯示評分結果 */}
+                  {/* 顯示評分結果 */}
                 {scoreResult && message.type === 'ai' && (
                   <div className="mt-2 ml-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                     <div className="text-sm font-medium text-yellow-800 mb-2">📊 評分結果</div>
                     <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="flex justify-between">
-                        <span>內容完整性:</span>
-                        <span className="font-medium">{scoreResult.scores.contentCompleteness}/10</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>邏輯清晰度:</span>
-                        <span className="font-medium">{scoreResult.scores.logicalClarity}/10</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>專業深度:</span>
-                        <span className="font-medium">{scoreResult.scores.professionalDepth}/10</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>溝通表達:</span>
-                        <span className="font-medium">{scoreResult.scores.communicationSkills}/10</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>個人特質:</span>
-                        <span className="font-medium">{scoreResult.scores.personalTraits}/10</span>
-                      </div>
+                      {Object.entries(scoreResult.scores).map(([key, score]) => {
+                        // 查找評估項目的顯示名稱
+                        const criteria = evaluationCriteria.find((c: any) => c.key === key)
+                        const displayName = criteria?.display_name || key
+                        const maxScore = criteria?.max_score || 10
+                        
+                        return (
+                          <div key={key} className="flex justify-between">
+                            <span>{displayName}:</span>
+                            <span className="font-medium">{score.toFixed(1)}/{maxScore}</span>
+                          </div>
+                        )
+                      })}
                       <div className="flex justify-between col-span-2 border-t pt-1">
                         <span className="font-medium">總分:</span>
                         <span className="font-bold text-blue-600">{scoreResult.totalScore.toFixed(1)}/10</span>
@@ -490,16 +890,47 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
               {isListening ? '停止語音輸入' : '開始語音輸入'}
             </button>
             <button
-              onClick={() => {
+              onClick={async () => {
                 // 等待 2 秒再停止錄製（給最後的對話時間錄製）
                 setTimeout(() => {
                   recording.stopRecording()
                 }, 2000)
                 
                 // 總共等待 5 秒後顯示結果
-                setTimeout(() => {
+                setTimeout(async () => {
                   const finalResult = scoringEngine.generateFinalResult('candidate-001')
-                  onInterviewComplete(finalResult)
+                  // 保存到資料庫並讀取DB決策
+                  if (interviewId) {
+                    const outcome = await saveInterviewSession(finalResult)
+                    if (outcome) {
+                      finalResult.isPassed = outcome === 'hired'
+                    }
+                  }
+                  // 停止攝像機
+                  try { stopListening() } catch {}
+                  stopCamera()
+                  setShowLocalVideo(false)
+                  if (interviewId) {
+                    // 在新分頁打開結果頁面（立即執行，避免被彈出視窗阻擋器阻擋）
+                    const resultUrl = `/interview/result?id=${encodeURIComponent(interviewId)}`
+                    const newWindow = window.open(resultUrl, '_blank')
+                    if (newWindow) {
+                      newWindow.focus() // 確保新分頁獲得焦點
+                      // 將當前頁面完整重新載入到首頁（像 F5 一樣），確保組件完全卸載並釋放攝影機資源
+                      setTimeout(() => {
+                        console.log('準備完整重新載入到首頁')
+                        window.location.replace('/')
+                      }, 1000) // 增加延遲時間，確保新分頁已打開
+                    } else {
+                      // 如果被阻擋，則在當前頁面完整重新載入結果頁面（像 F5 一樣）
+                      console.warn('新分頁被阻擋，改為在當前頁面完整重新載入結果')
+                      console.log('準備完整重新載入到:', resultUrl)
+                      // 使用 replace 強制完整重新載入，繞過 Next.js 路由
+                      window.location.replace(resultUrl)
+                    }
+                  } else {
+                    onInterviewComplete(finalResult)
+                  }
                 }, 5000)
               }}
               className="px-4 py-2 rounded-lg text-white font-medium bg-gray-500 hover:bg-gray-600"
@@ -595,6 +1026,12 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           scoringEngine.updatePassingCriteria(criteria)
           setShowScoringSettings(false)
         }}
+      />
+
+      {/* 回應時間分析彈窗 */}
+      <ResponseTimeAnalysis
+        isOpen={showResponseTimeAnalysis}
+        onClose={() => setShowResponseTimeAnalysis(false)}
       />
     </div>
   )

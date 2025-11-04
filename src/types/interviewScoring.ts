@@ -2,14 +2,8 @@
  * 面試評分系統的類型定義
  */
 
-// 評分維度
-export interface ScoringCriteria {
-  contentCompleteness: number // 內容完整性 (0-10)
-  logicalClarity: number      // 邏輯清晰度 (0-10)
-  professionalDepth: number   // 專業深度 (0-10)
-  communicationSkills: number // 溝通表達 (0-10)
-  personalTraits: number      // 個人特質 (0-10)
-}
+// 評分維度 - 支持動態評估項目（key -> score）
+export type ScoringCriteria = Record<string, number>
 
 // 單次回答的評分結果
 export interface AnswerScore {
@@ -18,18 +12,13 @@ export interface AnswerScore {
   questionText: string
   answerText: string
   timestamp: Date
-  scores: ScoringCriteria
+  scores: ScoringCriteria // 支持動態評估項目
   totalScore: number
-  deductions: {
-    contentCompleteness: string[]
-    logicalClarity: string[]
-    communicationSkills: string[]
-  }
-  additions: {
-    professionalDepth: string[]
-    personalTraits: string[]
-  }
+  deductions: Record<string, string[]> // 支持動態評估項目
+  additions: Record<string, string[]>  // 支持動態評估項目
   aiFeedback: string
+  additionsDetail?: string
+  deductionsDetail?: string
 }
 
 // 面試評分設定
@@ -65,6 +54,24 @@ export const DEFAULT_SCORING_CRITERIA: ScoringCriteria = {
   professionalDepth: 5,      // 專業深度
   communicationSkills: 5,    // 溝通表達
   personalTraits: 5          // 個人特質
+}
+
+// DB key 到前端 key 的映射（用於向後兼容）
+export const DB_KEY_TO_FRONTEND_KEY: Record<string, string> = {
+  'content_integrity': 'contentCompleteness',
+  'logical_clarity': 'logicalClarity',
+  'professional_depth': 'professionalDepth',
+  'communication': 'communicationSkills',
+  'personal_attributes': 'personalTraits'
+}
+
+// 前端 key 到 DB key 的映射（用於向後兼容）
+export const FRONTEND_KEY_TO_DB_KEY: Record<string, string> = {
+  'contentCompleteness': 'content_integrity',
+  'logicalClarity': 'logical_clarity',
+  'professionalDepth': 'professional_depth',
+  'communicationSkills': 'communication',
+  'personalTraits': 'personal_attributes'
 }
 
 // 評分規則

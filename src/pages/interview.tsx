@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/router'
 import { useTranslation } from 'react-i18next'
 import { Form } from '@/components/form'
 import MessageReceiver from '@/components/messageReceiver'
@@ -33,8 +34,18 @@ import { buildUrl } from '@/utils/buildUrl'
 import { YoutubeManager } from '@/components/youtubeManager'
 import toastStore from '@/features/stores/toast'
 import { ResumeInfo } from '@/lib/mcpClient'
+import { supabase } from '@/lib/supabaseClient'
+
+interface InterviewConfig {
+  interview: any
+  ai_interviewer: any
+  questions: any[]
+  evaluation_criteria: any[]
+}
 
 const Interview = () => {
+  const router = useRouter()
+  const { interview_id } = router.query
   const webcamStatus = homeStore((s) => s.webcamStatus)
   const captureStatus = homeStore((s) => s.captureStatus)
   const backgroundImageUrl = homeStore((s) => s.backgroundImageUrl)
@@ -63,6 +74,10 @@ const Interview = () => {
     aiGreeting: null,
   })
 
+  // Interview配置狀態
+  const [interviewConfig, setInterviewConfig] = useState<InterviewConfig | null>(null)
+  const [loadingConfig, setLoadingConfig] = useState(false)
+
   // 處理履歷上傳完成
   const handleResumeProcessed = (resumeInfo: ResumeInfo, questions: string[], aiGreeting: string) => {
     setResumeData({
@@ -86,6 +101,89 @@ const Interview = () => {
     }
     return false
   })
+
+  // 載入interview配置
+  useEffect(() => {
+    const loadInterviewConfig = async () => {
+      if (!interview_id || typeof interview_id !== 'string') return
+      
+      setLoadingConfig(true)
+      try {
+        const { data: session } = await supabase.auth.getSession()
+        const token = session.session?.access_token
+        if (!token) {
+          toastStore.getState().addToast({
+            message: '請先登入',
+            type: 'error',
+          })
+          return
+        }
+
+        const response = await fetch(`/api/interviews/get?interview_id=${interview_id}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        
+        if (!response.ok) {
+          const error = await response.json()
+          toastStore.getState().addToast({
+            message: `載入面試配置失敗: ${error.error || '未知錯誤'}`,
+            type: 'error',
+          })
+          return
+        }
+
+        const data = await response.json()
+        setInterviewConfig(data)
+        
+        // 如果有AI面試官配置，更新model設定
+        if (data.ai_interviewer?.model_name) {
+          const isVrm = data.ai_interviewer.model_name.includes('.vrm') || data.ai_interviewer.model_name.includes('vrm')
+          const newModelType = isVrm ? 'vrm' : 'live2d'
+          const currentModelType = settingsStore.getState().modelType
+          
+          // 只在需要時更新model類型，避免不必要的重新渲染
+          if (currentModelType !== newModelType) {
+            settingsStore.setState({ modelType: newModelType })
+          }
+          
+          // 如果是VRM模型，設置模型路徑
+          if (isVrm && data.ai_interviewer.model_name) {
+            // 從model_name構造路徑，例如 'yuki.vrm' -> '/vrm/yuki.vrm'
+            const vrmPath = data.ai_interviewer.model_name.startsWith('/') 
+              ? data.ai_interviewer.model_name 
+              : `/vrm/${data.ai_interviewer.model_name}`
+            const currentVrmPath = settingsStore.getState().selectedVrmPath
+            
+            // 只在路徑不同時更新，避免不必要的重新渲染
+            if (currentVrmPath !== vrmPath) {
+              settingsStore.setState({ selectedVrmPath: vrmPath })
+            }
+          }
+        }
+        
+        if (data.ai_interviewer?.model_config) {
+          // 可以將model_config應用到settings
+          const config = data.ai_interviewer.model_config
+          if (config.temperature !== undefined) {
+            const currentTemp = settingsStore.getState().temperature
+            if (currentTemp !== config.temperature) {
+              settingsStore.setState({ temperature: config.temperature })
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Load interview config error:', error)
+        toastStore.getState().addToast({
+          message: '載入面試配置時發生錯誤',
+          type: 'error',
+        })
+      } finally {
+        setLoadingConfig(false)
+      }
+    }
+
+    loadInterviewConfig()
+  }, [interview_id])
 
   // 監聽 localStorage 變化
   useEffect(() => {
@@ -200,13 +298,21 @@ const Interview = () => {
         </div>
       ) : interviewFlow.interviewStatus === 'interviewing' ? (
         /* 面試進行中：顯示新的面試界面 */
-        <InterviewInterface
-          onInterviewComplete={(result) => {
-            interviewFlow.completeInterview(result)
-          }}
-          enableRecording={enableRecording}
-          initialGreeting={resumeData.aiGreeting || undefined}
-        />
+        loadingConfig ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-50">
+            <div className="text-lg">載入面試配置中...</div>
+          </div>
+        ) : (
+          <InterviewInterface
+            onInterviewComplete={(result) => {
+              interviewFlow.completeInterview(result)
+            }}
+            enableRecording={enableRecording}
+            initialGreeting={resumeData.aiGreeting || undefined}
+            interviewConfig={interviewConfig}
+            interviewId={typeof interview_id === 'string' ? interview_id : undefined}
+          />
+        )
       ) : interviewFlow.interviewStatus === 'completed' || interviewFlow.showResults ? (
         /* 顯示面試結果 */
         <InterviewResults

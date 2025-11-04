@@ -19,9 +19,14 @@ import {
 export class InterviewScoringEngine {
   private passingCriteria: ScoringCriteria
   private answerScores: AnswerScore[] = []
+  private evaluationCriteria: Array<{ key: string; display_name: string; scoring_logic: string; max_score: number }> = [] // 存儲評估項目的完整信息
 
-  constructor(passingCriteria: ScoringCriteria = DEFAULT_SCORING_CRITERIA) {
+  constructor(
+    passingCriteria: ScoringCriteria = DEFAULT_SCORING_CRITERIA,
+    evaluationCriteria?: Array<{ key: string; display_name: string; scoring_logic: string; max_score: number }>
+  ) {
     this.passingCriteria = passingCriteria
+    this.evaluationCriteria = evaluationCriteria || []
   }
 
   /**
@@ -128,13 +133,10 @@ export class InterviewScoringEngine {
    * 計算總分
    */
   private calculateTotalScore(scores: ScoringCriteria): number {
-    return (
-      scores.contentCompleteness +
-      scores.logicalClarity +
-      scores.professionalDepth +
-      scores.communicationSkills +
-      scores.personalTraits
-    ) / 5
+    const scoreValues = Object.values(scores)
+    if (scoreValues.length === 0) return 0
+    const sum = scoreValues.reduce((a, b) => a + b, 0)
+    return sum / scoreValues.length
   }
 
   /**
@@ -356,14 +358,17 @@ export class InterviewScoringEngine {
     const totalQuestions = this.answerScores.length
     const answeredQuestions = this.answerScores.filter(score => score.answerText.trim().length > 0).length
     
-    // 計算平均分數
-    const finalScores: ScoringCriteria = {
-      contentCompleteness: this.calculateAverageScore('contentCompleteness'),
-      logicalClarity: this.calculateAverageScore('logicalClarity'),
-      professionalDepth: this.calculateAverageScore('professionalDepth'),
-      communicationSkills: this.calculateAverageScore('communicationSkills'),
-      personalTraits: this.calculateAverageScore('personalTraits')
-    }
+    // 收集所有評估項目的 keys（從所有 answerScores 中收集）
+    const allCriteriaKeys = new Set<string>()
+    this.answerScores.forEach(score => {
+      Object.keys(score.scores).forEach(key => allCriteriaKeys.add(key))
+    })
+    
+    // 動態計算每個評估項目的平均分數
+    const finalScores: ScoringCriteria = {}
+    allCriteriaKeys.forEach(key => {
+      finalScores[key] = this.calculateAverageScore(key)
+    })
     
     console.log('🔍 計算出的最終分數:', finalScores)
     
@@ -389,27 +394,44 @@ export class InterviewScoringEngine {
     }
   }
 
-  private calculateAverageScore(criteria: keyof ScoringCriteria): number {
+  private calculateAverageScore(criteriaKey: string): number {
     if (this.answerScores.length === 0) return 0
     
-    // 個人特質和專業深度使用累加制，其他使用平均制
-    if (criteria === 'personalTraits' || criteria === 'professionalDepth') {
-      const total = this.answerScores.reduce((sum, score) => sum + score.scores[criteria], 0)
-      return Math.min(total, 10) // 最高不超過10分
+    // 查找該評估項目的計分邏輯
+    const criteriaInfo = this.evaluationCriteria.find(c => 
+      c.key === criteriaKey || 
+      c.key === criteriaKey.replace(/([A-Z])/g, '_$1').toLowerCase() // 轉換駝峰為下劃線
+    )
+    
+    // 判斷是否為加分制（從 evaluationCriteria 中查找，或根據 key 判斷）
+    const isAdditionSystem = criteriaInfo?.scoring_logic === 'addition' || 
+      criteriaKey === 'professionalDepth' || 
+      criteriaKey === 'personalTraits' ||
+      (criteriaInfo && criteriaKey !== 'contentCompleteness' && criteriaKey !== 'logicalClarity' && criteriaKey !== 'communicationSkills')
+    
+    // 加分制項目使用累加制，其他使用平均制
+    if (isAdditionSystem) {
+      const total = this.answerScores.reduce((sum, score) => {
+        const scoreValue = score.scores[criteriaKey] || 0
+        return sum + scoreValue
+      }, 0)
+      const maxScore = criteriaInfo?.max_score || 10
+      return Math.min(total, maxScore) // 最高不超過 max_score
     } else {
-      const total = this.answerScores.reduce((sum, score) => sum + score.scores[criteria], 0)
-      return total / this.answerScores.length
+      const total = this.answerScores.reduce((sum, score) => {
+        const scoreValue = score.scores[criteriaKey] || 0
+        return sum + scoreValue
+      }, 0)
+      return this.answerScores.length > 0 ? total / this.answerScores.length : 0
     }
   }
 
   private isPassed(finalScores: ScoringCriteria): boolean {
-    return (
-      finalScores.contentCompleteness >= this.passingCriteria.contentCompleteness &&
-      finalScores.logicalClarity >= this.passingCriteria.logicalClarity &&
-      finalScores.professionalDepth >= this.passingCriteria.professionalDepth &&
-      finalScores.communicationSkills >= this.passingCriteria.communicationSkills &&
-      finalScores.personalTraits >= this.passingCriteria.personalTraits
-    )
+    // 動態檢查所有評估項目是否達到合格標準
+    return Object.entries(finalScores).every(([key, score]) => {
+      const passingScore = this.passingCriteria[key] || 0
+      return score >= passingScore
+    })
   }
 
   private generateSummary(finalScores: ScoringCriteria): {
@@ -422,9 +444,9 @@ export class InterviewScoringEngine {
     const recommendations: string[] = []
 
     // 分析各項分數
-    Object.entries(finalScores).forEach(([criteria, score]) => {
+    Object.entries(finalScores).forEach(([criteriaKey, score]) => {
       const level = getScoreLevel(score)
-      const criteriaName = this.getCriteriaName(criteria as keyof ScoringCriteria)
+      const criteriaName = this.getCriteriaName(criteriaKey)
       
       if (level === ScoreLevel.EXCELLENT || level === ScoreLevel.GOOD) {
         strengths.push(`${criteriaName}表現優秀 (${score.toFixed(1)}分)`)
@@ -437,15 +459,25 @@ export class InterviewScoringEngine {
     return { strengths, weaknesses, recommendations }
   }
 
-  private getCriteriaName(criteria: keyof ScoringCriteria): string {
-    const names = {
+  private getCriteriaName(criteriaKey: string): string {
+    // 首先從 evaluationCriteria 中查找顯示名稱
+    const criteriaInfo = this.evaluationCriteria.find(c => 
+      c.key === criteriaKey || 
+      c.key === criteriaKey.replace(/([A-Z])/g, '_$1').toLowerCase()
+    )
+    if (criteriaInfo) {
+      return criteriaInfo.display_name
+    }
+    
+    // 如果找不到，使用預設名稱映射
+    const names: Record<string, string> = {
       contentCompleteness: '內容完整性',
       logicalClarity: '邏輯清晰度',
       professionalDepth: '專業深度',
       communicationSkills: '溝通表達',
       personalTraits: '個人特質'
     }
-    return names[criteria]
+    return names[criteriaKey] || criteriaKey
   }
 
   /**
