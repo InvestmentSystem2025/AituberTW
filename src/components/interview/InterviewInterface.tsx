@@ -3,7 +3,7 @@ import { useRouter } from 'next/router'
 import { InterviewModelViewer } from '@/components/interview/InterviewModelViewer'
 import settingsStore from '@/features/stores/settings'
 import homeStore from '@/features/stores/home'
-import { getInterviewAIResponse, getInterviewAIResponseStream } from '@/features/chat/interviewAIChat'
+import { getInterviewAIResponseStream } from '@/features/chat/interviewAIChat'
 import { Message } from '@/features/messages/messages'
 import { useInterviewVoiceRecognition } from '@/hooks/useInterviewVoiceRecognition'
 import { InterviewScoringEngine } from '@/features/interview/interviewScoring'
@@ -14,6 +14,8 @@ import { useInterviewRecording } from '@/hooks/useInterviewRecording'
 import { supabase } from '@/lib/supabaseClient'
 import toastStore from '@/features/stores/toast'
 import { responseTimeTracker } from '@/utils/responseTimeTracker'
+import { speakCharacter } from '@/features/messages/speakCharacter'
+import { generateMessageId } from '@/utils/messageUtils'
 
 // 直接在組件內定義面試問題
 const INTERVIEW_QUESTIONS = [
@@ -229,6 +231,141 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   
   // 面試開始時間記錄
   const interviewStartTimeRef = useRef<number>(Date.now())
+  
+  // TTS 排隊管理器：用於處理分段 TTS
+  const ttsQueueRef = useRef<{
+    sentenceBuffer: string
+    currentEmotion: string
+    sessionId: string
+    isProcessing: boolean
+  }>({
+    sentenceBuffer: '',
+    currentEmotion: 'neutral',
+    sessionId: '',
+    isProcessing: false,
+  })
+  
+  /**
+   * 清理文本中的標籤（移除所有 [...] 格式的標籤）
+   * 包括完整的標籤（如 [CONTENT_START]）和不完整的標籤（如 [CONTENT_START）
+   */
+  const cleanTagsFromText = useCallback((text: string): string => {
+    let cleaned = text
+    
+    // 移除完整的標籤 [TAG]
+    cleaned = cleaned.replace(/\[[^\]]+\]/g, '')
+    
+    // 移除不完整的標籤（只有 [ 但沒有 ]）
+    // 從右到左處理，找到最後一個 [ 並移除它之後的所有內容
+    const lastBracketIndex = cleaned.lastIndexOf('[')
+    if (lastBracketIndex !== -1) {
+      // 檢查是否在這個 [ 之後有 ]
+      const afterBracket = cleaned.substring(lastBracketIndex + 1)
+      if (!afterBracket.includes(']')) {
+        // 如果沒有 ]，移除從 [ 開始到結尾的所有內容
+        cleaned = cleaned.substring(0, lastBracketIndex)
+      }
+    }
+    
+    return cleaned.trim()
+  }, [])
+  
+  /**
+   * 處理 TTS 分段播放：當遇到標點符號時，提取完整句子並發送 TTS 請求
+   */
+  const processTTSQueue = useCallback((text: string, emotion: string) => {
+    const queue = ttsQueueRef.current
+    
+    // 更新情感標籤
+    if (emotion) {
+      queue.currentEmotion = emotion
+    }
+    
+    // 如果這是新的回應，初始化 sessionId
+    if (!queue.sessionId) {
+      queue.sessionId = generateMessageId()
+    }
+    
+    // 將新文本添加到緩衝區
+    queue.sentenceBuffer += text
+    
+    // 標點符號正則表達式（中文、英文、日文等）
+    // 每次創建新的正則表達式實例，避免狀態問題
+    const punctuationRegex = /[。！？.!?；;：:，,、]/g
+    
+    // 查找標點符號
+    let lastIndex = 0
+    const matches: Array<{ index: number; punctuation: string }> = []
+    
+    // 收集所有匹配的標點符號
+    let match: RegExpMatchArray | null
+    while ((match = punctuationRegex.exec(queue.sentenceBuffer)) !== null) {
+      const matchIndex = match.index
+      if (matchIndex !== undefined) {
+        matches.push({
+          index: matchIndex,
+          punctuation: match[0],
+        })
+      }
+    }
+    
+    // 按順序處理每個完整的句子
+    for (const match of matches) {
+      // 提取完整句子（從上次位置到標點符號位置+1）
+      let sentence = queue.sentenceBuffer.substring(lastIndex, match.index + match.punctuation.length).trim()
+      
+      // 清理標籤：移除所有 [...] 格式的標籤
+      sentence = cleanTagsFromText(sentence)
+      
+      if (sentence.length > 0) {
+        // 發送 TTS 請求（使用 speakCharacter，它已經有排隊機制）
+        speakCharacter(
+          queue.sessionId,
+          {
+            message: sentence,
+            emotion: queue.currentEmotion as any,
+          },
+          () => {
+            // onStart callback
+          },
+          () => {
+            // onComplete callback - 當一個句子播放完成後，處理下一個
+            queue.isProcessing = false
+          }
+        )
+      }
+      
+      lastIndex = match.index + match.punctuation.length
+    }
+    
+    // 移除已處理的句子，保留未完成的句子
+    queue.sentenceBuffer = queue.sentenceBuffer.substring(lastIndex)
+  }, [cleanTagsFromText])
+  
+  /**
+   * 處理串流結束後的剩餘文本
+   */
+  const flushTTSQueue = useCallback(() => {
+    const queue = ttsQueueRef.current
+    if (queue.sentenceBuffer.trim().length > 0) {
+      // 清理標籤：移除所有 [...] 格式的標籤
+      let remainingText = cleanTagsFromText(queue.sentenceBuffer.trim())
+      
+      if (remainingText.length > 0) {
+        // 發送剩餘的文本
+        speakCharacter(
+          queue.sessionId,
+          {
+            message: remainingText,
+            emotion: queue.currentEmotion as any,
+          }
+        )
+      }
+      queue.sentenceBuffer = ''
+    }
+    // 重置 sessionId，準備下一個回應
+    queue.sessionId = ''
+  }, [cleanTagsFromText])
   
   // 錄製功能
   const recording = useInterviewRecording({ enableRecording })
@@ -460,11 +597,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       console.log('📊 當前對話歷史:', conversationMessages.map(m => `${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 50) : '...'}`))
       console.log('📊 當前對話歷史長度:', conversationMessages.length)
       
-      // 記錄 API 調用開始時間
-      responseTimeTracker.recordApiCallStart(trackingId)
-      
-      // 調用AI API獲取回應，傳遞當前問題編號、問題列表和評分標準
-      const aiResponse = await getInterviewAIResponse(
+      // 調用AI API獲取串流回應
+      const stream = await getInterviewAIResponseStream(
         conversationMessages, 
         currentQuestionIndex + 1,
         questionsList,
@@ -472,35 +606,142 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         trackingId // 傳遞追蹤 ID
       )
       
-      // 記錄 API 調用結束時間
-      responseTimeTracker.recordApiCallEnd(trackingId)
+      // 創建一個新的 AI 消息用於實時更新
+      const streamingMessageId = `ai-streaming-${Date.now()}`
+      let streamingContent = ''
+      let finalEmotion = 'neutral'
+      let finalScoreResult: AnswerScore | null = null
       
-      if (aiResponse.text) {
+      // 初始化 TTS 隊列（新的回應）
+      ttsQueueRef.current.sessionId = generateMessageId()
+      ttsQueueRef.current.sentenceBuffer = ''
+      ttsQueueRef.current.currentEmotion = 'neutral'
+      
+      // 添加初始空消息
+      const initialMessage: ChatMessage = {
+        id: streamingMessageId,
+        type: 'ai',
+        content: '',
+        timestamp: new Date(),
+      }
+      setMessages((prev) => [...prev, initialMessage])
+      
+      // 讀取串流
+      const reader = stream.getReader()
+      let buffer = ''
+      let rawBuffer = '' // 用於累積原始內容（包含元數據）
+      
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          
+          // ReadableStream<string> 返回的 value 已經是字符串（已經過 processTextChunk 處理）
+          // 但我們需要累積原始內容來檢查元數據
+          rawBuffer += value
+          
+          // 檢查是否包含元數據標記
+          const metadataRegex = /\[INTERVIEW_METADATA_START\]([\s\S]*?)\[INTERVIEW_METADATA_END\]/
+          const metadataMatch = rawBuffer.match(metadataRegex)
+          
+          if (metadataMatch) {
+            // 解析元數據
+            try {
+              const metadata = JSON.parse(metadataMatch[1])
+              if (metadata.type === 'metadata') {
+                finalEmotion = metadata.emotion || 'neutral'
+                // 更新 TTS 隊列的情感標籤
+                ttsQueueRef.current.currentEmotion = finalEmotion
+                // 處理 scoreResult，將 timestamp 轉換回 Date 對象
+                if (metadata.scoreResult) {
+                  const scoreResult = metadata.scoreResult
+                  // 如果 timestamp 是字符串，轉換為 Date
+                  if (scoreResult.timestamp && typeof scoreResult.timestamp === 'string') {
+                    scoreResult.timestamp = new Date(scoreResult.timestamp)
+                  } else if (!scoreResult.timestamp || !(scoreResult.timestamp instanceof Date)) {
+                    scoreResult.timestamp = new Date()
+                  }
+                  finalScoreResult = scoreResult
+                } else {
+                  finalScoreResult = null
+                }
+                // 從 rawBuffer 中移除元數據標記（但 value 已經不包含元數據了）
+              }
+            } catch (e) {
+              console.error('解析元數據失敗:', e)
+            }
+          }
+          
+          // value 已經經過 processTextChunk 處理，應該只包含 CONTENT 標籤內的內容
+          // 但為了安全起見，我們還是移除任何可能遺漏的標籤和元數據標記
+          let displayChunk = value
+            .replace(/\[INTERVIEW_METADATA_START\]([\s\S]*?)\[INTERVIEW_METADATA_END\]/g, '')
+            .replace(/\[CONTENT_START\]/g, '')
+            .replace(/\[CONTENT_END\]/g, '')
+            .replace(/\[EMOTION_START\]([\s\S]*?)\[EMOTION_END\]/g, '')
+            .replace(/\[SCORE_START\]([\s\S]*?)\[SCORE_END\]/g, '')
+          
+          // 累積已經清理過的內容
+          buffer += displayChunk
+          
+          if (buffer !== streamingContent) {
+            // 計算新增的文本
+            const newText = buffer.substring(streamingContent.length)
+            streamingContent = buffer
+            
+            // 更新消息內容
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === streamingMessageId
+                  ? { ...msg, content: streamingContent }
+                  : msg
+              )
+            )
+            scrollToBottom()
+            
+            // 處理 TTS 分段播放：當有新文本時，檢查是否有標點符號
+            if (newText.length > 0) {
+              // 使用當前的 emotion（如果已經從元數據中獲取，否則使用隊列中的 emotion）
+              const currentEmotion = finalEmotion || ttsQueueRef.current.currentEmotion
+              processTTSQueue(newText, currentEmotion)
+            }
+          }
+        }
+        
+        // 串流結束後，處理剩餘的 TTS 文本
+        flushTTSQueue()
+        
+        // 記錄 API 調用結束時間
+        responseTimeTracker.recordApiCallEnd(trackingId)
+        
         // 完成追蹤並記錄指標
-        responseTimeTracker.completeTracking(trackingId, aiResponse.text)
+        responseTimeTracker.completeTracking(trackingId, streamingContent)
         
-        addAIMessage(
-          aiResponse.text,
-          aiResponse.scoreResult?.aiFeedback,
-          aiResponse.scoreResult?.additionsDetail,
-          aiResponse.scoreResult?.deductionsDetail
-        )
-        
-        // 情感標籤已包含在 aiResponse.emotion 中
-        // 表情會在 TTS 播放時（model.speak()）自動應用，不需要在這裡手動設置
-        
-        // 處理評分結果
-        if (aiResponse.scoreResult) {
-          setAnswerScores(prev => [...prev, aiResponse.scoreResult!])
-          // 直接將已評分的結果添加到評分引擎
-          scoringEngine.addScoredAnswer(aiResponse.scoreResult)
-          // 增加問題索引
+        // 更新最終消息，包含評分信息
+        if (finalScoreResult) {
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === streamingMessageId
+                ? {
+                    ...msg,
+                    content: streamingContent,
+                    aiFeedback: finalScoreResult?.aiFeedback,
+                    aiAdditionsDetail: finalScoreResult?.additionsDetail,
+                    aiDeductionsDetail: finalScoreResult?.deductionsDetail,
+                  }
+                : msg
+            )
+          )
+          
+          // 處理評分結果
+          setAnswerScores(prev => [...prev, finalScoreResult!])
+          scoringEngine.addScoredAnswer(finalScoreResult)
           setCurrentQuestionIndex(prev => prev + 1)
         }
         
         // 檢查是否為面試結束的回應
         const endKeywords = ['面試到此結束', '面試結束', '感謝你的參與', '我們的面試', '後續流程']
-        const isInterviewEnding = endKeywords.some(keyword => aiResponse.text.includes(keyword))
+        const isInterviewEnding = endKeywords.some(keyword => streamingContent.includes(keyword))
         
         if (isInterviewEnding) {
           // 先等待 3 秒讓 AI 最後的回覆完全顯示，再停止錄製
@@ -548,6 +789,11 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         } else {
           setIsWaitingForAnswer(true)
         }
+      } catch (streamError) {
+        console.error('讀取串流錯誤:', streamError)
+        throw streamError
+      } finally {
+        reader.releaseLock()
       }
     } catch (error) {
       console.error('AI回應錯誤:', error)
@@ -630,28 +876,157 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         console.log('📊 evaluationCriteria 數量:', evaluationCriteria.length)
         
         // 調用 AI 產生第一句話（空對話歷史，AI 應該會產生打招呼）
-        const aiResponse = await getInterviewAIResponse(
+        const stream = await getInterviewAIResponseStream(
           [], // 空的對話歷史，觸發打招呼
           0,  // questionIndex = 0（還未開始問問題）
           questionsList,
           evaluationCriteria
         )
         
-        console.log('✅ AI 回應:', aiResponse.text?.substring(0, 100) + '...')
+        // 創建一個新的 AI 消息用於實時更新
+        const streamingMessageId = `ai-streaming-${Date.now()}`
+        let streamingContent = ''
+        let finalScoreResult: AnswerScore | null = null
         
-        if (aiResponse.text) {
-          addAIMessage(
-            aiResponse.text,
-            aiResponse.scoreResult?.aiFeedback,
-            aiResponse.scoreResult?.additionsDetail,
-            aiResponse.scoreResult?.deductionsDetail
+        // 初始化 TTS 隊列（新的回應）
+        ttsQueueRef.current.sessionId = generateMessageId()
+        ttsQueueRef.current.sentenceBuffer = ''
+        ttsQueueRef.current.currentEmotion = 'neutral'
+        
+        // 添加初始空消息
+        const initialMessage: ChatMessage = {
+          id: streamingMessageId,
+          type: 'ai',
+          content: '',
+          timestamp: new Date(),
+        }
+        setMessages((prev) => [...prev, initialMessage])
+        
+        // 讀取串流
+        const reader = stream.getReader()
+        let buffer = ''
+        
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            
+            // ReadableStream<string> 返回的 value 已經是字符串
+            buffer += value
+            
+            // 檢查是否包含元數據標記
+            const metadataRegex = /\[INTERVIEW_METADATA_START\]([\s\S]*?)\[INTERVIEW_METADATA_END\]/
+            const metadataMatch = buffer.match(metadataRegex)
+            
+            if (metadataMatch) {
+              // 解析元數據
+              try {
+                const metadata = JSON.parse(metadataMatch[1])
+                if (metadata.type === 'metadata') {
+                  // 處理 scoreResult，將 timestamp 轉換回 Date 對象
+                  if (metadata.scoreResult) {
+                    const scoreResult = metadata.scoreResult
+                    // 如果 timestamp 是字符串，轉換為 Date
+                    if (scoreResult.timestamp && typeof scoreResult.timestamp === 'string') {
+                      scoreResult.timestamp = new Date(scoreResult.timestamp)
+                    } else if (!scoreResult.timestamp || !(scoreResult.timestamp instanceof Date)) {
+                      scoreResult.timestamp = new Date()
+                    }
+                    finalScoreResult = scoreResult
+                  } else {
+                    finalScoreResult = null
+                  }
+                  // 移除元數據標記
+                  buffer = buffer.replace(metadataRegex, '')
+                }
+              } catch (e) {
+                console.error('解析元數據失敗:', e)
+              }
+            }
+            
+            // value 已經經過 processTextChunk 處理，應該只包含 CONTENT 標籤內的內容
+            // 但為了安全起見，我們還是移除任何可能遺漏的標籤和元數據標記
+            let displayChunk = value
+              .replace(/\[INTERVIEW_METADATA_START\]([\s\S]*?)\[INTERVIEW_METADATA_END\]/g, '')
+              .replace(/\[CONTENT_START\]/g, '')
+              .replace(/\[CONTENT_END\]/g, '')
+              .replace(/\[EMOTION_START\]([\s\S]*?)\[EMOTION_END\]/g, '')
+              .replace(/\[SCORE_START\]([\s\S]*?)\[SCORE_END\]/g, '')
+            
+            // 累積已經清理過的內容
+            buffer += displayChunk
+            
+            if (buffer !== streamingContent) {
+              // 計算新增的文本
+              const newText = buffer.substring(streamingContent.length)
+              streamingContent = buffer
+              
+              // 更新消息內容
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === streamingMessageId
+                    ? { ...msg, content: streamingContent }
+                    : msg
+                )
+              )
+              scrollToBottom()
+              
+              // 處理 TTS 分段播放：當有新文本時，檢查是否有標點符號
+              // 注意：這裡需要從元數據中獲取 emotion，如果還沒有則使用 neutral
+              if (newText.length > 0) {
+                processTTSQueue(newText, 'neutral') // 初始問候語使用 neutral
+              }
+            }
+          }
+          
+          console.log('✅ AI 回應:', streamingContent.substring(0, 100) + '...')
+          
+          // 串流結束後，處理剩餘的 TTS 文本
+          flushTTSQueue()
+          
+          if (streamingContent.trim()) {
+            // 更新最終消息，包含評分信息
+            if (finalScoreResult) {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === streamingMessageId
+                    ? {
+                        ...msg,
+                        content: streamingContent,
+                        aiFeedback: finalScoreResult?.aiFeedback,
+                        aiAdditionsDetail: finalScoreResult?.additionsDetail,
+                        aiDeductionsDetail: finalScoreResult?.deductionsDetail,
+                      }
+                    : msg
+                )
+              )
+            }
+            setIsWaitingForAnswer(true)
+          } else {
+            // 如果沒有回應，使用預設問候語
+            console.warn('⚠️ AI 沒有返回回應，使用預設問候語')
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === streamingMessageId
+                  ? { ...msg, content: '你好，我是今天的AI面試官，很高興見到你！首先請你做個簡短的自我介紹。' }
+                  : msg
+              )
+            )
+            setIsWaitingForAnswer(true)
+          }
+        } catch (streamError) {
+          console.error('讀取串流錯誤:', streamError)
+          // 如果失敗，使用預設問候語
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === streamingMessageId
+                ? { ...msg, content: '你好，我是今天的AI面試官，很高興見到你！首先請你做個簡短的自我介紹。' }
+                : msg
+            )
           )
           setIsWaitingForAnswer(true)
-        } else {
-          // 如果沒有回應，使用預設問候語
-          console.warn('⚠️ AI 沒有返回回應，使用預設問候語')
-          addAIMessage('你好，我是今天的AI面試官，很高興見到你！首先請你做個簡短的自我介紹。')
-          setIsWaitingForAnswer(true)
+        } finally {
+          reader.releaseLock()
         }
       } catch (error) {
         console.error('❌ AI回應錯誤:', error)

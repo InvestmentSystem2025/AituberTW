@@ -16,6 +16,7 @@ import { InterviewScoringEngine } from '@/features/interview/interviewScoring'
 import { AnswerScore } from '@/types/interviewScoring'
 import { speakCharacter } from '../messages/speakCharacter'
 import { generateMessageId } from '@/utils/messageUtils'
+import { responseTimeTracker } from '@/utils/responseTimeTracker'
 
 /**
  * 檢測當前面試階段
@@ -845,8 +846,10 @@ export async function getInterviewAIResponse(
  */
 export async function getInterviewAIResponseStream(
   messages: Message[],
+  questionIndex?: number,
   interviewQuestions?: string[],
-  evaluationCriteria?: any[]
+  evaluationCriteria?: any[],
+  trackingId?: string
 ): Promise<ReadableStream<string>> {
   const {
     aiApiKey,
@@ -990,10 +993,145 @@ export async function getInterviewAIResponseStream(
         const reader = response.body.getReader()
         const decoder = new TextDecoder('utf-8')
         let buffer = ''
-        let fullResponse = '' // 收集完整的回應用於TTS
-        // 緩衝評分區塊，避免在 [SCORE_START] 與 [SCORE_END] 之間的內容被直接輸出到UI
-        let inScoreBlock = false
-        let scoreBlockBuffer = ''
+        let fullResponse = '' // 收集完整的回應用於最終解析
+        let displayBuffer = '' // 用於顯示的緩衝區（已清理標籤）
+        
+        // 標籤解析狀態
+        let emotionExtracted = false
+        let currentEmotion = 'neutral'
+        
+        // 狀態機：用於解析標籤
+        type TagType = 'CONTENT' | 'SCORE' | 'EMOTION' | null
+        let currentTag: TagType = null
+        let tagBuffer = '' // 用於累積標籤名稱（從 [ 到 ]）
+        let contentBuffer = '' // 用於累積標籤內容（從 ] 到下一個 [）
+        let inTagName = false // 是否正在解析標籤名稱（在 [ 和 ] 之間）
+        let bracketDepth = 0 // 用於追蹤嵌套的 [ ]
+        let contentBufferReturnedLength = 0 // 記錄已經返回的 contentBuffer 長度，避免重複
+        
+        // 記錄 API 調用開始時間（如果傳入了 trackingId）
+        if (trackingId && typeof window !== 'undefined') {
+          responseTimeTracker.recordApiCallStart(trackingId)
+        }
+
+        /**
+         * 處理文字塊，解析標籤並返回可顯示的內容
+         * 使用狀態機方式處理跨 chunk 的標籤
+         * 邏輯：第一次收到 [ 到 ] 為止的內容先判斷是什麼標籤
+         * 直到下一次收到 [ 之前的內容為該標籤的 value
+         * 收到 ] 則代表該標籤以及內容的結束
+         */
+        const processTextChunk = (textChunk: string): string => {
+          fullResponse += textChunk
+          let newContent = '' // 本次新增的內容
+          
+          for (let i = 0; i < textChunk.length; i++) {
+            const char = textChunk[i]
+            
+            if (char === '[' && !inTagName) {
+              // 開始新的標籤
+              // 如果之前在 CONTENT 標籤中，先輸出剩餘的內容
+              if (currentTag === 'CONTENT' && contentBuffer.length > contentBufferReturnedLength) {
+                newContent += contentBuffer.substring(contentBufferReturnedLength)
+                contentBuffer = ''
+                contentBufferReturnedLength = 0
+              }
+              
+              // 如果之前在 SCORE 或 EMOTION 標籤中，清空緩衝區
+              if (currentTag === 'SCORE' || currentTag === 'EMOTION') {
+                contentBuffer = ''
+              }
+              
+              inTagName = true
+              bracketDepth = 1
+              tagBuffer = ''
+              currentTag = null
+            } else if (char === ']' && inTagName) {
+              // 標籤名稱結束
+              bracketDepth--
+              if (bracketDepth === 0) {
+                // 判斷標籤類型
+                const tagName = tagBuffer.trim()
+                if (tagName === 'CONTENT_START') {
+                  currentTag = 'CONTENT'
+                  contentBuffer = ''
+                  contentBufferReturnedLength = 0
+                } else if (tagName === 'CONTENT_END') {
+                  // CONTENT 標籤結束，輸出剩餘內容
+                  if (currentTag === 'CONTENT') {
+                    if (contentBuffer.length > contentBufferReturnedLength) {
+                      newContent += contentBuffer.substring(contentBufferReturnedLength)
+                    }
+                    contentBuffer = ''
+                    contentBufferReturnedLength = 0
+                  }
+                  currentTag = null
+                } else if (tagName === 'SCORE_START') {
+                  currentTag = 'SCORE'
+                  contentBuffer = ''
+                  // 確保不會有內容被返回
+                  contentBufferReturnedLength = 0
+                } else if (tagName === 'SCORE_END') {
+                  // SCORE 標籤結束，不輸出但保存內容到 fullResponse（用於後續解析）
+                  if (currentTag === 'SCORE') {
+                    // 內容已經在 fullResponse 中，這裡只需要清空緩衝區
+                    contentBuffer = ''
+                    contentBufferReturnedLength = 0
+                  }
+                  currentTag = null
+                } else if (tagName === 'EMOTION_START') {
+                  currentTag = 'EMOTION'
+                  contentBuffer = ''
+                } else if (tagName === 'EMOTION_END') {
+                  // EMOTION 標籤結束，提取情感但不輸出
+                  if (currentTag === 'EMOTION') {
+                    const emotion = contentBuffer.trim()
+                    if (emotion && ['neutral', 'happy', 'angry', 'sad', 'relaxed', 'surprised'].includes(emotion)) {
+                      currentEmotion = emotion
+                      emotionExtracted = true
+                    }
+                    contentBuffer = ''
+                  }
+                  currentTag = null
+                }
+                
+                inTagName = false
+                tagBuffer = ''
+              } else {
+                tagBuffer += char
+              }
+            } else if (inTagName) {
+              // 在標籤名稱中
+              if (char === '[') {
+                bracketDepth++
+              }
+              tagBuffer += char
+            } else {
+              // 在標籤內容中或標籤外
+              if (currentTag === 'CONTENT') {
+                // CONTENT 標籤的內容需要顯示
+                contentBuffer += char
+              } else if (currentTag === 'SCORE' || currentTag === 'EMOTION') {
+                // SCORE 和 EMOTION 標籤的內容不顯示，但需要累積
+                contentBuffer += char
+              } else {
+                // 不在任何標籤中，不應該輸出（因為所有內容都應該在 CONTENT 標籤中）
+                // 如果遇到這種情況，可能是標籤解析出現問題，忽略該字符
+                // 不添加到 newContent，避免輸出不應該顯示的內容
+              }
+            }
+          }
+          
+          // 如果當前在 CONTENT 標籤中，返回新增的內容（相對於上次返回的內容）
+          if (currentTag === 'CONTENT' && contentBuffer.length > contentBufferReturnedLength) {
+            const newContentFromBuffer = contentBuffer.substring(contentBufferReturnedLength)
+            newContent += newContentFromBuffer
+            contentBufferReturnedLength = contentBuffer.length
+          }
+          
+          // 返回新增的內容
+          return newContent
+        }
 
         try {
           while (true) {
@@ -1007,38 +1145,30 @@ export async function getInterviewAIResponseStream(
             for (const line of lines) {
               if (line.startsWith('0:')) {
                 const content = line.substring(2).trim()
-                const decodedContent = JSON.parse(content)
-                const textChunk = String(decodedContent)
-                if (textChunk.includes('[SCORE_START]')) inScoreBlock = true
-                if (inScoreBlock) {
-                  scoreBlockBuffer += textChunk
-                  if (textChunk.includes('[SCORE_END]')) {
-                    inScoreBlock = false
-                    scoreBlockBuffer = ''
+                try {
+                  const decodedContent = JSON.parse(content)
+                  const textChunk = String(decodedContent)
+                  const displayChunk = processTextChunk(textChunk)
+                  if (displayChunk) {
+                    displayBuffer += displayChunk
+                    controller.enqueue(displayChunk)
                   }
-                } else {
-                  fullResponse += textChunk
-                  controller.enqueue(textChunk)
+                } catch (error) {
+                  console.error('Error parsing 0: content:', error)
                 }
               } else if (line.startsWith('data:')) {
-                // OpenAI API形式のストリームデータに対応
-                const content = line.substring(5).trim() // 'data:' プレフィックスを除去
-                if (content === '[DONE]') continue // 終了マーカーは無視
+                // OpenAI API形式的串流數據
+                const content = line.substring(5).trim()
+                if (content === '[DONE]') continue
 
                 try {
                   const data = JSON.parse(content)
                   const text = data.choices?.[0]?.delta?.content
                   if (text) {
-                    if (text.includes('[SCORE_START]')) inScoreBlock = true
-                    if (inScoreBlock) {
-                      scoreBlockBuffer += text
-                      if (text.includes('[SCORE_END]')) {
-                        inScoreBlock = false
-                        scoreBlockBuffer = ''
-                      }
-                    } else {
-                      fullResponse += text
-                      controller.enqueue(text)
+                    const displayChunk = processTextChunk(text)
+                    if (displayChunk) {
+                      displayBuffer += displayChunk
+                      controller.enqueue(displayChunk)
                     }
                   }
                 } catch (error) {
@@ -1088,8 +1218,11 @@ export async function getInterviewAIResponseStream(
                   const data = JSON.parse(line)
                   // Ollama形式: {"message":{"role":"assistant","content":"テキスト"}}
                   if (data.message?.content) {
-                    fullResponse += data.message.content
-                    controller.enqueue(data.message.content)
+                    const displayChunk = processTextChunk(data.message.content)
+                    if (displayChunk) {
+                      displayBuffer += displayChunk
+                      controller.enqueue(displayChunk)
+                    }
                   }
                 } catch (error) {
                   console.error('Error parsing JSONL:', error, line)
@@ -1097,22 +1230,38 @@ export async function getInterviewAIResponseStream(
               }
             }
           }
-          // 解析情感標籤和評分信息
+          
+          // 記錄 API 調用結束時間
+          if (trackingId && typeof window !== 'undefined') {
+            responseTimeTracker.recordApiCallEnd(trackingId)
+          }
+          
+          // 串流結束後，解析完整回應中的評分信息
           if (fullResponse.trim()) {
             const parsedResponse = parseInterviewResponse(fullResponse)
-            const { emotion, score, cleanResponse } = parsedResponse
+            const { emotion: finalEmotion, score, cleanResponse } = parsedResponse
+            
+            // 使用解析出的情感（如果已提取則使用已提取的，否則使用解析出的）
+            const emotion = emotionExtracted ? currentEmotion : finalEmotion
             
             // 處理評分結果
+            let scoreResult = null
             if (score) {
-              const scoreResult = createAnswerScore(score)
+              scoreResult = createAnswerScore(score, questionIndex, evaluationCriteria)
               if (scoreResult) {
                 logScoreResult(scoreResult)
               }
             }
             
-            //一時停止暫停TTS
-            // 串流結束後觸發TTS（包含情感標籤）
-            // triggerInterviewTTS(cleanResponse, emotion)
+            // 將最終結果（情感、評分）附加到流中，使用特殊格式傳遞
+            // 使用特殊標記來傳遞元數據
+            const metadata = JSON.stringify({
+              type: 'metadata',
+              emotion,
+              scoreResult,
+              cleanResponse: displayBuffer.trim() || cleanResponse
+            })
+            controller.enqueue(`\n[INTERVIEW_METADATA_START]${metadata}[INTERVIEW_METADATA_END]`)
           }
         } catch (error) {
           console.error(
