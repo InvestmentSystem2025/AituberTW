@@ -109,6 +109,45 @@ router.get('/tools', (req: Request, res: Response) => {
           resumeInfo: 'object (required) - 從履歷中提取的資訊',
           questionCount: 'number (optional) - 要生成的問題數量，預設為 5'
         }
+      },
+      {
+        name: 'automation_health',
+        description: '檢查遊戲自動化後端狀態與模板清單',
+        parameters: {}
+      },
+      {
+        name: 'detect_grid',
+        description: '擷取踩地雷棋盤狀態 (covered/flag/0..8/unknown)',
+        parameters: {}
+      },
+      {
+        name: 'click_cell',
+        description: '在指定列行左鍵點擊以開啟格子',
+        parameters: {
+          r: 'number (required) - 列索引 (0-based)',
+          c: 'number (required) - 行索引 (0-based)'
+        }
+      },
+      {
+        name: 'flag_cell',
+        description: '在指定列行右鍵插旗',
+        parameters: {
+          r: 'number (required) - 列索引 (0-based)',
+          c: 'number (required) - 行索引 (0-based)'
+        }
+      },
+      {
+        name: 'step_solve',
+        description: '執行一次 deterministic 採地雷求解並同步操作棋盤',
+        parameters: {}
+      },
+      {
+        name: 'autoplay',
+        description: '連續 deterministic 求解，可設定最大步數與延遲',
+        parameters: {
+          max_steps: 'number (optional) - 最大步數，預設 50',
+          sleep_ms: 'number (optional) - 每步延遲毫秒數，預設 80'
+        }
       }
     ]
   });

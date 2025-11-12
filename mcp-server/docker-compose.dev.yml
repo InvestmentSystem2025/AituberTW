@@ -18,6 +18,7 @@ services:
       - MAX_FILE_SIZE=50mb
       - ALLOWED_FILE_TYPES=.pdf,.doc,.docx,.txt
       - OCR_SERVICE_URL=http://ocr-service:5000  # OCR 服務的內部 URL
+      - MSW_AUTOMATION_BASE_URL=http://host.docker.internal:5001
     command: npm run dev
     restart: unless-stopped
     depends_on:

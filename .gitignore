@@ -12,6 +12,9 @@
 /.next/
 /out/
 
+# python
+.venv/
+
 # production
 /build
 

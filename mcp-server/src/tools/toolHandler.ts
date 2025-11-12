@@ -2,6 +2,14 @@ import { CallToolRequest, CallToolResult } from '@modelcontextprotocol/sdk/types
 import { readPDF } from './pdfTools.js';
 import { listFiles, saveContext, getContext } from './fileTools.js';
 import { extractResumeInfo, generateQuestions } from './resumeTools.js';
+import {
+  automationHealth,
+  autoplay,
+  clickCell,
+  detectGrid,
+  flagCell,
+  stepSolve,
+} from './gameTools.js';
 
 export async function handleToolCall(request: CallToolRequest): Promise<CallToolResult> {
   const { name, arguments: args } = request.params;
@@ -45,6 +53,27 @@ export async function handleToolCall(request: CallToolRequest): Promise<CallTool
         return await generateQuestions(
           args.resumeInfo as Record<string, any>,
           args.questionCount as number | undefined
+        );
+
+      case 'automation_health':
+        return await automationHealth();
+
+      case 'detect_grid':
+        return await detectGrid();
+
+      case 'click_cell':
+        return await clickCell(args.r as number, args.c as number);
+
+      case 'flag_cell':
+        return await flagCell(args.r as number, args.c as number);
+
+      case 'step_solve':
+        return await stepSolve();
+
+      case 'autoplay':
+        return await autoplay(
+          args.max_steps as number | undefined,
+          args.sleep_ms as number | undefined
         );
 
       default:

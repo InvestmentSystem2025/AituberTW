@@ -95,6 +95,83 @@ export const mcpTools: Tool[] = [
       },
       required: ['resumeInfo']
     }
+  },
+  {
+    name: 'automation_health',
+    description: '檢查本機遊戲自動化後端服務狀態與已載入模板。',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'detect_grid',
+    description: '擷取踩地雷棋盤，目前回傳 covered/flag/0..8/unknown 的二維陣列。',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'click_cell',
+    description: '在踩地雷棋盤指定列行進行左鍵點擊。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        r: {
+          type: 'number',
+          description: '列索引（0-based）'
+        },
+        c: {
+          type: 'number',
+          description: '行索引（0-based）'
+        }
+      },
+      required: ['r', 'c']
+    }
+  },
+  {
+    name: 'flag_cell',
+    description: '在踩地雷棋盤指定列行進行右鍵插旗。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        r: {
+          type: 'number',
+          description: '列索引（0-based）'
+        },
+        c: {
+          type: 'number',
+          description: '行索引（0-based）'
+        }
+      },
+      required: ['r', 'c']
+    }
+  },
+  {
+    name: 'step_solve',
+    description: '觸發一次 deterministic 規則求解，會自動開格與插旗。',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'autoplay',
+    description: '連續進行 deterministic 求解，可設定最大步數與兩步間延遲毫秒。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        max_steps: {
+          type: 'number',
+          description: '最大循環步數，預設 50'
+        },
+        sleep_ms: {
+          type: 'number',
+          description: '每次操作之間的延遲毫秒數，預設 80'
+        }
+      }
+    }
   }
 ];
 

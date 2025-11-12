@@ -16,6 +16,10 @@ mcp-server/
 │   ├── index.ts           # 主入口
 │   ├── routes/            # API 路由
 │   └── tools/             # MCP 工具
+├── game-automation/       # 遊戲自動化（踩地雷）模組
+│   ├── config.json        # 棋盤與辨識設定
+│   ├── README.md          # 操作說明
+│   └── python/            # Flask + OpenCV 後端
 ├── ocr-service/           # OCR 子服務
 │   ├── app.py            # Flask OCR API
 │   ├── Dockerfile        # OCR 容器
@@ -72,6 +76,10 @@ docker-compose -f docker-compose.ollama.yml up -d mcp-server ocr-service
   - `generate_interview_questions` - 生成面試問題
   - `save_interview_context` - 儲存面試上下文
   - `get_interview_context` - 取得面試上下文
+  - `automation_health` - 檢查遊戲自動化後端狀態
+  - `detect_grid` - 取得踩地雷棋盤
+  - `click_cell` / `flag_cell` - 操控踩地雷格子
+  - `step_solve` / `autoplay` - 執行 deterministic 求解
 
 ### OCR Service (port 5000)
 
@@ -92,7 +100,12 @@ NEXT_PUBLIC_MCP_SERVER_URL=http://mcp-server:3001
 
 # 或本地開發（直接訪問）
 NEXT_PUBLIC_MCP_SERVER_URL=http://localhost:3001
+
+# 遊戲自動化後端（預設指向宿主 127.0.0.1:5001）
+MSW_AUTOMATION_BASE_URL=http://host.docker.internal:5001
 ```
+
+> 若 MCP Server 直接在宿主機上執行，可省略 `MSW_AUTOMATION_BASE_URL`，後端將使用 `http://127.0.0.1:5001`。
 
 ### OCR 設定
 

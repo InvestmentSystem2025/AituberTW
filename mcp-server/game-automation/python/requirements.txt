@@ -1,0 +1,6 @@
+flask
+mss
+opencv-python
+numpy
+pyautogui
+
