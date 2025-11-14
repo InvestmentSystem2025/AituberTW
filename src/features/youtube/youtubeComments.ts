@@ -12,31 +12,33 @@ import { processAIResponse } from '../chat/handlers'
 import homeStore from '@/features/stores/home'
 import { messageSelectors } from '../messages/messageSelectors'
 
-export const getLiveChatId = async (
-  liveId: string,
-  youtubeKey: string
-): Promise<string> => {
-  const params = {
-    part: 'liveStreamingDetails',
-    id: liveId,
-    key: youtubeKey,
+export const getLiveChatId = async (liveId: string): Promise<string> => {
+  if (!liveId) return ''
+
+  const cached = settingsStore.getState().youtubeLiveChatId
+  if (cached) {
+    return cached
   }
-  const query = new URLSearchParams(params)
-  const response = await fetch(
-    `https://youtube.googleapis.com/youtube/v3/videos?${query}`,
-    {
-      method: 'get',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+
+  try {
+    const response = await fetch(`/api/youtube/video?videoId=${encodeURIComponent(liveId)}`)
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '')
+      console.warn('[YouTube] video details API failed', response.status, text)
+      return ''
     }
-  )
-  const json = await response.json()
-  if (json.items == undefined || json.items.length == 0) {
+
+    const json = await response.json()
+    const liveChatId = json.items?.[0]?.liveStreamingDetails?.activeLiveChatId || ''
+    if (liveChatId) {
+      settingsStore.setState({ youtubeLiveChatId: liveChatId })
+    }
+    return liveChatId
+  } catch (error) {
+    console.warn('[YouTube] Failed to fetch live chat id', error)
     return ''
   }
-  const liveChatId = json.items[0].liveStreamingDetails.activeLiveChatId
-  return liveChatId
 }
 
 type YouTubeComment = {
@@ -49,48 +51,49 @@ type YouTubeComments = YouTubeComment[]
 
 const retrieveLiveComments = async (
   activeLiveChatId: string,
-  youtubeKey: string,
   youtubeNextPageToken: string,
   setYoutubeNextPageToken: (token: string) => void
 ): Promise<YouTubeComments> => {
-  console.log('retrieveLiveComments')
-  let url =
-    'https://youtube.googleapis.com/youtube/v3/liveChat/messages?liveChatId=' +
-    activeLiveChatId +
-    '&part=authorDetails%2Csnippet&key=' +
-    youtubeKey
-  if (youtubeNextPageToken !== '' && youtubeNextPageToken !== undefined) {
-    url = url + '&pageToken=' + youtubeNextPageToken
-  }
-  const response = await fetch(url, {
-    method: 'get',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  })
-  const json = await response.json()
-  const items = json.items
-  setYoutubeNextPageToken(json.nextPageToken)
+  try {
+    const params = new URLSearchParams({ liveChatId: activeLiveChatId })
+    if (youtubeNextPageToken) {
+      params.set('pageToken', youtubeNextPageToken)
+    }
 
-  const comments = items
-    .map((item: any) => ({
-      userName: item.authorDetails.displayName,
-      userIconUrl: item.authorDetails.profileImageUrl,
-      userComment:
-        item.snippet.textMessageDetails?.messageText ||
-        item.snippet.superChatDetails?.userComment ||
-        '',
-    }))
-    .filter(
-      (comment: any) =>
-        comment.userComment !== '' && !comment.userComment.startsWith('#')
-    )
+    const response = await fetch(`/api/youtube/live-chat?${params.toString()}`)
 
-  if (comments.length === 0) {
+    if (!response.ok) {
+      const text = await response.text().catch(() => '')
+      console.warn('[YouTube] live chat API failed', response.status, text)
+      return []
+    }
+
+    const json = await response.json()
+    const items = json.items || []
+
+    if (json.nextPageToken) {
+      setYoutubeNextPageToken(json.nextPageToken)
+    }
+
+    const comments = items
+      .map((item: any) => ({
+        userName: item.authorDetails.displayName,
+        userIconUrl: item.authorDetails.profileImageUrl,
+        userComment:
+          item.snippet.textMessageDetails?.messageText ||
+          item.snippet.superChatDetails?.userComment ||
+          '',
+      }))
+      .filter(
+        (comment: any) =>
+          comment.userComment !== '' && !comment.userComment.startsWith('#')
+      )
+
+    return comments
+  } catch (error) {
+    console.warn('[YouTube] Failed to retrieve live comments', error)
     return []
   }
-
-  return comments
 }
 
 export const fetchAndProcessComments = async (
@@ -101,14 +104,16 @@ export const fetchAndProcessComments = async (
   const chatLog = messageSelectors.getTextAndImageMessages(hs.chatLog)
 
   try {
-    const liveChatId = await getLiveChatId(ss.youtubeLiveId, ss.youtubeApiKey)
+    const liveChatId = await getLiveChatId(ss.youtubeLiveId)
 
     if (liveChatId) {
       // 会話の継続が必要かどうかを確認
       if (
-        !ss.youtubeSleepMode &&
-        ss.youtubeContinuationCount < 1 &&
-        ss.conversationContinuityMode
+        !ss.youtubeLiveId ||
+        hs.chatProcessing ||
+        hs.chatProcessingCount > 0 ||
+        !ss.youtubeMode ||
+        !ss.youtubePlaying
       ) {
         const isContinuationNeeded =
           await checkIfResponseContinuationIsRequired(chatLog)
@@ -132,7 +137,6 @@ export const fetchAndProcessComments = async (
       // コメントを取得
       const youtubeComments = await retrieveLiveComments(
         liveChatId,
-        ss.youtubeApiKey,
         ss.youtubeNextPageToken,
         (token: string) =>
           settingsStore.setState({ youtubeNextPageToken: token })
@@ -190,6 +194,6 @@ export const fetchAndProcessComments = async (
       }
     }
   } catch (error) {
-    console.error('Error fetching comments:', error)
+    console.warn('Error fetching comments:', error)
   }
 }

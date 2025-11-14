@@ -15,6 +15,11 @@ import Capture from './capture'
 import { isMultiModalAvailable } from '@/features/constants/aiModels'
 import { AIService } from '@/features/constants/settings'
 import { getLatestAssistantMessage } from '@/utils/assistantMessageUtils'
+import {
+  configureObsStream,
+  startObsStream,
+  stopObsStream,
+} from '@/lib/obsWebSocket'
 
 // モバイルデバイス検出用のカスタムフック
 const useIsMobile = () => {
@@ -80,6 +85,7 @@ export const Menu = () => {
   const { t } = useTranslation()
 
   const [markdownContent, setMarkdownContent] = useState('')
+  const [youtubeProcessing, setYoutubeProcessing] = useState(false)
 
   // ロングタップ処理用の関数
   const handleTouchStart = () => {
@@ -199,6 +205,87 @@ export const Menu = () => {
     }
   }, [showWebcam])
 
+  const handleToggleYoutube = useCallback(async () => {
+    if (youtubeProcessing) return
+
+    setYoutubeProcessing(true)
+
+    try {
+      const current = settingsStore.getState()
+
+      if (!current.youtubePlaying) {
+        const {
+          youtubeBroadcastId,
+          youtubeStreamKey,
+          youtubeIngestionAddress,
+          youtubeObsConfigured,
+        } = current
+
+        if (!youtubeBroadcastId || !youtubeStreamKey || !youtubeIngestionAddress) {
+          window.alert('請先在設定頁建立直播並取得串流資訊')
+          return
+        }
+
+        if (!youtubeObsConfigured) {
+          await configureObsStream({
+            ingestionAddress: youtubeIngestionAddress,
+            streamKey: youtubeStreamKey,
+          })
+          settingsStore.setState({ youtubeObsConfigured: true })
+        }
+
+        await startObsStream()
+
+        settingsStore.setState({
+          youtubePlaying: true,
+          youtubeBroadcastActive: true,
+        })
+      } else {
+        try {
+          await stopObsStream()
+        } catch (error) {
+          console.warn('[YouTube] 停止 OBS 串流時發生錯誤', error)
+        }
+
+        const { youtubeAutoUpload } = settingsStore.getState()
+
+        if (youtubeAutoUpload) {
+          const recordingsResponse = await fetch('/api/youtube/list-recordings')
+          if (recordingsResponse.ok) {
+            const { recordings }: { recordings: { fileName: string }[] } =
+              await recordingsResponse.json()
+            const latest = recordings[0]?.fileName
+            if (latest) {
+              await fetch('/api/youtube/upload-video', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  fileName: latest,
+                  title: 'YouTube Live Recording',
+                }),
+              })
+            }
+          }
+        }
+
+        settingsStore.setState({
+          youtubePlaying: false,
+          youtubeBroadcastActive: false,
+          youtubeLiveChatId: '',
+        })
+      }
+    } catch (error) {
+      console.error('[YouTube] 控制直播時發生錯誤', error)
+      settingsStore.setState({
+        youtubePlaying: false,
+        youtubeBroadcastActive: false,
+        youtubeLiveChatId: '',
+      })
+    } finally {
+      setYoutubeProcessing(false)
+    }
+  }, [youtubeProcessing])
+
   return (
     <>
       {/* ロングタップ用の透明な領域（モバイルでコントロールパネルが非表示の場合） */}
@@ -295,12 +382,9 @@ export const Menu = () => {
                 <div className="order-5">
                   <IconButton
                     iconName={youtubePlaying ? '24/PauseAlt' : '24/Video'}
-                    isProcessing={false}
-                    onClick={() =>
-                      settingsStore.setState({
-                        youtubePlaying: !youtubePlaying,
-                      })
-                    }
+                    isProcessing={youtubeProcessing}
+                    onClick={handleToggleYoutube}
+                    disabled={youtubeProcessing}
                   />
                 </div>
               )}
