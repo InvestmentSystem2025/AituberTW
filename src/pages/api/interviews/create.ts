@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { getServiceClient, getAuthUserIdFromRequest } from '@/lib/supabaseServer'
+import { sendInterviewCreationEmail } from '@/lib/interviewNotifications'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -31,11 +32,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (profiles_id) payload.profiles_id = profiles_id
   if (candidate_email) payload.candidate_email = String(candidate_email).toLowerCase()
 
-  const { error } = await supa.from('interviews').insert(payload)
+  const { data: inserted, error } = await supa
+    .from('interviews')
+    .insert(payload)
+    .select('id, company_id, job_opening_id, start_time, candidate_email, profiles_id')
+    .single()
+
   if (error) {
     console.error('Interview create error:', error)
     return res.status(400).json({ error: 'CREATE_FAILED' })
   }
+
+  try {
+    await sendInterviewCreationEmail(inserted)
+  } catch (mailErr) {
+    console.error('Interview notification email error:', mailErr)
+    return res.status(500).json({ error: 'EMAIL_FAILED' })
+  }
+
   return res.status(200).json({ ok: true })
 }
 

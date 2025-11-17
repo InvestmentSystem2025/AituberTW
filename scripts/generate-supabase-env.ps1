@@ -1,7 +1,8 @@
 Param(
     [string]$JwtSecret = 'dev-very-strong-jwt-secret-key-for-aituber-kit-2025',
     [string]$PostgresPassword = 'dev-strong-password-2025',
-    [string]$SiteUrl = 'http://localhost:8001'
+    [string]$SiteUrl = 'http://localhost:8001',
+    [string]$AuthRedirectUrl = 'http://localhost:3000'
 )
 
 Set-StrictMode -Version Latest
@@ -33,6 +34,9 @@ $newEnvPath = Join-Path -Path $envDir -ChildPath 'supabase.env'
 $lines = @()
 $lines += "# Generated at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 $lines += "SITE_URL=$SiteUrl"
+$lines += "SUPABASE_AUTH_URL=http://supabase-kong:8000"
+$lines += "SUPABASE_AUTH_PUBLIC_URL=$SiteUrl"
+$lines += "AUTH_REDIRECT_URL=$AuthRedirectUrl"
 $lines += "POSTGRES_PASSWORD=$PostgresPassword"
 $lines += "JWT_SECRET=$JwtSecret"
 $lines += "SUPABASE_ANON_KEY=$anonToken"

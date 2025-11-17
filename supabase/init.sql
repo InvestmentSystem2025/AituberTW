@@ -1654,6 +1654,27 @@ BEGIN
   END IF;
 END $$;
 
+-- =========================
+-- Custom Email Verification (Self-managed)
+-- =========================
+CREATE TABLE IF NOT EXISTS public.email_verifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'signup',
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, type)
+);
+
+ALTER TABLE public.email_verifications ENABLE ROW LEVEL SECURITY;
+-- service_role will bypass RLS; block anon/authenticated by default
+CREATE POLICY email_verifications_block_all_select ON public.email_verifications FOR SELECT TO anon, authenticated USING (false);
+CREATE POLICY email_verifications_block_all_insert ON public.email_verifications FOR INSERT TO anon, authenticated WITH CHECK (false);
+CREATE POLICY email_verifications_block_all_update ON public.email_verifications FOR UPDATE TO anon, authenticated USING (false) WITH CHECK (false);
+CREATE POLICY email_verifications_block_all_delete ON public.email_verifications FOR DELETE TO anon, authenticated USING (false);
+
 -- 兼容 Realtime（Ecto）: schema_migrations 需要 inserted_at 欄位，且型別為 timestamp without time zone（NaiveDateTime）
 DO $$
 BEGIN

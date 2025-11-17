@@ -101,13 +101,14 @@
       - ocr-service
 
   # 主應用服務
+  #- /app/node_modules
   app:
     build: .
     ports:
       - "3000:3000"
     volumes:
       - .:/app
-      - /app/node_modules
+      - app_node_modules:/app/node_modules
     env_file:
       - .env
     environment:
@@ -175,7 +176,7 @@
     env_file:
       - .env
     environment:
-      GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:8001}
+      GOTRUE_SITE_URL: ${AUTH_REDIRECT_URL:-http://localhost:3000}
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
       GOTRUE_DB_DRIVER: postgres
@@ -183,7 +184,19 @@
       GOTRUE_JWT_SECRET: ${JWT_SECRET}
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       GOTRUE_DISABLE_SIGNUP: "false"
-      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      GOTRUE_MAILER_SECURE_EMAIL_CHANGE_ENABLED: "true"
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: ${SMTP_CONFIRMATION_PATH:-/auth/confirm}
+      GOTRUE_MAILER_URLPATHS_INVITE: ${SMTP_INVITE_PATH:-/auth/confirm}
+      GOTRUE_MAILER_DEFAULT_REDIRECT_URL: ${SMTP_DEFAULT_REDIRECT_URL:-http://localhost:3000}
+      GOTRUE_SMTP_HOST: ""
+      GOTRUE_SMTP_PORT: "0"
+      GOTRUE_SMTP_USER: ""
+      GOTRUE_SMTP_PASS: ""
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-AITuber Kit}
+      GOTRUE_SMTP_MAX_FREQUENCY: ${SMTP_MAX_FREQUENCY:-1s}
+      GOTRUE_EXTERNAL_URL: ${SITE_URL:-http://localhost:8001}
       GOTRUE_API_EXTERNAL_URL: ${SITE_URL:-http://localhost:8001}
       API_EXTERNAL_URL: ${SITE_URL:-http://localhost:8001}
       TZ: Asia/Taipei
@@ -383,6 +396,7 @@ volumes:
   mcp_data:
   supabase_db_data:
   supabase_storage_data:
+  app_node_modules:
 
 networks:
   default:

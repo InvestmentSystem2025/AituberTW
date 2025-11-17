@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/router'
 import { supabase } from '@/lib/supabaseClient'
 
 type TosResp = { accepted: boolean; version: string | null; accepted_at?: string }
 
 export default function MePage() {
+  const router = useRouter()
   const [email, setEmail] = useState('')
   const [profileId, setProfileId] = useState<string>('')
   const [userRole, setUserRole] = useState<'jobSeeker' | 'recruiter' | null>(null)
   const [copied, setCopied] = useState(false)
   const [tos, setTos] = useState<TosResp | null>(null)
   const [activeTab, setActiveTab] = useState<'profile' | 'company' | 'interviews'>('profile')
+  const [tabInitialized, setTabInitialized] = useState(false)
   const [companies, setCompanies] = useState<any[]>([])
   const [interviews, setInterviews] = useState<any[]>([])
   const [readInterviewIds, setReadInterviewIds] = useState<Set<string>>(new Set())
@@ -36,6 +39,56 @@ export default function MePage() {
     window.location.href = '/login'
   }
 
+  // 處理 URL 參數中的 tab（在客戶端初始化時讀取）
+  useEffect(() => {
+    if (!tabInitialized) {
+      // 先從 window.location 讀取（客戶端立即可用）
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search)
+        const tab = params.get('tab')
+        if (tab === 'interviews' || tab === 'profile' || tab === 'company') {
+          setActiveTab(tab)
+          setTabInitialized(true)
+          return
+        }
+      }
+      // 如果 window 不可用，等待 router 準備好
+      if (router.isReady) {
+        const tabParam = router.query.tab as string | undefined
+        if (tabParam === 'interviews' || tabParam === 'profile' || tabParam === 'company') {
+          setActiveTab(tabParam)
+        }
+        setTabInitialized(true)
+      }
+    } else if (router.isReady) {
+      // router 準備好後，如果 URL 參數改變，更新 tab
+      const tabParam = router.query.tab as string | undefined
+      if (tabParam === 'interviews' || tabParam === 'profile' || tabParam === 'company') {
+        setActiveTab(tabParam)
+      }
+    }
+  }, [router.isReady, router.query.tab, tabInitialized])
+
+  // 當切換到面試標籤時（無論是從 URL 參數還是點擊按鈕），標記所有為已讀
+  useEffect(() => {
+    if (activeTab === 'interviews' && interviews.length > 0) {
+      setReadInterviewIds(prevReadIds => {
+        const newReadIds = new Set(prevReadIds)
+        let hasNew = false
+        interviews.forEach(iv => {
+          if (!newReadIds.has(iv.id)) {
+            newReadIds.add(iv.id)
+            hasNew = true
+          }
+        })
+        if (hasNew && typeof window !== 'undefined') {
+          localStorage.setItem('read_interview_ids', JSON.stringify(Array.from(newReadIds)))
+        }
+        return newReadIds
+      })
+    }
+  }, [activeTab, interviews])
+
   useEffect(() => {
     const init = async () => {
       const { data: session } = await supabase.auth.getSession()
@@ -55,10 +108,8 @@ export default function MePage() {
         }
         if (profile?.role) {
           setUserRole(profile.role as 'jobSeeker' | 'recruiter')
-          // 如果是 jobSeeker，強制顯示 profile 分頁
-          if (profile.role === 'jobSeeker') {
-            setActiveTab('profile')
-          }
+          // 不需要在這裡設定預設 tab，因為已經在初始化時從 URL 讀取了
+          // 如果沒有 URL 參數，getInitialTab() 已經返回 'profile' 作為預設值
         }
       }
       
@@ -88,7 +139,7 @@ export default function MePage() {
       }
     }
     init()
-  }, [])
+  }, [router.isReady])
 
   const loadCompanies = async (token?: string) => {
     const r = await fetch('/api/company/list', { headers: token ? { Authorization: `Bearer ${token}` } : {} })

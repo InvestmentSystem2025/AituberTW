@@ -120,8 +120,7 @@ export default function TosAndSignupPage() {
       // try sign in to obtain token for claim (depends on email confirmation policy)
       const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({ email, password })
       if (signInErr || !signInData?.session?.access_token) {
-        // cannot claim immediately; let server hook or Edge function handle later
-        window.location.href = '/me'
+        setMessage('帳號已建立，請前往信箱點擊驗證連結後再登入。')
         return
       }
       // claim

@@ -904,7 +904,10 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         
         // 讀取串流
         const reader = stream.getReader()
+        // buffer：純文字（已移除標籤與元數據），用於實際顯示
         let buffer = ''
+        // rawBuffer：原始串流內容（包含元數據），只用來偵測與解析 [INTERVIEW_METADATA_*] 區塊
+        let rawBuffer = ''
         
         try {
           while (true) {
@@ -912,11 +915,12 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             if (done) break
             
             // ReadableStream<string> 返回的 value 已經是字符串
-            buffer += value
+            // 先累積到 rawBuffer，用於解析元數據
+            rawBuffer += value
             
             // 檢查是否包含元數據標記
             const metadataRegex = /\[INTERVIEW_METADATA_START\]([\s\S]*?)\[INTERVIEW_METADATA_END\]/
-            const metadataMatch = buffer.match(metadataRegex)
+            const metadataMatch = rawBuffer.match(metadataRegex)
             
             if (metadataMatch) {
               // 解析元數據
@@ -937,7 +941,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                     finalScoreResult = null
                   }
                   // 移除元數據標記
-                  buffer = buffer.replace(metadataRegex, '')
+                  rawBuffer = rawBuffer.replace(metadataRegex, '')
                 }
               } catch (e) {
                 console.error('解析元數據失敗:', e)
