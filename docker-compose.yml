@@ -1,40 +1,40 @@
 ﻿services:
-  # Ollama 服務
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-      - CUDA_VISIBLE_DEVICES=0
-      - NVIDIA_VISIBLE_DEVICES=0
-    restart: unless-stopped
-    gpus: all
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    command: serve
+  # Ollama 服務（已註解）
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   environment:
+  #     - OLLAMA_HOST=0.0.0.0
+  #     - CUDA_VISIBLE_DEVICES=0
+  #     - NVIDIA_VISIBLE_DEVICES=0
+  #   restart: unless-stopped
+  #   gpus: all
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+  #   command: serve
 
-  # ChromaDB 服務
-  chromadb:
-    image: ghcr.io/chroma-core/chroma:0.5.0
-    container_name: chromadb
-    ports:
-      - "8000:8000"
-    volumes:
-      - chroma_data:/chroma/chroma
-    environment:
-      - CHROMA_DB_DIR=/chroma/chroma
-      - ANONYMIZED_TELEMETRY=FALSE
-    command: uvicorn chromadb.app:app --host 0.0.0.0 --port 8000
-    restart: unless-stopped
+  # ChromaDB 服務（已註解）
+  # chromadb:
+  #   image: ghcr.io/chroma-core/chroma:0.5.0
+  #   container_name: chromadb
+  #   ports:
+  #     - "8000:8000"
+  #   volumes:
+  #     - chroma_data:/chroma/chroma
+  #   environment:
+  #     - CHROMA_DB_DIR=/chroma/chroma
+  #     - ANONYMIZED_TELEMETRY=FALSE
+  #   command: uvicorn chromadb.app:app --host 0.0.0.0 --port 8000
+  #   restart: unless-stopped
 
   # n8n 自動化服務（步驟4）
   n8n:
@@ -59,8 +59,8 @@
       - N8N_PORT=5678
       - N8N_PROTOCOL=http
     restart: unless-stopped
-    depends_on:
-      - chromadb
+    # depends_on:
+    #   - chromadb
 
   # OCR 服務
   ocr-service:
@@ -111,15 +111,15 @@
     env_file:
       - .env
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - OLLAMA_EMBEDDING_MODEL=jeffh/intfloat-multilingual-e5-large-instruct:f16
-      - CHROMA_URL=http://chromadb:8000
+      # - OLLAMA_BASE_URL=http://ollama:11434
+      # - OLLAMA_EMBEDDING_MODEL=jeffh/intfloat-multilingual-e5-large-instruct:f16
+      # - CHROMA_URL=http://chromadb:8000
       - NEXT_PUBLIC_MCP_SERVER_URL=http://localhost:3001
       - TZ=Asia/Taipei
       - SUPABASE_INTERNAL_URL=http://supabase-kong:8000
     depends_on:
-      - ollama
-      - chromadb
+      # - ollama
+      # - chromadb
       - mcp-server
     command: npm run dev
     networks:
@@ -328,7 +328,7 @@
       KONG_PROXY_LISTEN: 0.0.0.0:8000
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
     ports:
-      - "8001:8000"  # 使用 8001 避免與 ChromaDB 的 8000 衝突
+      - "8001:8000"
     volumes:
       - ./supabase/kong.yml:/var/lib/kong/kong.yml:ro
     restart: unless-stopped
@@ -376,8 +376,8 @@
     restart: "no"
 
 volumes:
-  ollama_data:
-  chroma_data:
+  # ollama_data:
+  # chroma_data:
   n8n_data:
   mcp_uploads:
   mcp_data:
