@@ -1,5 +1,6 @@
 # ベースイメージとしてNode.js 20を使用
-FROM node:20
+#FROM node:20
+FROM node:20-bookworm-slim
 
 # 必要なシステムライブラリをインストール
 RUN apt-get update && apt-get install -y \
@@ -18,7 +19,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # 依存関係をインストール
-RUN npm ci --omit=dev
+RUN npm ci
 
 # アプリケーションのソースコードをコピー
 COPY . .
