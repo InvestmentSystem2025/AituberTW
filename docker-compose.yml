@@ -114,7 +114,8 @@
       # - OLLAMA_BASE_URL=http://ollama:11434
       # - OLLAMA_EMBEDDING_MODEL=jeffh/intfloat-multilingual-e5-large-instruct:f16
       # - CHROMA_URL=http://chromadb:8000
-      - NEXT_PUBLIC_MCP_SERVER_URL=http://localhost:3001
+      - NEXT_PUBLIC_MCP_SERVER_URL=${NEXT_PUBLIC_MCP_SERVER_URL:-/api/mcp}
+      - MCP_SERVER_INTERNAL_URL=http://mcp-server:3001
       - TZ=Asia/Taipei
       - SUPABASE_INTERNAL_URL=http://supabase-kong:8000
     depends_on:
