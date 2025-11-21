@@ -228,7 +228,7 @@
       REALTIME_CLUSTER_STRATEGY: none
       RELEASE_DISTRIBUTION: none
       RLIMIT_NOFILE: "100000"
-      ELIXIR_ERL_OPTIONS: "-logger level error -kernel logger_level error"
+      ELIXIR_ERL_OPTIONS: "-proto_dist inet_tcp -logger level error -kernel logger_level error"
       # 避免與其他服務共用的 schema_migrations 衝突（Ecto 專用）
       DB_MIGRATIONS_TABLE: realtime_schema_migrations
       TZ: Asia/Taipei
