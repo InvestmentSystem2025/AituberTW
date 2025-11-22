@@ -14,7 +14,7 @@ type EvaluationCriteria = {
   display_name: string; 
   weight: number; 
   max_score: number; 
-  scoring_logic?: 'addition' | 'deduction';
+  scoring_logic?: 'addition' | 'deduction' | 'composite';
   addition_rules?: string[];
   deduction_rules?: string[];
   sort_order: number 
@@ -66,7 +66,7 @@ export default function CompanyAdminPage() {
       { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'addition' as const, deduction_rules: '', addition_rules: '正確回答專業問題+2.5分\n展現深度理解+1分' },
       { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '表達不清晰-1分\n表達不流暢-1分', addition_rules: '' },
       { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'addition' as const, deduction_rules: '', addition_rules: '向上心求知慾+2.5分\n持續學習+2.5分\n活潑外向+2.5分\n堅強抗壓+2.5分' }
-    ] as Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction'; addition_rules: string; deduction_rules: string }>
+    ] as Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction' | 'composite'; addition_rules: string; deduction_rules: string }>
   })
   const [editJob, setEditJob] = useState({ 
     job_title: '', 
@@ -78,7 +78,7 @@ export default function CompanyAdminPage() {
       criteria_minimums: {} as Record<string, string>,
       active_criteria: [] as string[]
     },
-    customCriteria: [] as Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction'; addition_rules: string; deduction_rules: string; id?: string }>
+    customCriteria: [] as Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction' | 'composite'; addition_rules: string; deduction_rules: string; id?: string }>
   })
 
   // forms
@@ -790,7 +790,7 @@ export default function CompanyAdminPage() {
     }
 
     // 載入 evaluation_criteria
-    let customCriteria: Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction'; addition_rules: string; deduction_rules: string; id?: string }> = []
+    let customCriteria: Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction' | 'composite'; addition_rules: string; deduction_rules: string; id?: string }> = []
     let enableCustomCriteria = false
 
     try {
@@ -1255,19 +1255,23 @@ export default function CompanyAdminPage() {
                               <td colSpan={5} style={{ padding: 6 }}>
                                 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: '150px' }}>
-                                    <label style={{ fontSize: '0.9em', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+                                      <label style={{ fontSize: '0.9em', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
                                       計算邏輯
                                     </label>
                                     <select
                                       value={criteria.scoring_logic || 'deduction'}
                                       onChange={(e) => {
+                                        const newLogic = e.target.value as 'addition' | 'deduction' | 'composite'
                                         const updated = [...newJob.customCriteria]
                                         updated[idx] = { 
                                           ...criteria, 
-                                          scoring_logic: e.target.value as 'addition' | 'deduction',
-                                          // 切換時清空對應的規則
-                                          addition_rules: e.target.value === 'addition' ? criteria.addition_rules : '',
-                                          deduction_rules: e.target.value === 'deduction' ? criteria.deduction_rules : ''
+                                          scoring_logic: newLogic,
+                                          // 切換時依邏輯清空/保留規則：
+                                          // - addition: 只需要加分規則，扣分規則清空
+                                          // - deduction: 只需要扣分規則，加分規則清空
+                                          // - composite: 兩者都需要，保留既有內容
+                                          addition_rules: newLogic === 'deduction' ? '' : (criteria.addition_rules || ''),
+                                          deduction_rules: newLogic === 'addition' ? '' : (criteria.deduction_rules || '')
                                         }
                                         setNewJob({ ...newJob, customCriteria: updated })
                                       }}
@@ -1275,11 +1279,12 @@ export default function CompanyAdminPage() {
                                     >
                                       <option value="deduction">扣分制</option>
                                       <option value="addition">加分制</option>
+                                      <option value="composite">綜合制</option>
                                     </select>
                                   </div>
                                   <div style={{ flex: 1 }}>
                                     <label style={{ display: 'block', textAlign: 'center', marginBottom: 4, fontSize: '0.9em', fontWeight: 'bold' }}>
-                                      加分邏輯 {criteria.scoring_logic === 'addition' && '(必填)'}
+                                      加分邏輯 {(criteria.scoring_logic === 'addition' || criteria.scoring_logic === 'composite') && '(必填)'}
                                     </label>
                                     <textarea
                                       value={criteria.addition_rules || ''}
@@ -1305,7 +1310,11 @@ export default function CompanyAdminPage() {
                                         }
                                       }}
                                       disabled={criteria.scoring_logic === 'deduction'}
-                                      placeholder={criteria.scoring_logic === 'addition' ? '例如：正確回答專業問題+2.5分' : '加分制時才需填寫'}
+                                      placeholder={
+                                        criteria.scoring_logic === 'addition' || criteria.scoring_logic === 'composite'
+                                          ? '例如：正確回答專業問題+2.5分'
+                                          : '加分制或綜合制時才需填寫'
+                                      }
                                       style={{ 
                                         width: '100%', 
                                         padding: 4, 
@@ -1320,7 +1329,7 @@ export default function CompanyAdminPage() {
                                   </div>
                                   <div style={{ flex: 1 }}>
                                     <label style={{ display: 'block', textAlign: 'center', marginBottom: 4, fontSize: '0.9em', fontWeight: 'bold' }}>
-                                      減分邏輯 {criteria.scoring_logic === 'deduction' && '(必填)'}
+                                      減分邏輯 {(criteria.scoring_logic === 'deduction' || criteria.scoring_logic === 'composite') && '(必填)'}
                                     </label>
                                     <textarea
                                       value={criteria.deduction_rules || ''}
@@ -1346,7 +1355,11 @@ export default function CompanyAdminPage() {
                                         }
                                       }}
                                       disabled={criteria.scoring_logic === 'addition'}
-                                      placeholder={criteria.scoring_logic === 'deduction' ? '例如：答非所問-2分' : '扣分制時才需填寫'}
+                                      placeholder={
+                                        criteria.scoring_logic === 'deduction' || criteria.scoring_logic === 'composite'
+                                          ? '例如：答非所問-2分'
+                                          : '扣分制或綜合制時才需填寫'
+                                      }
                                       style={{ 
                                         width: '100%', 
                                         padding: 4, 
@@ -1616,12 +1629,17 @@ export default function CompanyAdminPage() {
                                           <select
                                             value={criteria.scoring_logic || 'deduction'}
                                             onChange={(e) => {
+                                              const newLogic = e.target.value as 'addition' | 'deduction' | 'composite'
                                               const updated = [...editJob.customCriteria]
                                               updated[idx] = { 
                                                 ...criteria, 
-                                                scoring_logic: e.target.value as 'addition' | 'deduction',
-                                                addition_rules: e.target.value === 'addition' ? criteria.addition_rules : '',
-                                                deduction_rules: e.target.value === 'deduction' ? criteria.deduction_rules : ''
+                                                scoring_logic: newLogic,
+                                                // 與新增職種時相同的邏輯：
+                                                // - addition: 只保留加分規則
+                                                // - deduction: 只保留扣分規則
+                                                // - composite: 同時保留兩者
+                                                addition_rules: newLogic === 'deduction' ? '' : (criteria.addition_rules || ''),
+                                                deduction_rules: newLogic === 'addition' ? '' : (criteria.deduction_rules || '')
                                               }
                                               setEditJob({ ...editJob, customCriteria: updated })
                                             }}
@@ -1629,6 +1647,7 @@ export default function CompanyAdminPage() {
                                           >
                                             <option value="deduction">扣分制</option>
                                             <option value="addition">加分制</option>
+                                            <option value="composite">綜合制</option>
                                           </select>
                                         </div>
                                         <div style={{ flex: 1 }}>

@@ -17,7 +17,14 @@ import { responseTimeTracker } from '@/utils/responseTimeTracker'
 import { speakCharacter } from '@/features/messages/speakCharacter'
 import { generateMessageId } from '@/utils/messageUtils'
 
-// 直接在組件內定義面試問題
+/**
+ * 備用的預設面試問題列表
+ * 注意：如果 interviewConfig 中有提供問題（從資料庫），則會優先使用資料庫的問題
+ * 只有在沒有資料庫問題時才會使用此備用列表
+ * 
+ * 面試時的 prompt 模板是從 @/features/chat/interviewPromptTemplates.ts 的 
+ * INTERVIEW_PROMPT_TEMPLATES.SYSTEM_PROMPT 使用的，不會使用此處定義的問題作為 prompt
+ */
 const INTERVIEW_QUESTIONS = [
   {
     id: 'greeting',
@@ -66,20 +73,6 @@ const INTERVIEW_QUESTIONS = [
   },
 ]
 
-// AI面試官的提示詞
-const INTERVIEW_PROMPT = `你是一位專業的AI面試官，負責進行面試。請遵循以下規則：
-
-1. 保持專業、友善的語調
-2. 根據面試者的回答給予適當的回饋
-3. 如果面試者的回答太簡短，可以追問更多細節
-4. 如果面試者的回答偏離主題，可以溫和地引導回正題
-5. 保持面試的專業性和結構性
-
-當前面試階段：{currentStage}
-面試者回答：{userAnswer}
-
-請根據面試者的回答給予適當的回饋，然後提出下一個問題或結束面試。`
-
 interface ChatMessage {
   id: string
   type: 'ai' | 'user'
@@ -88,6 +81,8 @@ interface ChatMessage {
   aiFeedback?: string
   aiAdditionsDetail?: string
   aiDeductionsDetail?: string
+  // 每次 AI 回覆後的「當前累積分數快照」（依評分項目 key）
+  aiCurrentScores?: Record<string, number>
 }
 
 interface InterviewConfig {
@@ -115,6 +110,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   const modelType = settingsStore((s) => s.modelType)
   const router = useRouter()
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const messagesRef = useRef<ChatMessage[]>([])
   const [userInput, setUserInput] = useState('')
   const [isWaitingForAnswer, setIsWaitingForAnswer] = useState(false)
   const [isAIResponding, setIsAIResponding] = useState(false)
@@ -154,49 +150,59 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     }
   }, [initialGreeting, messages.length, sanitizeGreeting])
 
+  // 始終保留最新的 messages，用於避免閉包拿到舊的對話內容（例如 setTimeout 之後才呼叫的 saveInterviewSession）
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
   // 從配置中獲取問題，如果沒有則使用默認問題
   const interviewQuestions = interviewConfig?.questions || []
 
-  const formattedQuestions = interviewQuestions.length > 0 
-    ? interviewQuestions.flatMap((q: any, idx: number) => {
-        // 處理 detail 字段，可能是字串、物件或陣列
-        const d = q?.detail
-        
-        // 如果 detail 是物件且包含 questions 陣列（合併後的格式）
-        if (d && typeof d === 'object' && Array.isArray(d.questions)) {
-          // 返回多個問題，每個問題都對應到同一個 job_opening_question
-          return d.questions.map((questionText: string, subIdx: number) => ({
-            id: q.id ? `${q.id}-${subIdx}` : `q-${idx}-${subIdx}`,
-            question: (typeof questionText === 'string' && questionText.trim()) || `問題 ${idx + 1}-${subIdx + 1}`,
-            category: d.category || d.type || 'general',
-          })).filter((item: any) => item.question && item.question.trim().length > 0)
+  // 處理資料庫問題列表
+  let processedQuestions: Array<{ id: string; question: string; category: string }> = []
+  
+  if (interviewQuestions.length > 0) {
+    processedQuestions = interviewQuestions.flatMap((q: any, idx: number) => {
+      // 處理 detail 字段，可能是字串、物件或陣列
+      const d = q?.detail
+      
+      // 如果 detail 是物件且包含 questions 陣列（合併後的格式）
+      if (d && typeof d === 'object' && Array.isArray(d.questions)) {
+        // 返回多個問題，每個問題都對應到同一個 job_opening_question
+        return d.questions.map((questionText: string, subIdx: number) => ({
+          id: q.id ? `${q.id}-${subIdx}` : `q-${idx}-${subIdx}`,
+          question: (typeof questionText === 'string' && questionText.trim()) || `問題 ${idx + 1}-${subIdx + 1}`,
+          category: d.category || d.type || 'general',
+        })).filter((item: any) => item.question && item.question.trim().length > 0)
+      }
+      
+      // 否則按原邏輯處理（單一問題）
+      let questionText = ''
+      if (typeof d === 'string') {
+        questionText = d
+      } else if (Array.isArray(d)) {
+        const first = d.find((x) => typeof x === 'string' && x.trim().length > 0)
+        questionText = first || d.map((x) => (typeof x === 'string' ? x : '')).filter(Boolean).join('\n')
+      } else if (d && typeof d === 'object') {
+        questionText = d.question || d.text || d.content || d.title || ''
+        if (!questionText && typeof d.prompt === 'string') questionText = d.prompt
+        if (!questionText) {
+          const v = Object.values(d).find((v) => typeof v === 'string' && v.trim().length > 0)
+          if (typeof v === 'string') questionText = v
         }
-        
-        // 否則按原邏輯處理（單一問題）
-        let questionText = ''
-        if (typeof d === 'string') {
-          questionText = d
-        } else if (Array.isArray(d)) {
-          const first = d.find((x) => typeof x === 'string' && x.trim().length > 0)
-          questionText = first || d.map((x) => (typeof x === 'string' ? x : '')).filter(Boolean).join('\n')
-        } else if (d && typeof d === 'object') {
-          questionText = d.question || d.text || d.content || d.title || ''
-          if (!questionText && typeof d.prompt === 'string') questionText = d.prompt
-          if (!questionText) {
-            const v = Object.values(d).find((v) => typeof v === 'string' && v.trim().length > 0)
-            if (typeof v === 'string') questionText = v
-          }
-        }
+      }
 
-        const category = (d && typeof d === 'object' ? (d.category || d.type) : 'general') || 'general'
+      const category = (d && typeof d === 'object' ? (d.category || d.type) : 'general') || 'general'
+      return [{
+        id: q.id || `q-${idx}`,
+        question: (questionText && questionText.trim()) || `問題 ${idx + 1}`,
+        category,
+      }].filter((item) => item.question && item.question.trim().length > 0)
+    })
+  }
 
-        return [{
-          id: q.id || `q-${idx}`,
-          question: (questionText && questionText.trim()) || `問題 ${idx + 1}`,
-          category,
-        }].filter((item) => item.question && item.question.trim().length > 0)
-      })
-    : INTERVIEW_QUESTIONS
+  // 如果處理後的問題列表為空，則使用預設問題
+  const formattedQuestions = processedQuestions.length > 0 ? processedQuestions : INTERVIEW_QUESTIONS
 
   // 獲取evaluation_criteria並轉換為評分系統需要的格式
   const evaluationCriteria = interviewConfig?.evaluation_criteria || []
@@ -222,7 +228,22 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     }
     return new InterviewScoringEngine(DEFAULT_SCORING_CRITERIA)
   })
-  
+
+  // 各評分項目的「當前累積分數」，會隨著每題答案的加減分往上/往下調整
+  const [currentScores, setCurrentScores] = useState<Record<string, number>>(() => {
+    const initial: Record<string, number> = {}
+    if (evaluationCriteria.length > 0) {
+      evaluationCriteria.forEach((c: any) => {
+        const key = c.key
+        const max = c.max_score || 10
+        const logic = c.scoring_logic || 'deduction'
+        // 扣分制：從滿分開始；加分制/綜合制：從 0 分開始
+        initial[key] = (logic === 'addition' || logic === 'composite') ? 0 : max
+      })
+    }
+    return initial
+  })
+
   const [answerScores, setAnswerScores] = useState<AnswerScore[]>([])
   const [showScoringSettings, setShowScoringSettings] = useState(false)
   const [showResponseTimeAnalysis, setShowResponseTimeAnalysis] = useState(false)
@@ -398,6 +419,45 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     }
   }, [])
 
+  // 根據單題評分結果更新「當前累積分數」
+  const applyScoreResultToCurrentScores = useCallback(
+    (prev: Record<string, number>, scoreResult: AnswerScore): Record<string, number> => {
+      const next: Record<string, number> = { ...prev }
+
+      if (evaluationCriteria.length === 0 || !scoreResult?.scores) {
+        return next
+      }
+
+      evaluationCriteria.forEach((c: any) => {
+        const key = c.key
+        const max = c.max_score || 10
+        const logic = c.scoring_logic || 'deduction'
+        const singleScore = typeof scoreResult.scores[key] === 'number'
+          ? scoreResult.scores[key]
+          : (logic === 'addition' || logic === 'composite' ? 0 : max)
+
+        let delta = 0
+        if (logic === 'addition' || logic === 'composite') {
+          // 加分制/綜合制：單題分數視為本題「加減分總和」
+          delta = singleScore
+        } else {
+          // 扣分制：單題分數是以滿分為基準的「本題評分後分數」，與滿分差值為本題扣分量
+          delta = singleScore - max // <= 0
+        }
+
+        const currentBase = typeof next[key] === 'number'
+          ? next[key]
+          : (logic === 'addition' || logic === 'composite' ? 0 : max)
+
+        const updated = currentBase + delta
+        next[key] = Math.max(0, Math.min(max, updated))
+      })
+
+      return next
+    },
+    [evaluationCriteria]
+  )
+
   // 保存面試session到資料庫
   const saveInterviewSession = useCallback(async (finalResult: InterviewResult): Promise<'hired' | 'rejected' | 'pending' | undefined> => {
     if (!interviewId) return
@@ -450,14 +510,16 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         }
       })
 
-      // 準備transcript
-      const transcript = messages.map(msg => ({
+      // 準備transcript（使用 messagesRef，確保拿到的是最新的完整對話，而不是舊閉包中的內容）
+      const transcript = (messagesRef.current || []).map(msg => ({
         role: msg.type,
         content: msg.content,
         timestamp: msg.timestamp.toISOString(),
         aiFeedback: msg.type === 'ai' ? (msg.aiFeedback || '') : '',
         additions_detail: msg.type === 'ai' ? (msg.aiAdditionsDetail || '') : '',
-        deductions_detail: msg.type === 'ai' ? (msg.aiDeductionsDetail || '') : ''
+        deductions_detail: msg.type === 'ai' ? (msg.aiDeductionsDetail || '') : '',
+        // 每次 AI 回覆後的「當前累積分數」，方便在結果頁或後端分析時還原當下的分數狀態
+        current_scores: msg.type === 'ai' ? (msg.aiCurrentScores || null) : null,
       }))
 
       // 計算duration
@@ -515,7 +577,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     } catch (error) {
       console.error('Save interview session exception:', error)
     }
-  }, [interviewId, evaluationCriteria, messages])
+  }, [interviewId, evaluationCriteria])
 
   // 滾動到底部
   const scrollToBottom = useCallback(() => {
@@ -719,6 +781,15 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         
         // 更新最終消息，包含評分信息
         if (finalScoreResult) {
+          // 先更新「當前累積分數」，並保留這次更新後的快照
+          let updatedScoresSnapshot: Record<string, number> | undefined
+          setCurrentScores((prev) => {
+            const next = applyScoreResultToCurrentScores(prev, finalScoreResult!)
+            updatedScoresSnapshot = next
+            return next
+          })
+
+          // 將本題評分結果與當前累積分數寫入訊息與評分紀錄
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === streamingMessageId
@@ -728,12 +799,13 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                     aiFeedback: finalScoreResult?.aiFeedback,
                     aiAdditionsDetail: finalScoreResult?.additionsDetail,
                     aiDeductionsDetail: finalScoreResult?.deductionsDetail,
+                    aiCurrentScores: updatedScoresSnapshot,
                   }
                 : msg
             )
           )
           
-          // 處理評分結果
+          // 處理評分結果（供結果頁與統計使用）
           setAnswerScores(prev => [...prev, finalScoreResult!])
           scoringEngine.addScoredAnswer(finalScoreResult)
           setCurrentQuestionIndex(prev => prev + 1)

@@ -403,27 +403,30 @@ export class InterviewScoringEngine {
       c.key === criteriaKey.replace(/([A-Z])/g, '_$1').toLowerCase() // 轉換駝峰為下劃線
     )
     
-    // 判斷是否為加分制（從 evaluationCriteria 中查找，或根據 key 判斷）
-    const isAdditionSystem = criteriaInfo?.scoring_logic === 'addition' || 
-      criteriaKey === 'professionalDepth' || 
-      criteriaKey === 'personalTraits' ||
-      (criteriaInfo && criteriaKey !== 'contentCompleteness' && criteriaKey !== 'logicalClarity' && criteriaKey !== 'communicationSkills')
-    
-    // 加分制項目使用累加制，其他使用平均制
-    if (isAdditionSystem) {
-      const total = this.answerScores.reduce((sum, score) => {
-        const scoreValue = score.scores[criteriaKey] || 0
-        return sum + scoreValue
+    const logic = criteriaInfo?.scoring_logic || 'deduction'
+    const maxScore = criteriaInfo?.max_score || 10
+
+    // 加分制/綜合制：累加所有回答的單題分數，視為每題「加減分總和」，再限制在 0 ~ maxScore 之間
+    if (logic === 'addition' || logic === 'composite') {
+      const totalDelta = this.answerScores.reduce((sum, score) => {
+        const v = typeof score.scores[criteriaKey] === 'number' ? score.scores[criteriaKey] : 0
+        return sum + v
       }, 0)
-      const maxScore = criteriaInfo?.max_score || 10
-      return Math.min(total, maxScore) // 最高不超過 max_score
-    } else {
-      const total = this.answerScores.reduce((sum, score) => {
-        const scoreValue = score.scores[criteriaKey] || 0
-        return sum + scoreValue
-      }, 0)
-      return this.answerScores.length > 0 ? total / this.answerScores.length : 0
+      return Math.max(0, Math.min(maxScore, totalDelta))
     }
+
+    // 扣分制：以「滿分為基準」累積每題的扣分量（不再使用平均分）
+    // 每題的單題分數被視為：本題評分後的分數 = 滿分 + 本題扣的分數（負值），
+    // 因此扣分量 = (單題分數 - 滿分) <= 0
+    const n = this.answerScores.length
+    const sumSingleScores = this.answerScores.reduce((sum, score) => {
+      const v = typeof score.scores[criteriaKey] === 'number' ? score.scores[criteriaKey] : maxScore
+      return sum + v
+    }, 0)
+
+    // 最終分數 = 滿分 + 所有題目的扣分量總和 = 滿分 + Σ(單題分數 - 滿分)
+    const final = maxScore + (sumSingleScores - n * maxScore)
+    return Math.max(0, Math.min(maxScore, final))
   }
 
   private isPassed(finalScores: ScoringCriteria): boolean {

@@ -46,11 +46,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // 根據計算邏輯設定對應的規則
   if (logic === 'addition') {
+    // 加分制：只需要加分規則
     payload.addition_rules = addition_rules || []
     payload.deduction_rules = null
-  } else {
+  } else if (logic === 'deduction') {
+    // 扣分制：只需要扣分規則
     payload.deduction_rules = deduction_rules || []
     payload.addition_rules = null
+  } else if (logic === 'composite') {
+    // 綜合制：加分與扣分規則皆必填
+    payload.addition_rules = addition_rules || []
+    payload.deduction_rules = deduction_rules || []
   }
 
   const { error } = await supa.from('evaluation_criteria').insert(payload)

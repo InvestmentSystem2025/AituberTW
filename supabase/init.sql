@@ -120,15 +120,16 @@ CREATE TABLE public.evaluation_criteria (
   display_name TEXT NOT NULL,
   weight NUMERIC NOT NULL CHECK (weight >= 0 AND weight <= 1),
   max_score INTEGER NOT NULL DEFAULT 10 CHECK (max_score > 0),
-  scoring_logic TEXT NOT NULL DEFAULT 'deduction' CHECK (scoring_logic IN ('addition', 'deduction')),
+  scoring_logic TEXT NOT NULL DEFAULT 'deduction' CHECK (scoring_logic IN ('addition', 'deduction', 'composite')),
   addition_rules JSONB,
   deduction_rules JSONB,
   sort_order INTEGER NOT NULL CHECK (sort_order > 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (job_opening_id, key),
   CONSTRAINT evaluation_criteria_rules_check CHECK (
-    (scoring_logic = 'addition' AND addition_rules IS NOT NULL) OR
-    (scoring_logic = 'deduction' AND deduction_rules IS NOT NULL)
+    (scoring_logic = 'addition' AND addition_rules IS NOT NULL AND deduction_rules IS NULL) OR
+    (scoring_logic = 'deduction' AND deduction_rules IS NOT NULL AND addition_rules IS NULL) OR
+    (scoring_logic = 'composite' AND addition_rules IS NOT NULL AND deduction_rules IS NOT NULL)
   )
 );
 

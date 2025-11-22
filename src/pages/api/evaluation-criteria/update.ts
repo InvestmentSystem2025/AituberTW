@@ -25,15 +25,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (typeof weight === 'number') payload.weight = weight
   if (typeof max_score === 'number') payload.max_score = max_score
   if (typeof sort_order === 'number') payload.sort_order = sort_order
-  if (scoring_logic === 'addition' || scoring_logic === 'deduction') {
+  if (scoring_logic === 'addition' || scoring_logic === 'deduction' || scoring_logic === 'composite') {
     payload.scoring_logic = scoring_logic
     // 根據計算邏輯設定對應的規則
     if (scoring_logic === 'addition') {
+      // 加分制：只需要加分規則
       payload.addition_rules = addition_rules || []
       payload.deduction_rules = null
-    } else {
+    } else if (scoring_logic === 'deduction') {
+      // 扣分制：只需要扣分規則
       payload.deduction_rules = deduction_rules || []
       payload.addition_rules = null
+    } else {
+      // 綜合制：加分與扣分規則皆必填
+      payload.addition_rules = addition_rules || []
+      payload.deduction_rules = deduction_rules || []
     }
   }
 

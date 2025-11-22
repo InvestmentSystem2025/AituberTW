@@ -154,12 +154,19 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
   
   // 建立評分標準映射：max_score 與 scoring_logic
   const criteriaMap: Record<string, number> = {}
-  const logicMap: Record<string, 'addition' | 'deduction'> = {}
+  const logicMap: Record<string, 'addition' | 'deduction' | 'composite'> = {}
   if (evaluationCriteria && evaluationCriteria.length > 0) {
     evaluationCriteria.forEach((criteria: any) => {
       const criteriaKey = criteria.key
       criteriaMap[criteriaKey] = criteria.max_score || 10
-      logicMap[criteriaKey] = (criteria.scoring_logic === 'addition' ? 'addition' : 'deduction')
+      if (criteria.scoring_logic === 'addition') {
+        logicMap[criteriaKey] = 'addition'
+      } else if (criteria.scoring_logic === 'composite') {
+        // 綜合制：同時支援加分與扣分，基準為 0 分
+        logicMap[criteriaKey] = 'composite'
+      } else {
+        logicMap[criteriaKey] = 'deduction'
+      }
     })
   }
   
@@ -173,18 +180,11 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
   }
   
   // 處理分數 - 支持動態評估項目
+  // ⚠️ 重要：scores 代表「本題各項目的加減分數（delta）」，而不是最終分數
   const rawScores: Record<string, number> = {}
   const scores: Record<string, number> = {}
   const numericProvidedKeys = new Set<string>()
-  // 預先根據 scoring_logic 設定初始值（addition=0，deduction=max_score）
-  if (evaluationCriteria && evaluationCriteria.length > 0) {
-    evaluationCriteria.forEach((c: any) => {
-      const key = c.key
-      const max = criteriaMap[key] || 10
-      const init = (logicMap[key] === 'addition') ? 0 : max
-      scores[key] = init
-    })
-  }
+  // 預設將所有分數視為 0（本題沒有加減分）
   
   // 處理預設的5個項目（同時支援前端 key 與 DB key）
   const defaultKeys = ['contentCompleteness', 'logicalClarity', 'professionalDepth', 'communicationSkills', 'personalTraits']
@@ -197,13 +197,9 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
     ]
     const found = candidateValues.find(v => typeof v === 'number')
     if (typeof found === 'number') {
-      rawScores[dbKey] = Number(found) || 0
-      const maxScore = criteriaMap[dbKey] || 10
-      // 若未在 evaluationCriteria 中（沒有 logicMap），預設扣分制視為滿分起始
-      if (typeof scores[dbKey] !== 'number') {
-        scores[dbKey] = (logicMap[dbKey] === 'addition') ? 0 : maxScore
-      }
-      scores[dbKey] = Math.max(0, Math.min(maxScore, rawScores[dbKey]))
+      const delta = Number(found) || 0
+      rawScores[dbKey] = delta
+      scores[dbKey] = delta
       numericProvidedKeys.add(dbKey)
     }
   })
@@ -241,31 +237,23 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
           }
         }
         
-        // 如果找到了分數，加入 scores
+        // 如果找到了分數，視為「本題的加減分數（delta）」
         if (scoreValue !== undefined) {
-          rawScores[criteriaKey] = scoreValue
-          const maxScore = criteria.max_score || 10
-          // 先確保有初始化（addition=0，deduction=max）
-          if (typeof scores[criteriaKey] !== 'number') {
-            scores[criteriaKey] = (logicMap[criteriaKey] === 'addition') ? 0 : maxScore
-          }
-          scores[criteriaKey] = Math.max(0, Math.min(maxScore, scoreValue))
-          if (rawScores[criteriaKey] !== scores[criteriaKey]) {
-            console.warn(`⚠️ 分數超過限制：${criteriaKey} 原始分數 ${rawScores[criteriaKey]} 已調整為 ${scores[criteriaKey]}`)
-          }
+          const delta = Number(scoreValue) || 0
+          rawScores[criteriaKey] = delta
+          scores[criteriaKey] = delta
           numericProvidedKeys.add(criteriaKey)
         }
       }
     })
   }
 
-  // 規範化：確保所有 evaluation_criteria 的 key 都存在於 scores（使用 scoring_logic 初始值）
+  // 規範化：確保所有 evaluation_criteria 的 key 都存在於 scores（預設本題加減分為 0）
   if (evaluationCriteria && evaluationCriteria.length > 0) {
     evaluationCriteria.forEach((criteria: any) => {
       const k = criteria.key
       if (typeof scores[k] !== 'number') {
-        const max = criteriaMap[k] || 10
-        scores[k] = (logicMap[k] === 'addition') ? 0 : max
+        scores[k] = 0
       }
     })
   }
@@ -290,9 +278,11 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
   if (evaluationCriteria && evaluationCriteria.length > 0) {
     evaluationCriteria.forEach((c: any) => {
       const key = c.key
-      if (numericProvidedKeys.has(key)) return // 已有數值，跳過
+      if (numericProvidedKeys.has(key)) return // 已有 AI 顯式數值，跳過
       const max = criteriaMap[key] || 10
-      let value = (logicMap[key] === 'addition') ? 0 : max
+      const logic = logicMap[key] || 'deduction'
+      // 以 0 為基準，根據加分/扣分規則累加，作為「本題的加減分數」
+      let value = 0
       const displayName = c.display_name || key
       const adds = getReasons(scoreData.additions, key, displayName)
       const deds = getReasons(scoreData.deductions, key, displayName)
@@ -311,17 +301,10 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
           if (rule) value += parseDeltaFromRule(rule) // 規則內含負號
         })
       }
-      // 限幅
-      scores[key] = Math.max(0, Math.min(max, value))
+      // 限幅到可接受的變化範圍（-max ~ +max）
+      scores[key] = Math.max(-max, Math.min(max, value))
     })
   }
-  
-  // 如果原始分數超過限制，輸出警告（僅對預設項目）
-  defaultKeys.forEach(key => {
-    if (rawScores[key] !== undefined && scores[key] !== undefined && rawScores[key] !== scores[key]) {
-      console.warn(`⚠️ 分數超過限制：${key} 原始分數 ${rawScores[key]} 已調整為 ${scores[key]}`)
-    }
-  })
   
   return {
     answerId: questionId,
