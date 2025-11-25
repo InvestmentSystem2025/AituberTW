@@ -1,4 +1,4 @@
-const DEFAULT_OBS_URL = 'ws://127.0.0.1:4455'
+export const DEFAULT_OBS_URL = 'ws://127.0.0.1:4455'
 const RPC_VERSION = 1
 
 interface OBSWebSocketHello {
@@ -68,8 +68,8 @@ class OBSWebSocketClient {
   >()
 
   constructor({ url, password }: { url?: string; password?: string } = {}) {
-    this.url = url || process.env.NEXT_PUBLIC_OBS_WEBSOCKET_URL || DEFAULT_OBS_URL
-    this.password = password || process.env.NEXT_PUBLIC_OBS_WEBSOCKET_PASSWORD
+    this.url = url || DEFAULT_OBS_URL
+    this.password = password
   }
 
   async connect(): Promise<void> {
@@ -243,6 +243,19 @@ export const configureObsStream = async (options: {
       streamKey: options.streamKey,
       ingestionAddress: options.ingestionAddress,
     })
+  } finally {
+    client.disconnect()
+  }
+}
+
+export const testObsConnection = async (options: { url?: string; password?: string } = {}) => {
+  const client = new OBSWebSocketClient(options)
+  try {
+    await client.connect()
+    return true
+  } catch (error) {
+    console.warn('[OBS] connection test failed', error)
+    return false
   } finally {
     client.disconnect()
   }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { configureObsStream, startObsStream, stopObsStream } from '@/lib/obsWebSocket'
+import { configureObsStream, stopObsStream, testObsConnection, DEFAULT_OBS_URL } from '@/lib/obsWebSocket'
 import { TextButton } from '../textButton'
 import settingsStore from '@/features/stores/settings'
 
@@ -45,7 +45,6 @@ const YoutubeUpload = () => {
   const [authorizing, setAuthorizing] = useState(false)
   const [creating, setCreating] = useState(false)
   const [configuringObs, setConfiguringObs] = useState(false)
-  const [launchingObs, setLaunchingObs] = useState(false)
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -74,6 +73,14 @@ const YoutubeUpload = () => {
   const [obsConfigured, setObsConfigured] = useState(
     () => settingsStore.getState().youtubeObsConfigured
   )
+  const [obsConnected, setObsConnected] = useState<boolean | null>(null) // null = 檢查中, true = 已連接, false = 未連接
+  const [checkingObsConnection, setCheckingObsConnection] = useState(false)
+  const [obsPassword, setObsPassword] = useState(
+    () => settingsStore.getState().youtubeObsWebSocketPassword || ''
+  )
+  const [obsUrl, setObsUrl] = useState(
+    () => settingsStore.getState().youtubeObsWebSocketUrl || DEFAULT_OBS_URL
+  )
   const [uploading, setUploading] = useState(false)
   const [stoppingBroadcast, setStoppingBroadcast] = useState(false)
 
@@ -99,6 +106,29 @@ const YoutubeUpload = () => {
     }
 
     void check()
+  }, [])
+
+  // 從 store 恢復已保存的直播資訊
+  useEffect(() => {
+    const state = settingsStore.getState()
+    if (
+      state.youtubeBroadcastId &&
+      (state.youtubeIngestionAddress || state.youtubeStreamKey)
+    ) {
+      setResult({
+        broadcastId: state.youtubeBroadcastId,
+        streamId: state.youtubeStreamId || '',
+        liveChatId: state.youtubeLiveChatId || null,
+        ingestionInfo: {
+          ingestionAddress: state.youtubeIngestionAddress || null,
+          backupIngestionAddress: null,
+          streamName: state.youtubeStreamKey || null,
+        },
+        scheduledStartTime: state.youtubeScheduledStart || null,
+        enableAutoStart: false,
+        enableAutoStop: false,
+      })
+    }
   }, [])
 
   const pollAuthorization = useCallback(() => {
@@ -156,11 +186,25 @@ const YoutubeUpload = () => {
       return
     }
 
+    // 先檢查 OBS 連接狀態
     setError('')
-    setMessage('')
+    setMessage('正在檢查 OBS 連接狀態...')
     setCreating(true)
 
     try {
+      const isObsConnected = await testObsConnection({
+        url: obsUrl || undefined,
+        password: obsPassword || undefined,
+      })
+
+      if (!isObsConnected) {
+        setError('請先確認 OBS 已開啟並連接成功，才能建立直播。請使用「測試連線」按鈕確認 OBS 連接狀態。')
+        setCreating(false)
+        return
+      }
+
+      setMessage('OBS 連接正常，正在建立直播...')
+
       const res = await fetch('/api/youtube/create-live', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -192,30 +236,35 @@ const YoutubeUpload = () => {
         youtubeAutoUpload: autoUploadEnabled,
         youtubeLiveChatId: data.liveChatId ?? '',
         youtubeAutoLaunchTriggered: false,
+        youtubeObsWebSocketUrl: obsUrl,
+        youtubeObsWebSocketPassword: obsPassword,
       })
 
       if (!currentLiveId) {
         settingsStore.setState({ youtubeLiveId: data.broadcastId })
       }
 
+      // 建立成功後，使用用戶設定的 URL 和密碼配置 OBS
       if (data.ingestionInfo.ingestionAddress && data.ingestionInfo.streamName) {
         try {
           await configureObsStream({
             ingestionAddress: data.ingestionInfo.ingestionAddress,
             streamKey: data.ingestionInfo.streamName,
+            url: obsUrl || undefined,
+            password: obsPassword || undefined,
           })
           settingsStore.setState({ youtubeObsConfigured: true })
           setObsConfigured(true)
+          setObsConnected(true)
           setMessage(
             `${buildLiveInfoMessage(data)}
-OBS 設定已自動更新`
+✅ OBS 串流設定已自動更新`
           )
         } catch (obsError) {
           console.error('[YouTube] configure OBS after create failed', obsError)
-          setMessage(
-            `${buildLiveInfoMessage(data)}
-⚠️ 已建立直播，但設定 OBS 失敗，請確認 WebSocket 狀態。`
-          )
+          setError('已建立直播，但設定 OBS 失敗，請確認 OBS WebSocket 狀態。')
+          setObsConnected(false)
+          setMessage(buildLiveInfoMessage(data))
         }
       } else {
         setMessage(buildLiveInfoMessage(data))
@@ -227,10 +276,16 @@ OBS 設定已自動更新`
     } finally {
       setCreating(false)
     }
-  }, [authorized, description, enableAutoStart, enableAutoStop, privacyStatus, scheduledStartISO, title, autoUploadEnabled])
+  }, [authorized, description, enableAutoStart, enableAutoStop, privacyStatus, scheduledStartISO, title, autoUploadEnabled, obsUrl, obsPassword])
 
   const handleConfigureObs = useCallback(async () => {
-    if (!result?.ingestionInfo?.ingestionAddress || !result?.ingestionInfo?.streamName) {
+    const state = settingsStore.getState()
+    const ingestionAddress =
+      result?.ingestionInfo?.ingestionAddress || state.youtubeIngestionAddress
+    const streamKey =
+      result?.ingestionInfo?.streamName || state.youtubeStreamKey
+
+    if (!ingestionAddress || !streamKey) {
       setError('缺少串流伺服器或串流金鑰，請重新建立直播。')
       return
     }
@@ -241,35 +296,77 @@ OBS 設定已自動更新`
 
     try {
       await configureObsStream({
-        ingestionAddress: result.ingestionInfo.ingestionAddress,
-        streamKey: result.ingestionInfo.streamName,
+        ingestionAddress,
+        streamKey,
+        url: obsUrl || undefined,
+        password: obsPassword || undefined,
       })
       setObsConfigured(true)
       setMessage('✅ 已更新 OBS 串流設定')
-      settingsStore.setState({ youtubeObsConfigured: true })
+      settingsStore.setState({
+        youtubeObsConfigured: true,
+        youtubeObsWebSocketUrl: obsUrl,
+        youtubeObsWebSocketPassword: obsPassword,
+      })
+      // 配置成功後檢查連接狀態
+      const isConnected = await testObsConnection({
+        url: obsUrl || undefined,
+        password: obsPassword || undefined,
+      })
+      setObsConnected(isConnected)
     } catch (err) {
       console.error('[YouTube] configure OBS failed', err)
       setError('設定 OBS 時發生錯誤，請確認 OBS WebSocket 是否啟用。')
+      setObsConnected(false)
     } finally {
       setConfiguringObs(false)
     }
-  }, [result])
+  }, [result, obsPassword, obsUrl])
 
-  const handleStartObsImmediately = useCallback(async () => {
+  const handleTestObsConnection = useCallback(async () => {
     setError('')
     setMessage('')
-    setLaunchingObs(true)
-
+    setCheckingObsConnection(true)
     try {
-      await startObsStream()
-      setMessage('📡 已指示 OBS 開始串流')
+      const isConnected = await testObsConnection({
+        url: obsUrl || undefined,
+        password: obsPassword || undefined,
+      })
+      setObsConnected(isConnected)
+      setMessage(isConnected ? '✅ OBS WebSocket 連線成功！' : '❌ OBS WebSocket 連線失敗，請檢查 OBS 是否啟動。')
+      // 保存設定
+      settingsStore.setState({
+        youtubeObsWebSocketUrl: obsUrl,
+        youtubeObsWebSocketPassword: obsPassword,
+      })
     } catch (err) {
-      console.error('[YouTube] start OBS stream failed', err)
-      setError('啟動 OBS 串流失敗，請確認 OBS 是否啟動且 WebSocket 連線正常。')
+      console.error('[OBS] test connection failed', err)
+      setError('測試 OBS 連線失敗。')
+      setObsConnected(false)
     } finally {
-      setLaunchingObs(false)
+      setCheckingObsConnection(false)
     }
-  }, [])
+  }, [obsPassword, obsUrl])
+
+  // 定期檢查 OBS 連接狀態
+  useEffect(() => {
+    const checkConnection = async () => {
+      if (!checkingObsConnection && !configuringObs) {
+        try {
+          const isConnected = await testObsConnection({
+            url: obsUrl || undefined,
+            password: obsPassword || undefined,
+          })
+          setObsConnected(isConnected)
+        } catch (err) {
+          setObsConnected(false)
+        }
+      }
+    }
+    checkConnection()
+    const interval = setInterval(checkConnection, 5000) // 每5秒檢查一次
+    return () => clearInterval(interval)
+  }, [obsPassword, obsUrl, checkingObsConnection, configuringObs])
 
   const uploadRecording = useCallback(
     async (fileName: string) => {
@@ -404,6 +501,19 @@ OBS 設定已自動更新`
   const youtubeScheduledStartValue = settingsStore(
     (state) => state.youtubeScheduledStart
   )
+  // 從 store 讀取串流資訊，用於判斷是否顯示 OBS 連接區塊
+  const hasStreamInfo = settingsStore(
+    (state) =>
+      Boolean(
+        state.youtubeBroadcastId &&
+          (state.youtubeIngestionAddress || state.youtubeStreamKey)
+      )
+  )
+
+  // 只有在有串流資訊且已配置時，才認為是真正已配置
+  const isObsReallyConfigured = useMemo(() => {
+    return hasStreamInfo && obsConfigured
+  }, [hasStreamInfo, obsConfigured])
 
   const authorizationStatusText = checkingAuth
     ? '檢查中'
@@ -439,7 +549,7 @@ OBS 設定已自動更新`
         return
       }
 
-      if (!scheduledStartISO) {
+      if (!scheduledTime) {
         setError('請先設定排程時間後再啟用自動開播。')
         settingsStore.setState({
           youtubeAutoLaunchEnabled: false,
@@ -448,7 +558,8 @@ OBS 設定已自動更新`
         return
       }
 
-      const targetDate = new Date(scheduledStartISO)
+      // 使用本地時間來驗證（scheduledTime 是本地時間字串）
+      const targetDate = new Date(scheduledTime)
       if (Number.isNaN(targetDate.getTime()) || targetDate.getTime() <= Date.now()) {
         setError('排程時間必須是未來的時間，請重新設定。')
         settingsStore.setState({
@@ -467,11 +578,98 @@ OBS 設定已自動更新`
         `🕒 已排程在 ${targetDate.toLocaleString()} 自動啟動 OBS 串流。`
       )
     },
-    [scheduledStartISO]
+    [scheduledTime]
   )
 
   return (
     <div className="mt-8 space-y-6">
+      {(result || hasStreamInfo) && (
+        <div className="rounded-lg border border-gray-200 bg-white/70 p-4">
+          <h3 className="text-lg font-semibold mb-4">OBS 連接設定</h3>
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-col gap-1">
+              <span className="text-sm text-gray-500">OBS 配置狀態</span>
+              <span
+                className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${
+                  isObsReallyConfigured && obsConnected === true
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-yellow-100 text-yellow-700'
+                }`}
+              >
+                {checkingObsConnection || obsConnected === null
+                  ? '🔄 檢查中...'
+                  : isObsReallyConfigured && obsConnected === true
+                    ? '✅ 已配置'
+                    : obsConnected === false
+                      ? '⚠️ OBS 未連接'
+                      : '⚠️ 未配置'}
+              </span>
+              <p className="text-xs text-gray-500">
+                {checkingObsConnection || obsConnected === null
+                  ? '正在檢查 OBS 連接狀態...'
+                  : isObsReallyConfigured && obsConnected === true
+                    ? 'OBS 串流設定已更新，可以開始串流。'
+                    : obsConnected === false
+                      ? 'OBS 未啟動或 WebSocket 未啟用，請確認 OBS 狀態。'
+                      : '請配置 OBS 串流設定以開始串流。'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <TextButton
+                onClick={handleConfigureObs}
+                disabled={
+                  configuringObs ||
+                  !(
+                    result?.ingestionInfo?.ingestionAddress ||
+                    settingsStore.getState().youtubeIngestionAddress
+                  ) ||
+                  !(
+                    result?.ingestionInfo?.streamName ||
+                    settingsStore.getState().youtubeStreamKey
+                  )
+                }
+              >
+                {configuringObs ? '配置中...' : '配置 OBS'}
+              </TextButton>
+              <TextButton
+                onClick={handleTestObsConnection}
+                disabled={checkingObsConnection}
+              >
+                {checkingObsConnection ? '測試中...' : '測試連線'}
+              </TextButton>
+            </div>
+          </div>
+          <div className="mt-4 space-y-4">
+            <label className="flex flex-col gap-1">
+              <span className="text-sm text-gray-600">OBS WebSocket URL</span>
+              <input
+                type="text"
+                className="flex-1 px-3 py-2 border rounded-md"
+                placeholder={DEFAULT_OBS_URL}
+                value={obsUrl}
+                onChange={(e) => setObsUrl(e.target.value)}
+              />
+              <p className="text-xs text-gray-500">
+                OBS WebSocket Server 的連線位址，預設為 {DEFAULT_OBS_URL}
+              </p>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-sm text-gray-600">OBS WebSocket 密碼（選填）</span>
+              <input
+                type="password"
+                className="flex-1 px-3 py-2 border rounded-md"
+                placeholder="如果 OBS 設定了 WebSocket 密碼，請在此輸入"
+                value={obsPassword}
+                onChange={(e) => setObsPassword(e.target.value)}
+              />
+              <p className="text-xs text-gray-500">
+                如果 OBS WebSocket Server 設定了密碼，請在此輸入。留空表示無密碼。
+              </p>
+            </label>
+          </div>
+        </div>
+      )}
+
       <div className="rounded-lg border border-gray-200 bg-white/70 p-4">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-col gap-1">
@@ -590,13 +788,20 @@ OBS 設定已自動更新`
           </label>
         </div>
 
-        <div className="mt-4 flex gap-2">
-          <TextButton onClick={handleCreateLive} disabled={creating || !authorized}>
-            {creating ? '建立中...' : '建立直播'}
-          </TextButton>
-          <TextButton onClick={handleStartObsImmediately} disabled={launchingObs}>
-            {launchingObs ? '啟動中...' : '立即啟動 OBS 串流'}
-          </TextButton>
+        <div className="mt-4 flex flex-col gap-2">
+          {obsConnected !== true && obsConnected !== null && (
+            <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-2 text-sm text-yellow-700">
+              ⚠️ 請先確認 OBS 已連接才能建立直播。請使用上方「測試連線」按鈕確認 OBS 連接狀態。
+            </div>
+          )}
+          <div className="flex gap-2">
+            <TextButton
+              onClick={handleCreateLive}
+              disabled={creating || !authorized || obsConnected !== true}
+            >
+              {creating ? '建立中...' : '建立直播'}
+            </TextButton>
+          </div>
         </div>
       </div>
 

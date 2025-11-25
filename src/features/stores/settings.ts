@@ -18,6 +18,7 @@ import {
 } from '../constants/settings'
 import { googleSearchGroundingModels } from '../constants/aiModels'
 import { migrateOpenAIModelName } from '@/utils/modelMigration'
+import { DEFAULT_OBS_URL } from '@/lib/obsWebSocket'
 
 export type googleSearchGroundingModelKey =
   (typeof googleSearchGroundingModels)[number]
@@ -144,6 +145,8 @@ interface Integrations {
   youtubeStreamKey: string
   youtubeIngestionAddress: string
   youtubeObsConfigured: boolean
+  youtubeObsWebSocketUrl: string
+  youtubeObsWebSocketPassword: string
   youtubeBroadcastActive: boolean
   youtubeAutoUpload: boolean
   youtubeLiveChatId: string
@@ -391,6 +394,8 @@ const getInitialValuesFromEnv = (): SettingsState => ({
   youtubeStreamKey: '',
   youtubeIngestionAddress: '',
   youtubeObsConfigured: false,
+  youtubeObsWebSocketUrl: DEFAULT_OBS_URL,
+  youtubeObsWebSocketPassword: '',
   youtubeBroadcastActive: false,
   youtubeAutoUpload: true,
   youtubeLiveChatId: '',
@@ -783,6 +788,8 @@ const settingsStore = create<SettingsState>()(
       youtubeStreamKey: state.youtubeStreamKey,
       youtubeIngestionAddress: state.youtubeIngestionAddress,
       youtubeObsConfigured: state.youtubeObsConfigured,
+      youtubeObsWebSocketUrl: state.youtubeObsWebSocketUrl,
+      youtubeObsWebSocketPassword: state.youtubeObsWebSocketPassword,
       youtubeBroadcastActive: state.youtubeBroadcastActive,
       youtubeAutoUpload: state.youtubeAutoUpload,
       youtubeLiveChatId: state.youtubeLiveChatId,
