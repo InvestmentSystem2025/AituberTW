@@ -40,6 +40,8 @@ yarn-error.log*
 next-env.d.ts
 
 credentials.json
+youtube-oauth-credentials.json
+youtube-oauth-token.json
 
 # asdf
 .tool-versions

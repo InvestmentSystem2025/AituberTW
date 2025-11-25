@@ -12,6 +12,12 @@ const nextConfig = {
   transpilePackages: ['@mediapipe/tasks-vision'],
   // Webpack 配置以支援 MediaPipe
   webpack: (config, { isServer }) => {
+    // 排除 mcp-server 目錄，避免編譯時錯誤
+    config.watchOptions = {
+      ...config.watchOptions,
+      ignored: ['**/node_modules/**', '**/mcp-server/**'],
+    }
+
     // 確保 MediaPipe 在客戶端和服務端都能正確解析
     config.resolve.fallback = {
       ...config.resolve.fallback,

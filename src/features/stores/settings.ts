@@ -18,6 +18,7 @@ import {
 } from '../constants/settings'
 import { googleSearchGroundingModels } from '../constants/aiModels'
 import { migrateOpenAIModelName } from '@/utils/modelMigration'
+import { DEFAULT_OBS_URL } from '@/lib/obsWebSocket'
 
 export type googleSearchGroundingModelKey =
   (typeof googleSearchGroundingModels)[number]
@@ -139,6 +140,20 @@ interface Integrations {
   youtubeContinuationCount: number
   youtubeNoCommentCount: number
   youtubeSleepMode: boolean
+  youtubeBroadcastId: string
+  youtubeStreamId: string
+  youtubeStreamKey: string
+  youtubeIngestionAddress: string
+  youtubeObsConfigured: boolean
+  youtubeObsWebSocketUrl: string
+  youtubeObsWebSocketPassword: string
+  youtubeBroadcastActive: boolean
+  youtubeAutoUpload: boolean
+  youtubeLiveChatId: string
+  youtubeLastBroadcastInfo: string
+  youtubeScheduledStart: string
+  youtubeAutoLaunchEnabled: boolean
+  youtubeAutoLaunchTriggered: boolean
   conversationContinuityMode: boolean
 }
 
@@ -374,6 +389,20 @@ const getInitialValuesFromEnv = (): SettingsState => ({
   youtubeContinuationCount: 0,
   youtubeNoCommentCount: 0,
   youtubeSleepMode: false,
+  youtubeBroadcastId: '',
+  youtubeStreamId: '',
+  youtubeStreamKey: '',
+  youtubeIngestionAddress: '',
+  youtubeObsConfigured: false,
+  youtubeObsWebSocketUrl: DEFAULT_OBS_URL,
+  youtubeObsWebSocketPassword: '',
+  youtubeBroadcastActive: false,
+  youtubeAutoUpload: true,
+  youtubeLiveChatId: '',
+  youtubeLastBroadcastInfo: '',
+  youtubeScheduledStart: '',
+  youtubeAutoLaunchEnabled: false,
+  youtubeAutoLaunchTriggered: false,
   conversationContinuityMode: false,
 
   // Character
@@ -753,6 +782,21 @@ const settingsStore = create<SettingsState>()(
       enableMultiModal: state.enableMultiModal,
       colorTheme: state.colorTheme,
       customModel: state.customModel,
+      youtubeSleepMode: state.youtubeSleepMode,
+      youtubeBroadcastId: state.youtubeBroadcastId,
+      youtubeStreamId: state.youtubeStreamId,
+      youtubeStreamKey: state.youtubeStreamKey,
+      youtubeIngestionAddress: state.youtubeIngestionAddress,
+      youtubeObsConfigured: state.youtubeObsConfigured,
+      youtubeObsWebSocketUrl: state.youtubeObsWebSocketUrl,
+      youtubeObsWebSocketPassword: state.youtubeObsWebSocketPassword,
+      youtubeBroadcastActive: state.youtubeBroadcastActive,
+      youtubeAutoUpload: state.youtubeAutoUpload,
+      youtubeLiveChatId: state.youtubeLiveChatId,
+      youtubeLastBroadcastInfo: state.youtubeLastBroadcastInfo,
+      youtubeScheduledStart: state.youtubeScheduledStart,
+      youtubeAutoLaunchEnabled: state.youtubeAutoLaunchEnabled,
+      youtubeAutoLaunchTriggered: state.youtubeAutoLaunchTriggered,
     }),
   })
 )

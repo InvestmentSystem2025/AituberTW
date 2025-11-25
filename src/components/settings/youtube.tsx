@@ -7,6 +7,7 @@ import settingsStore from '@/features/stores/settings'
 import slideStore from '@/features/stores/slide'
 import { TextButton } from '../textButton'
 import { isMultiModalAvailable } from '@/features/constants/aiModels'
+import YoutubeUpload from './youtubeUpload'
 
 const YouTube = () => {
   const youtubeApiKey = settingsStore((s) => s.youtubeApiKey)
@@ -131,6 +132,7 @@ const YouTube = () => {
                     {t(conversationContinuityMode ? 'StatusOn' : 'StatusOff')}
                   </TextButton>
                 </div>
+                <YoutubeUpload />
               </>
             )
           }
