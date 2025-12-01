@@ -11,6 +11,8 @@ services:
       - ./uploads:/app/uploads
       # 持久化數據
       - ./data:/app/data
+    env_file:
+      - ../.env
     environment:
       - NODE_ENV=production
       - PORT=3001

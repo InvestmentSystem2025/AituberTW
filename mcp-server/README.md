@@ -70,6 +70,7 @@ docker-compose -f docker-compose.ollama.yml up -d mcp-server ocr-service
 - `GET /health` - 健康檢查
 - `POST /api/files/upload` - 上傳檔案
 - `GET /api/files/list` - 列出檔案
+- `POST /api/s3/sync` - 手動觸發 S3 同步（需要配置 S3_BUCKET）
 - `POST /api/mcp/tool` - 調用 MCP 工具
   - `read_pdf` - 讀取 PDF（使用 OCR）
   - `extract_resume_info` - 提取履歷資訊
@@ -103,9 +104,35 @@ NEXT_PUBLIC_MCP_SERVER_URL=http://localhost:3001
 
 # 遊戲自動化後端（預設指向宿主 127.0.0.1:5001）
 MSW_AUTOMATION_BASE_URL=http://host.docker.internal:5001
+
+# S3 同步配置（可選）
+S3_BUCKET=your-resume-bucket
+S3_REGION=ap-northeast-1
+S3_PREFIX=resumes/
+S3_SYNC_SCHEDULE=0 * * * *  # Cron 表達式，預設每小時
+S3_DELETE_AFTER_UPLOAD=false  # 上傳到 S3 後是否刪除本地文件
+
+# AWS 憑證（如果使用 IAM 角色可省略）
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
 ```
 
 > 若 MCP Server 直接在宿主機上執行，可省略 `MSW_AUTOMATION_BASE_URL`，後端將使用 `http://127.0.0.1:5001`。
+
+### S3 同步功能
+
+MCP Server 支援自動將上傳的履歷文件同步到 AWS S3：
+
+- **定時同步**：根據 `S3_SYNC_SCHEDULE` 設定自動同步（預設每小時）
+- **手動觸發**：通過 `POST /api/s3/sync` API 手動觸發同步
+- **智能去重**：自動跳過已存在的文件，避免重複上傳
+- **狀態記錄**：在 `.s3-sync-state.json` 中記錄同步狀態
+
+**Cron 表達式範例：**
+- `0 * * * *` - 每小時
+- `0 */6 * * *` - 每 6 小時
+- `0 0 * * *` - 每天午夜
+- `*/30 * * * *` - 每 30 分鐘
 
 ### OCR 設定
 
