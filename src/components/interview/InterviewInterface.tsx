@@ -83,6 +83,8 @@ interface ChatMessage {
   aiDeductionsDetail?: string
   // 每次 AI 回覆後的「當前累積分數快照」（依評分項目 key）
   aiCurrentScores?: Record<string, number>
+  // （選用）人格判斷結果，只會在最後一則 AI 回覆上出現
+  personality?: any
 }
 
 interface InterviewConfig {
@@ -520,6 +522,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         deductions_detail: msg.type === 'ai' ? (msg.aiDeductionsDetail || '') : '',
         // 每次 AI 回覆後的「當前累積分數」，方便在結果頁或後端分析時還原當下的分數狀態
         current_scores: msg.type === 'ai' ? (msg.aiCurrentScores || null) : null,
+        // 人格判斷結果（只會在最後一則 AI 回覆中非空）
+        personality: msg.type === 'ai' ? (msg.personality || null) : null,
       }))
 
       // 計算duration
@@ -789,7 +793,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             return next
           })
 
-          // 將本題評分結果與當前累積分數寫入訊息與評分紀錄
+          // 將本題評分結果、人格判斷與當前累積分數寫入訊息與評分紀錄
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === streamingMessageId
@@ -800,6 +804,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                     aiAdditionsDetail: finalScoreResult?.additionsDetail,
                     aiDeductionsDetail: finalScoreResult?.deductionsDetail,
                     aiCurrentScores: updatedScoresSnapshot,
+                    personality: finalScoreResult?.personality,
                   }
                 : msg
             )
@@ -820,11 +825,11 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           setTimeout(() => {
             recording.stopRecording()
           }, 3000)
-          
-          // 總共等待 6 秒後再顯示結果頁面
+
+          // 總共等待 6 秒後完成儲存與資源釋放（但不自動跳轉結果頁，改由使用者按「結束面試」按鈕）
           setTimeout(async () => {
             const finalResult = scoringEngine.generateFinalResult('candidate-001')
-            // 保存到資料庫並讀取DB決策
+            // 保存到資料庫並讀取DB決策，確保結果頁可以看到最新資料（包含 personality）
             if (interviewId) {
               const outcome = await saveInterviewSession(finalResult)
               if (outcome) {
@@ -832,32 +837,12 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                 finalResult.isPassed = outcome === 'hired'
               }
             }
-            // 停止攝像機
+            // 停止攝像機與麥克風
             try { stopListening() } catch {}
             stopCamera()
             setShowLocalVideo(false)
-            if (interviewId) {
-              // 在新分頁打開結果頁面（立即執行，避免被彈出視窗阻擋器阻擋）
-              const resultUrl = `/interview/result?id=${encodeURIComponent(interviewId)}`
-              const newWindow = window.open(resultUrl, '_blank')
-              if (newWindow) {
-                newWindow.focus() // 確保新分頁獲得焦點
-                // 將當前頁面完整重新載入到首頁（像 F5 一樣），確保組件完全卸載並釋放攝影機資源
-                setTimeout(() => {
-                  console.log('準備完整重新載入到首頁')
-                  window.location.replace('/')
-                }, 1000) // 增加延遲時間，確保新分頁已打開
-              } else {
-                // 如果被阻擋，則在當前頁面完整重新載入結果頁面（像 F5 一樣）
-                console.warn('新分頁被阻擋，改為在當前頁面完整重新載入結果')
-                console.log('準備完整重新載入到:', resultUrl)
-                // 使用 replace 強制完整重新載入，繞過 Next.js 路由
-                window.location.replace(resultUrl)
-              }
-            } else {
-              onInterviewComplete(finalResult)
-            }
-          }, 6000) // 給更多時間：3秒顯示 + 3秒處理錄製
+            // 此處不自動導向結果頁，方便開發時在 F12 中檢查請求與回應
+          }, 6000) // 給更多時間：3秒顯示 + 3秒處理錄製與儲存
         } else {
           setIsWaitingForAnswer(true)
         }

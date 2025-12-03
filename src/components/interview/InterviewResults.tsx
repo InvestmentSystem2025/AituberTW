@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { InterviewResult, AnswerScore, ScoreLevel, getScoreLevel, SCORE_LEVEL_DESCRIPTIONS, SCORE_LEVEL_COLORS } from '@/types/interviewScoring'
+import React from 'react'
+import { InterviewResult, AnswerScore, ScoreLevel, getScoreLevel, SCORE_LEVEL_DESCRIPTIONS, SCORE_LEVEL_COLORS, PersonalitySummary } from '@/types/interviewScoring'
 
 interface Answer {
   question: {
@@ -15,6 +15,7 @@ interface Answer {
 interface InterviewResultsProps {
   answers?: Answer[]
   interviewResult?: InterviewResult
+  personalitySummary?: PersonalitySummary
   onRestart: () => void
   onExit: () => void
 }
@@ -22,88 +23,16 @@ interface InterviewResultsProps {
 export const InterviewResults: React.FC<InterviewResultsProps> = ({
   answers = [],
   interviewResult,
+  personalitySummary,
   onRestart,
   onExit,
 }) => {
-  // 保存狀態
-  const [isSaving, setIsSaving] = useState(false)
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle')
-  const [saveMessage, setSaveMessage] = useState('')
-  const hasAutoSavedRef = useRef(false) // 使用 ref 追蹤是否已自動保存
-
   // 如果有評分結果，使用評分結果；否則使用傳統答案
   const hasScoringResult = !!interviewResult
   const totalQuestions = hasScoringResult ? interviewResult.totalQuestions : answers.length
   const completedAnswers = hasScoringResult ? interviewResult.answeredQuestions : answers.filter(
     (answer) => answer.answer.trim().length > 0
   ).length
-
-  // 保存面試記錄
-  const handleSaveRecord = async () => {
-    setIsSaving(true)
-    setSaveStatus('idle')
-    setSaveMessage('')
-
-    try {
-      const recordData = {
-        candidateId: `candidate-${Date.now()}`, // 可以改為實際的候選人ID
-        interviewDate: new Date().toISOString(),
-        totalQuestions,
-        answeredQuestions: completedAnswers,
-        answers: answers.map(a => ({
-          question: a.question,
-          answer: a.answer,
-          timestamp: a.timestamp.toISOString(),
-        })),
-        interviewResult: interviewResult ? {
-          ...interviewResult,
-          interviewDate: interviewResult.interviewDate.toISOString(),
-          answerScores: interviewResult.answerScores.map(score => ({
-            ...score,
-            timestamp: score.timestamp.toISOString(),
-          })),
-        } : undefined,
-      }
-
-      const response = await fetch('/api/save-interview-record', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(recordData),
-      })
-
-      const result = await response.json()
-
-      if (response.ok && result.success) {
-        setSaveStatus('success')
-        setSaveMessage(`✅ 面試記錄已保存: ${result.fileName}`)
-      } else {
-        throw new Error(result.message || '保存失敗')
-      }
-    } catch (error) {
-      console.error('保存面試記錄失敗:', error)
-      setSaveStatus('error')
-      setSaveMessage(`❌ 保存失敗: ${error instanceof Error ? error.message : '未知錯誤'}`)
-    } finally {
-      setIsSaving(false)
-      // 3秒後清除訊息
-      setTimeout(() => {
-        setSaveStatus('idle')
-        setSaveMessage('')
-      }, 3000)
-    }
-  }
-
-  // 自動保存功能 - 組件載入時自動保存一次
-  useEffect(() => {
-    // 使用 ref 確保即使在 React Strict Mode 下也只執行一次
-    if (!hasAutoSavedRef.current && (answers.length > 0 || interviewResult)) {
-      hasAutoSavedRef.current = true
-      handleSaveRecord()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []) // 只在組件首次載入時執行
 
   const getDifficultyColor = (difficulty: string) => {
     switch (difficulty) {
@@ -205,6 +134,39 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
                   {interviewResult.totalScore.toFixed(1)}/10
                 </div>
                 <div className="text-sm text-gray-600">總平均分數</div>
+              </div>
+            </div>
+          )}
+
+          {/* 人格分析結果 */}
+          {personalitySummary && (
+            <div className="mb-6 p-6 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg border">
+              <h2 className="text-xl font-semibold text-gray-800 mb-3">人格分析</h2>
+              <div className="space-y-2 text-sm text-gray-700">
+                {personalitySummary.extraversion && (
+                  <div>
+                    <span className="font-medium">外向傾向：</span>
+                    <span>{personalitySummary.extraversion}</span>
+                  </div>
+                )}
+                {personalitySummary.conscientiousness && (
+                  <div>
+                    <span className="font-medium">盡責程度：</span>
+                    <span>{personalitySummary.conscientiousness}</span>
+                  </div>
+                )}
+                {personalitySummary.detail_attentiveness && (
+                  <div>
+                    <span className="font-medium">細心程度：</span>
+                    <span>{personalitySummary.detail_attentiveness}</span>
+                  </div>
+                )}
+                {personalitySummary.summaryText && (
+                  <div>
+                    <span className="font-medium">整體總結：</span>
+                    <span>{personalitySummary.summaryText}</span>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -448,32 +410,8 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
           </div>
         )}
 
-        {/* 保存狀態提示 */}
-        {saveMessage && (
-          <div className={`mb-4 p-4 rounded-lg text-center font-medium ${
-            saveStatus === 'success' 
-              ? 'bg-green-100 text-green-800 border border-green-300' 
-              : saveStatus === 'error'
-              ? 'bg-red-100 text-red-800 border border-red-300'
-              : ''
-          }`}>
-            {saveMessage}
-          </div>
-        )}
-
         {/* 操作按鈕 */}
         <div className="flex justify-center gap-4">
-          <button
-            onClick={handleSaveRecord}
-            disabled={isSaving}
-            className={`px-6 py-3 rounded-lg font-medium transition-colors ${
-              isSaving
-                ? 'bg-gray-400 cursor-not-allowed text-white'
-                : 'bg-green-500 hover:bg-green-600 text-white'
-            }`}
-          >
-            {isSaving ? '保存中...' : '💾 保存面試記錄'}
-          </button>
           <button
             onClick={onRestart}
             className="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-medium transition-colors"

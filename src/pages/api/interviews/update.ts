@@ -5,7 +5,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST' && req.method !== 'PUT' && req.method !== 'PATCH') return res.status(405).end()
   const authUserId = await getAuthUserIdFromRequest(req)
   if (!authUserId) return res.status(401).json({ error: 'UNAUTHORIZED' })
-  const { id, company_id, job_opening_id, start_time, end_time, status, profiles_id, candidate_email } = req.body || {}
+  const { id, company_id, job_opening_id, start_time, end_time, status, profiles_id, candidate_email, review_type } = req.body || {}
   if (!id || !company_id) return res.status(400).json({ error: 'MISSING_FIELDS' })
   if (profiles_id !== undefined && candidate_email !== undefined) {
     if (!!profiles_id === !!candidate_email) return res.status(400).json({ error: 'XOR_PROFILE_EMAIL' })
@@ -30,6 +30,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (typeof start_time === 'string') payload.start_time = start_time
   if (typeof end_time === 'string' || end_time === null) payload.end_time = end_time
   if (typeof status === 'string') payload.status = status
+  if (typeof review_type === 'string' && ['AI', 'HUMAN', 'MIXED'].includes(review_type)) {
+    payload.review_type = review_type
+  }
   if (profiles_id !== undefined || candidate_email !== undefined) {
     if (profiles_id) { payload.profiles_id = profiles_id; payload.candidate_email = null }
     else if (candidate_email) { payload.candidate_email = String(candidate_email).toLowerCase(); payload.profiles_id = null }

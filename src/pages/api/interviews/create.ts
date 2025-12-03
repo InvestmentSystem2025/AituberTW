@@ -6,7 +6,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST') return res.status(405).end()
   const authUserId = await getAuthUserIdFromRequest(req)
   if (!authUserId) return res.status(401).json({ error: 'UNAUTHORIZED' })
-  const { company_id, job_opening_id, start_time, end_time, profiles_id, candidate_email } = req.body || {}
+  const { company_id, job_opening_id, start_time, end_time, profiles_id, candidate_email, review_type } = req.body || {}
   if (!company_id || !job_opening_id || !start_time) return res.status(400).json({ error: 'MISSING_FIELDS' })
   
   // 確保 profiles_id 和 candidate_email 只有一個被提供
@@ -31,6 +31,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (end_time) payload.end_time = end_time
   if (profiles_id) payload.profiles_id = profiles_id
   if (candidate_email) payload.candidate_email = String(candidate_email).toLowerCase()
+  // 評價方式：預設為 AI，可選 HUMAN 或 MIXED
+  if (review_type && ['AI', 'HUMAN', 'MIXED'].includes(review_type)) {
+    payload.review_type = review_type
+  }
 
   const { data: inserted, error } = await supa
     .from('interviews')

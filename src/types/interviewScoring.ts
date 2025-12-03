@@ -5,6 +5,16 @@
 // 評分維度 - 支持動態評估項目（key -> score）
 export type ScoringCriteria = Record<string, number>
 
+// 人格判斷結果（由 AI 在最後一題輸出）
+export interface PersonalitySummary {
+  extraversion?: string              // 外向/內向 傾向與說明
+  conscientiousness?: string         // 盡責/隨性 傾向與說明
+  detail_attentiveness?: string      // 細心/粗心 傾向與說明
+  summaryText?: string               // 1-3 句整體性格總結
+  // 預留其他欄位，方便日後擴充
+  [key: string]: any
+}
+
 // 單次回答的評分結果
 export interface AnswerScore {
   answerId: string
@@ -19,6 +29,8 @@ export interface AnswerScore {
   aiFeedback: string
   additionsDetail?: string
   deductionsDetail?: string
+   // （選用）人格判斷結果，只會在「最後一題」的評分中出現
+  personality?: PersonalitySummary
 }
 
 // 面試評分設定
