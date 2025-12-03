@@ -176,6 +176,10 @@ CREATE TABLE public.interviews (
   )
 );
 
+-- 讓既有或新建的 interviews 表格都具備 review_type 欄位（AI / HUMAN / MIXED）
+ALTER TABLE public.interviews
+  ADD COLUMN IF NOT EXISTS review_type public.review_type_type NOT NULL DEFAULT 'AI';
+
 -- interview_sessions
 CREATE TABLE public.interview_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -228,9 +232,9 @@ BEGIN
   VALUES
     (NEW.company_id, NEW.id, 'content_integrity',   '內容完整性',   0.20, 10, 'deduction', '["答非所問-2分", "回答不完整-1分"]'::jsonb, NULL, 1),
     (NEW.company_id, NEW.id, 'logical_clarity',     '邏輯清晰度',   0.20, 10, 'deduction', '["條理不清-2分", "邏輯錯誤-1分"]'::jsonb, NULL, 2),
-    (NEW.company_id, NEW.id, 'professional_depth',  '專業深度',     0.20, 10, 'addition',  NULL, '["正確回答專業問題+2.5分", "展現深度理解+1分"]'::jsonb, 3),
+    (NEW.company_id, NEW.id, 'professional_depth',  '專業深度',     0.20, 10, 'composite',  '["專業知識明顯錯誤-2分", "無法舉出實務案例-1分", "只背誦定義缺乏深入思考-1分"]'::jsonb, '["正確回答專業問題+2.5分", "展現深度理解+1分"]'::jsonb, 3),
     (NEW.company_id, NEW.id, 'communication',       '溝通表達',     0.20, 10, 'deduction', '["表達不清晰-1分", "表達不流暢-1分"]'::jsonb, NULL, 4),
-    (NEW.company_id, NEW.id, 'personal_attributes', '個人特質',     0.20, 10, 'addition',  NULL, '["向上心求知慾+2.5分", "持續學習+2.5分", "活潑外向+2.5分", "堅強抗壓+2.5分"]'::jsonb, 5);
+    (NEW.company_id, NEW.id, 'personal_attributes', '個人特質',     0.20, 10, 'composite',  '["缺乏企圖心與主動性-2分", "對學習成長明顯消極-1分", "團隊合作態度不佳-2分", "抗壓與面對挫折態度消極-1分"]'::jsonb, '["向上心求知慾+2.5分", "持續學習+2.5分", "活潑外向+2.5分", "堅強抗壓+2.5分"]'::jsonb, 5);
   RETURN NEW;
 END;
 $$;
@@ -732,6 +736,9 @@ FOR SELECT
 TO authenticated
 USING (
   profiles_id = public.get_user_profile_id(auth.uid())
+  OR candidate_email = lower(
+    (SELECT email FROM public.profiles WHERE auth_id = auth.uid())
+  )
 );
 
 -- ==================
@@ -757,7 +764,12 @@ USING (
   EXISTS (
     SELECT 1 FROM public.interviews i
     WHERE i.id = public.interview_sessions.interviews_id
-      AND i.profiles_id = public.get_user_profile_id(auth.uid())
+      AND (
+        i.profiles_id = public.get_user_profile_id(auth.uid())
+        OR i.candidate_email = lower(
+          (SELECT email FROM public.profiles WHERE auth_id = auth.uid())
+        )
+      )
   )
 );
 
@@ -773,7 +785,9 @@ USING (
     WHERE i.id = public.interview_sessions.interviews_id
       AND (
         i.profiles_id = public.get_user_profile_id(auth.uid())
-        OR i.candidate_email = (SELECT email FROM public.profiles WHERE auth_id = auth.uid())
+        OR i.candidate_email = lower(
+          (SELECT email FROM public.profiles WHERE auth_id = auth.uid())
+        )
       )
   )
 );

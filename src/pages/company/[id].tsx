@@ -7,7 +7,17 @@ type AIInterviewer = { id: string; name: string; model_name: string; model_confi
 type JobOpening = { id: string; job_title: string; use_ai_generate_question?: boolean; result_notification_method?: 'immediate' | 'later'; evaluation_policy?: any }
 type Question = { id: string; name?: string; source: 'AI' | 'USER'; detail?: any }
 type JOQ = { id: string; job_opening_id: string; question_bank_id?: string | null; detail?: any; sort_order?: number; is_active?: boolean }
-type Interview = { id: string; job_opening_id: string; start_time: string; end_time?: string | null; status?: 'waitToStart' | 'completed' | 'lateButComplete' | 'noShow' | 'cancelled'; profiles_id?: string; candidate_email?: string }
+type Interview = { 
+  id: string; 
+  job_opening_id: string; 
+  start_time: string; 
+  end_time?: string | null; 
+  status?: 'waitToStart' | 'completed' | 'lateButComplete' | 'noShow' | 'cancelled'; 
+  profiles_id?: string; 
+  candidate_email?: string;
+  // 可能會包含從 Supabase 關聯查詢回來的 interview_sessions（0 或 1 筆）
+  interview_sessions?: any;
+}
 type EvaluationCriteria = { 
   id: string; 
   key: string; 
@@ -40,6 +50,11 @@ export default function CompanyAdminPage() {
   const [editingQB, setEditingQB] = useState<string | null>(null)
   const [editingJOQ, setEditingJOQ] = useState<string | null>(null)
   const [editingIV, setEditingIV] = useState<string | null>(null)
+  const [expandedIV, setExpandedIV] = useState<string | null>(null)
+  const [reviewingIV, setReviewingIV] = useState<string | null>(null)
+  const [reviewingLoading, setReviewingLoading] = useState(false)
+  const [criteriaDisplayNames, setCriteriaDisplayNames] = useState<Record<string, Record<string, string>>>({})
+  const criteriaLoadingRef = useRef<Set<string>>(new Set())
 
   // evaluation policy form state
   const criteriaNames: Record<string, string> = {
@@ -63,9 +78,11 @@ export default function CompanyAdminPage() {
     customCriteria: [
       { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '答非所問-2分\n回答不完整-1分', addition_rules: '' },
       { key: 'logical_clarity', display_name: '邏輯清晰度', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '條理不清-2分\n邏輯錯誤-1分', addition_rules: '' },
-      { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'addition' as const, deduction_rules: '', addition_rules: '正確回答專業問題+2.5分\n展現深度理解+1分' },
+      // 專業深度：預設改為綜合制（composite）
+      { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '專業知識明顯錯誤-2分\n無法舉出實務案例-1分\n只背誦定義缺乏深入思考-1分', addition_rules: '正確回答專業問題+2.5分\n展現深度理解+1分' },
       { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '表達不清晰-1分\n表達不流暢-1分', addition_rules: '' },
-      { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'addition' as const, deduction_rules: '', addition_rules: '向上心求知慾+2.5分\n持續學習+2.5分\n活潑外向+2.5分\n堅強抗壓+2.5分' }
+      // 個人特質：預設改為綜合制（composite）
+      { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '缺乏企圖心與主動性-2分\n對學習成長明顯消極-1分\n團隊合作態度不佳-2分\n抗壓與面對挫折態度消極-1分', addition_rules: '向上心求知慾+2.5分\n持續學習+2.5分\n活潑外向+2.5分\n堅強抗壓+2.5分' }
     ] as Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction' | 'composite'; addition_rules: string; deduction_rules: string }>
   })
   const [editJob, setEditJob] = useState({ 
@@ -92,13 +109,27 @@ export default function CompanyAdminPage() {
     showForm: false
   })
   const [newJOQ, setNewJOQ] = useState({ job_opening_id: '', question_bank_id: '', questions: [] as string[], showForm: false })
-  const [newIV, setNewIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '' })
+  const [newIV, setNewIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'AI' as 'AI' | 'HUMAN' | 'MIXED' })
 
   // edit forms (starts with empty)
   const [editAI, setEditAI] = useState({ name: '', model_name: 'yuki.vrm', model_config: '{}' })
   const [editQB, setEditQB] = useState({ name: '', source: 'USER' as 'USER' | 'AI', questions: [] as string[] })
   const [editJOQ, setEditJOQ] = useState({ job_opening_id: '', question_bank_id: '', questions: [] as string[] })
-  const [editIV, setEditIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '' })
+  const [editIV, setEditIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'AI' as 'AI' | 'HUMAN' | 'MIXED' })
+
+  // helper: 將資料庫時間字串轉為 <input type="datetime-local"> 需要的本地時間格式（避免被轉成 UTC 提前 8 小時）
+  const toLocalDatetimeInput = (value?: string | null): string => {
+    if (!value) return ''
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return ''
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const year = d.getFullYear()
+    const month = pad(d.getMonth() + 1)
+    const day = pad(d.getDate())
+    const hours = pad(d.getHours())
+    const minutes = pad(d.getMinutes())
+    return `${year}-${month}-${day}T${hours}:${minutes}`
+  }
 
   // JSON validation helper
   const isValidJSON = (str: string) => {
@@ -323,8 +354,9 @@ export default function CompanyAdminPage() {
               weight: customCriteria.weight,
               max_score: customCriteria.max_score,
               scoring_logic: customCriteria.scoring_logic || 'deduction',
-              addition_rules: customCriteria.scoring_logic === 'addition' ? additionRulesArray : null,
-              deduction_rules: customCriteria.scoring_logic === 'deduction' ? deductionRulesArray : null,
+              // 綜合制：同時帶入加分與扣分規則
+              addition_rules: (customCriteria.scoring_logic === 'addition' || customCriteria.scoring_logic === 'composite') ? additionRulesArray : null,
+              deduction_rules: (customCriteria.scoring_logic === 'deduction' || customCriteria.scoring_logic === 'composite') ? deductionRulesArray : null,
               sort_order: i + 1
             })
           })
@@ -341,8 +373,9 @@ export default function CompanyAdminPage() {
               weight: customCriteria.weight,
               max_score: customCriteria.max_score,
               scoring_logic: customCriteria.scoring_logic || 'deduction',
-              addition_rules: customCriteria.scoring_logic === 'addition' ? additionRulesArray : null,
-              deduction_rules: customCriteria.scoring_logic === 'deduction' ? deductionRulesArray : null,
+              // 綜合制：同時帶入加分與扣分規則
+              addition_rules: (customCriteria.scoring_logic === 'addition' || customCriteria.scoring_logic === 'composite') ? additionRulesArray : null,
+              deduction_rules: (customCriteria.scoring_logic === 'deduction' || customCriteria.scoring_logic === 'composite') ? deductionRulesArray : null,
               sort_order: i + 1
             })
           })
@@ -377,9 +410,11 @@ export default function CompanyAdminPage() {
       customCriteria: [
         { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '答非所問-2分\n回答不完整-1分', addition_rules: '' },
         { key: 'logical_clarity', display_name: '邏輯清晰度', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '條理不清-2分\n邏輯錯誤-1分', addition_rules: '' },
-        { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'addition' as const, deduction_rules: '', addition_rules: '正確回答專業問題+2.5分\n展現深度理解+1分' },
+        // 專業深度：預設改為綜合制（composite）
+        { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '專業知識明顯錯誤-2分\n無法舉出實務案例-1分\n只背誦定義缺乏深入思考-1分', addition_rules: '正確回答專業問題+2.5分\n展現深度理解+1分' },
         { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '表達不清晰-1分\n表達不流暢-1分', addition_rules: '' },
-        { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'addition' as const, deduction_rules: '', addition_rules: '向上心求知慾+2.5分\n持續學習+2.5分\n活潑外向+2.5分\n堅強抗壓+2.5分' }
+        // 個人特質：預設改為綜合制（composite）
+        { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '缺乏企圖心與主動性-2分\n對學習成長明顯消極-1分\n團隊合作態度不佳-2分\n抗壓與面對挫折態度消極-1分', addition_rules: '向上心求知慾+2.5分\n持續學習+2.5分\n活潑外向+2.5分\n堅強抗壓+2.5分' }
       ]
     })
     await loadJobs(token)
@@ -488,6 +523,11 @@ export default function CompanyAdminPage() {
     if (hasCandidateEmail) {
       payload.candidate_email = newIV.candidate_email.trim()
     }
+
+    // 評價方式（AI / HUMAN）：預設 AI，可選人類或混合
+    if (newIV.review_type && ['AI', 'HUMAN', 'MIXED'].includes(newIV.review_type)) {
+      payload.review_type = newIV.review_type
+    }
     
     const r = await fetch('/api/interviews/create', { 
       method: 'POST', 
@@ -514,12 +554,32 @@ export default function CompanyAdminPage() {
       return
     }
     
-    setNewIV({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '' }); 
+    setNewIV({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'AI' }); 
     await loadIVs(token)
   }
-  const evalIV = async (id: string) => {
-    await fetch('/api/interviews/evaluate', { method: 'POST', headers: headers(token, { 'Content-Type': 'application/json' }), body: JSON.stringify({ interviews_id: id }) })
-    await loadIVs(token)
+  const evalIV = async (id: string, result: 'hired' | 'rejected') => {
+    if (reviewingLoading) return
+    setReviewingLoading(true)
+    try {
+      const r = await fetch('/api/interviews/evaluate', { 
+        method: 'POST', 
+        headers: headers(token, { 'Content-Type': 'application/json' }), 
+        body: JSON.stringify({ interviews_id: id, interview_result: result }) 
+      })
+      const j = await r.json().catch(() => ({} as any))
+      if (!r.ok) {
+        alert(j.error || '評價失敗')
+        return
+      }
+      alert(result === 'hired' ? '已標記為錄取' : '已標記為拒絕')
+      setReviewingIV(null)
+      await loadIVs(token)
+    } catch (err) {
+      console.error('評價失敗:', err)
+      alert('評價失敗，請稍後再試')
+    } finally {
+      setReviewingLoading(false)
+    }
   }
 
   // update handlers
@@ -577,6 +637,13 @@ export default function CompanyAdminPage() {
 
       // 更新或創建 evaluation_criteria
       for (const criteria of editJob.customCriteria) {
+        const additionRulesArray = Array.isArray(criteria.addition_rules)
+          ? criteria.addition_rules
+          : (criteria.addition_rules ? criteria.addition_rules.split('\n').filter((r: string) => r.trim()) : null)
+        const deductionRulesArray = Array.isArray(criteria.deduction_rules)
+          ? criteria.deduction_rules
+          : (criteria.deduction_rules ? criteria.deduction_rules.split('\n').filter((r: string) => r.trim()) : null)
+
         const payload = {
           company_id: companyId,
           job_opening_id: id,
@@ -585,8 +652,9 @@ export default function CompanyAdminPage() {
           weight: criteria.weight,
           max_score: criteria.max_score,
           scoring_logic: criteria.scoring_logic,
-          addition_rules: criteria.scoring_logic === 'addition' ? (Array.isArray(criteria.addition_rules) ? criteria.addition_rules : criteria.addition_rules.split('\n').filter((r: string) => r.trim())) : null,
-          deduction_rules: criteria.scoring_logic === 'deduction' ? (Array.isArray(criteria.deduction_rules) ? criteria.deduction_rules : criteria.deduction_rules.split('\n').filter((r: string) => r.trim())) : null,
+          // 綜合制：同時帶入加分與扣分規則
+          addition_rules: (criteria.scoring_logic === 'addition' || criteria.scoring_logic === 'composite') ? additionRulesArray : null,
+          deduction_rules: (criteria.scoring_logic === 'deduction' || criteria.scoring_logic === 'composite') ? deductionRulesArray : null,
           sort_order: editJob.customCriteria.indexOf(criteria) + 1
         }
 
@@ -901,12 +969,81 @@ export default function CompanyAdminPage() {
   const startEditIV = (item: Interview) => {
     setEditIV({
       job_opening_id: item.job_opening_id,
-      start_time: item.start_time ? new Date(item.start_time).toISOString().slice(0, 16) : '',
-      end_time: item.end_time ? new Date(item.end_time).toISOString().slice(0, 16) : '',
+      start_time: item.start_time ? toLocalDatetimeInput(item.start_time) : '',
+      end_time: item.end_time ? toLocalDatetimeInput(item.end_time) : '',
       profiles_id: item.profiles_id || '',
-      candidate_email: item.candidate_email || ''
+      candidate_email: item.candidate_email || '',
+      review_type: ((item as any).review_type as 'AI' | 'HUMAN' | 'MIXED') || 'AI',
     })
     setEditingIV(item.id)
+  }
+
+  const ensureCriteriaDisplayNames = async (jobOpeningId: string) => {
+    if (!companyId || criteriaDisplayNames[jobOpeningId] || criteriaLoadingRef.current.has(jobOpeningId)) return
+
+    criteriaLoadingRef.current.add(jobOpeningId)
+    try {
+      const r = await fetch(
+        `/api/evaluation-criteria/list?company_id=${companyId}&job_opening_id=${jobOpeningId}`,
+        { headers: headers() }
+      )
+      if (!r.ok) return
+      const j = await r.json()
+      const items = Array.isArray(j) ? j : (j.items || [])
+      const map: Record<string, string> = {}
+      items.forEach((c: any) => {
+        if (c && c.key && c.display_name) {
+          map[c.key] = c.display_name
+        }
+      })
+      setCriteriaDisplayNames(prev => ({
+        ...prev,
+        [jobOpeningId]: map
+      }))
+    } catch (error) {
+      console.error('載入 evaluation_criteria 失敗:', error)
+    } finally {
+      criteriaLoadingRef.current.delete(jobOpeningId)
+    }
+  }
+
+  const formatInterviewStatus = (status?: Interview['status']) => {
+    if (status === 'waitToStart') return '等待開始'
+    if (status === 'completed') return '已完成'
+    if (status === 'lateButComplete') return '延遲但完成'
+    if (status === 'noShow') return '未出席'
+    if (status === 'cancelled') return '已取消'
+    return status || '未知狀態'
+  }
+
+  const formatInterviewResult = (result?: 'hired' | 'rejected' | 'onHold' | null) => {
+    if (result === 'hired') return '錄取'
+    if (result === 'rejected') return '拒絕'
+    if (result === 'onHold') return '保留觀察'
+    return '尚未評價'
+  }
+
+  const formatReviewType = (reviewType?: 'AI' | 'HUMAN' | 'MIXED' | null) => {
+    if (reviewType === 'AI') return 'AI 評價'
+    if (reviewType === 'HUMAN') return '人類評價'
+    if (reviewType === 'MIXED') return '混合評價'
+    return '未設定'
+  }
+
+  const formatDurationSeconds = (sec?: number | null) => {
+    if (!sec || sec <= 0) return '—'
+    const minutes = Math.floor(sec / 60)
+    const seconds = sec % 60
+    if (minutes === 0) return `${seconds} 秒`
+    return `${minutes} 分 ${seconds} 秒`
+  }
+
+  const formatResultReason = (reason?: string | null) => {
+    if (!reason) return '—'
+    if (reason === 'passed threshold') return 'AI 評分通過門檻'
+    if (reason === 'below threshold') return 'AI 評分低於門檻'
+    if (reason === 'per_criteria_minimums/must_meet not satisfied') return '未達個別項目或必備條件'
+    return reason
   }
 
   const tabBtn = (k: typeof tab, label: string) => (
@@ -2194,13 +2331,25 @@ export default function CompanyAdminPage() {
                 style={{ padding: 8, border: '2px solid #000', width: '100%' }} 
               />
             </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontWeight: 'bold' }}>評價方式：</label>
+              <select
+                value={newIV.review_type}
+                onChange={(e) => setNewIV({ ...newIV, review_type: e.target.value as 'AI' | 'HUMAN' | 'MIXED' })}
+                style={{ padding: 8, border: '2px solid #000', width: '100%' }}
+              >
+                <option value="AI">AI 評價（不允許人類標記錄取／拒絕）</option>
+                <option value="HUMAN">人類評價（可由招募方手動決定結果）</option>
+                <option value="MIXED">混合（保留，未來可同時使用 AI 與人類）</option>
+              </select>
+            </div>
             <button type="submit" style={{ padding: '8px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4 }}>新增面試</button>
           </form>
           <ul style={{ marginTop: 12 }}>
             {ivs.map((iv) => {
-              const job = jobs.find(j => j.id === iv.job_opening_id)
-              return (
-                <li key={iv.id} style={{ padding: 12, border: '2px solid #000', background: editingIV === iv.id ? '#fff9e6' : '#e6f2ff', borderRadius: 6, marginBottom: 8 }}>
+            const job = jobs.find(j => j.id === iv.job_opening_id)
+            return (
+              <li key={iv.id} style={{ padding: 12, border: '2px solid #000', background: editingIV === iv.id ? '#fff9e6' : '#e6f2ff', borderRadius: 6, marginBottom: 8 }}>
                   {editingIV === iv.id ? (
                     <div style={{ display: 'grid', gap: 12 }}>
                       <div>
@@ -2251,28 +2400,311 @@ export default function CompanyAdminPage() {
                           style={{ padding: 8, border: '2px solid #000', width: '100%' }} 
                         />
                       </div>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: 4, fontWeight: 'bold' }}>評價方式：</label>
+                        <select
+                          value={editIV.review_type}
+                          onChange={(e) => setEditIV({ ...editIV, review_type: e.target.value as 'AI' | 'HUMAN' | 'MIXED' })}
+                          style={{ padding: 8, border: '2px solid #000', width: '100%' }}
+                        >
+                          <option value="AI">AI 評價（不允許人類標記錄取／拒絕）</option>
+                          <option value="HUMAN">人類評價（可由招募方手動決定結果）</option>
+                          <option value="MIXED">混合（保留，未來可同時使用 AI 與人類）</option>
+                        </select>
+                      </div>
                       <div style={{ display: 'flex', gap: 8 }}>
                         <button onClick={() => updateIV(iv.id)} style={{ padding: '6px 12px', background: '#4CAF50', color: 'white' }}>儲存</button>
                         <button onClick={() => setEditingIV(null)} style={{ padding: '6px 12px' }}>取消</button>
                       </div>
                     </div>
                   ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                      <div style={{ flex: 1, minWidth: 250 }}>
-                        <div style={{ fontWeight: 'bold' }}>職種: {job?.job_title || iv.job_opening_id}</div>
-                        <div style={{ fontSize: '0.9em', color: '#666' }}>
-                          開始: {iv.start_time}<br/>
-                          狀態: {iv.status === 'waitToStart' ? '等待開始' : iv.status === 'completed' ? '已完成' : iv.status === 'lateButComplete' ? '延遲但完成' : iv.status === 'noShow' ? '未出席' : iv.status === 'cancelled' ? '已取消' : iv.status}<br/>
-                          {iv.profiles_id && <span>用戶 ID: {iv.profiles_id}<br/></span>}
-                          {iv.candidate_email && <span>Email: {iv.candidate_email}</span>}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <button onClick={() => startEditIV(iv)} style={{ padding: '6px 12px', background: '#2196F3', color: 'white' }}>編輯</button>
-                        <button onClick={() => evalIV(iv.id)} style={{ padding: '6px 12px', background: '#9C27B0', color: 'white' }}>評價</button>
-                        <button onClick={() => deleteIV(iv.id)} style={{ padding: '6px 12px', background: '#f44336', color: 'white' }}>刪除</button>
-                      </div>
-                    </div>
+                    <>
+                      {(() => {
+                        const rawSession = (iv as any).interview_sessions
+                        const session = Array.isArray(rawSession) ? rawSession[0] : rawSession
+                        const sessionReviewType = session?.review_type as 'AI' | 'HUMAN' | 'MIXED' | undefined
+                        const interviewReviewType = (iv as any).review_type as 'AI' | 'HUMAN' | 'MIXED' | undefined
+                        const reviewType = sessionReviewType || interviewReviewType
+                        const canHumanReview = !!session && reviewType === 'HUMAN'
+                        const hasSession = !!session
+
+                        return (
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                              <div style={{ flex: 1, minWidth: 250 }}>
+                                <div style={{ fontWeight: 'bold' }}>職種: {job?.job_title || iv.job_opening_id}</div>
+                                <div style={{ fontSize: '0.9em', color: '#666' }}>
+                                  開始: {iv.start_time}<br />
+                                  狀態: {formatInterviewStatus(iv.status)}<br />
+                                  {hasSession && (
+                                    <>
+                                      面試結果: {formatInterviewResult(session?.interview_result)}<br />
+                                      評價方式: {formatReviewType(reviewType || null)}<br />
+                                      總分: {typeof session?.total_score === 'number' ? `${session.total_score} 分` : '尚未計算'}
+                                      <br />
+                                    </>
+                                  )}
+                                  {iv.profiles_id && <span>用戶 ID: {iv.profiles_id}<br /></span>}
+                                  {iv.candidate_email && <span>Email: {iv.candidate_email}</span>}
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                <button
+                                  onClick={() => startEditIV(iv)}
+                                  style={{ padding: '6px 12px', background: '#2196F3', color: 'white' }}
+                                >
+                                  編輯
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    if (expandedIV === iv.id) {
+                                      setExpandedIV(null)
+                                    } else {
+                                      setExpandedIV(iv.id)
+                                      if (!criteriaDisplayNames[iv.job_opening_id]) {
+                                        void ensureCriteriaDisplayNames(iv.job_opening_id)
+                                      }
+                                    }
+                                  }}
+                                  style={{ padding: '6px 12px', background: '#607D8B', color: 'white' }}
+                                >
+                                  {expandedIV === iv.id ? '收合詳情' : '展開詳情'}
+                                </button>
+                                {reviewingIV === iv.id ? (
+                                  <>
+                                    <button
+                                      disabled={!canHumanReview || reviewingLoading}
+                                      onClick={() => evalIV(iv.id, 'hired')}
+                                      style={{
+                                        padding: '6px 12px',
+                                        background: !canHumanReview || reviewingLoading ? '#c8e6c9' : '#4CAF50',
+                                        color: 'white',
+                                        cursor: !canHumanReview || reviewingLoading ? 'not-allowed' : 'pointer',
+                                      }}
+                                    >
+                                      錄取
+                                    </button>
+                                    <button
+                                      disabled={!canHumanReview || reviewingLoading}
+                                      onClick={() => evalIV(iv.id, 'rejected')}
+                                      style={{
+                                        padding: '6px 12px',
+                                        background: !canHumanReview || reviewingLoading ? '#ffcdd2' : '#f44336',
+                                        color: 'white',
+                                        cursor: !canHumanReview || reviewingLoading ? 'not-allowed' : 'pointer',
+                                      }}
+                                    >
+                                      拒絕
+                                    </button>
+                                    <button
+                                      onClick={() => setReviewingIV(null)}
+                                      style={{ padding: '6px 12px' }}
+                                    >
+                                      取消
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    disabled={!canHumanReview}
+                                    onClick={() => setReviewingIV(iv.id)}
+                                    style={{
+                                      padding: '6px 12px',
+                                      background: canHumanReview ? '#9C27B0' : '#BDBDBD',
+                                      color: 'white',
+                                      cursor: canHumanReview ? 'pointer' : 'not-allowed',
+                                    }}
+                                  >
+                                    評價
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => deleteIV(iv.id)}
+                                  style={{ padding: '6px 12px', background: '#f44336', color: 'white' }}
+                                >
+                                  刪除
+                                </button>
+                              </div>
+                            </div>
+
+                            {expandedIV === iv.id && (
+                              <div
+                                style={{
+                                  marginTop: 12,
+                                  padding: 12,
+                                  background: '#ffffff',
+                                  borderRadius: 6,
+                                  border: '1px dashed #9e9e9e',
+                                }}
+                              >
+                                {hasSession ? (
+                                  <div style={{ display: 'grid', gap: 8 }}>
+                                    <div>
+                                      <strong>總分：</strong>
+                                      {typeof session.total_score === 'number' ? `${session.total_score} 分` : '尚未計算'}
+                                    </div>
+                                    <div>
+                                      <strong>面試結果：</strong>
+                                      {formatInterviewResult(session.interview_result)}
+                                    </div>
+                                    <div>
+                                      <strong>結果理由：</strong>
+                                      {formatResultReason(session.result_reason)}
+                                    </div>
+                                    <div>
+                                      <strong>評價方式：</strong>
+                                      {formatReviewType(reviewType || null)}
+                                    </div>
+                                    <div>
+                                      <strong>面試時長：</strong>
+                                      {formatDurationSeconds(session.duration_seconds)}
+                                    </div>
+                                    <div>
+                                      <strong>錄影路徑：</strong>
+                                      {session.video_path || '—'}
+                                    </div>
+                                    <div>
+                                      <strong>AI 評分：</strong>
+                                      {Array.isArray(session.ai_evaluations) && session.ai_evaluations.length > 0 ? (
+                                        <ul style={{ marginTop: 4, paddingLeft: 16 }}>
+                                          {session.ai_evaluations.map((e: any, idx: number) => (
+                                            <li key={idx} style={{ fontSize: '0.9em' }}>
+                                              {(
+                                                criteriaDisplayNames[iv.job_opening_id]?.[e.key] ||
+                                                criteriaNames[e.key] ||
+                                                e.key
+                                              )}: {e.score}
+                                              {e.evidence ? `（說明：${e.evidence}）` : ''}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      ) : (
+                                        <span>尚無 AI 評分</span>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <strong>面試詳細內容：</strong>
+                                      {Array.isArray(session.interview_transcript) &&
+                                      session.interview_transcript.length > 0 ? (
+                                        <div
+                                          style={{
+                                            maxHeight: 260,
+                                            overflowY: 'auto',
+                                            marginTop: 4,
+                                            padding: 8,
+                                            border: '1px solid #e0e0e0',
+                                            background: '#fafafa',
+                                          }}
+                                        >
+                                          {session.interview_transcript.map((t: any, idx: number) => {
+                                            const additionsDetail = (t.additions_detail || '').trim()
+                                            const deductionsDetail = (t.deductions_detail || '').trim()
+                                            const hasCurrentScores =
+                                              t.current_scores &&
+                                              typeof t.current_scores === 'object' &&
+                                              Object.keys(t.current_scores).length > 0
+                                            const hasPersonality = t.personality && typeof t.personality === 'object'
+
+                                            return (
+                                              <div
+                                                key={idx}
+                                                style={{
+                                                  marginBottom: 10,
+                                                  fontSize: '0.9em',
+                                                  padding: 8,
+                                                  borderRadius: 4,
+                                                  background: t.role === 'ai' ? '#e3f2fd' : '#fff',
+                                                  border: '1px solid #e0e0e0',
+                                                }}
+                                              >
+                                                <div style={{ marginBottom: 4 }}>
+                                                  <span style={{ fontWeight: 'bold' }}>
+                                                    {t.role === 'ai' ? 'AI' : '候選人'}：
+                                                  </span>
+                                                  <span>{t.content}</span>
+                                                </div>
+
+                                                {t.aiFeedback && String(t.aiFeedback).trim() && (
+                                                  <div style={{ marginBottom: 2 }}>
+                                                    <span style={{ fontWeight: 'bold' }}>AI 評語：</span>
+                                                    <span>{t.aiFeedback}</span>
+                                                  </div>
+                                                )}
+
+                                                {hasCurrentScores && (
+                                                  <div style={{ marginBottom: 2 }}>
+                                                    <span style={{ fontWeight: 'bold' }}>當前分數：</span>
+                                                    <ul style={{ margin: '4px 0 0 16px' }}>
+                                                      {Object.entries(t.current_scores).map(([key, value]) => (
+                                                        <li key={key}>
+                                                          {(
+                                                            criteriaDisplayNames[iv.job_opening_id]?.[key] ||
+                                                            criteriaNames[key] ||
+                                                            key
+                                                          )}
+                                                          ：{String(value)}
+                                                        </li>
+                                                      ))}
+                                                    </ul>
+                                                  </div>
+                                                )}
+
+                                                {additionsDetail && (
+                                                  <div style={{ marginBottom: 2 }}>
+                                                    <span style={{ fontWeight: 'bold' }}>加分說明：</span>
+                                                    <span>{additionsDetail}</span>
+                                                  </div>
+                                                )}
+
+                                                {deductionsDetail && (
+                                                  <div style={{ marginBottom: 2 }}>
+                                                    <span style={{ fontWeight: 'bold' }}>扣分說明：</span>
+                                                    <span>{deductionsDetail}</span>
+                                                  </div>
+                                                )}
+
+                                                {hasPersonality && (
+                                                  <div style={{ marginTop: 4 }}>
+                                                    <span style={{ fontWeight: 'bold' }}>人格分析：</span>
+                                                    <div style={{ marginLeft: 12 }}>
+                                                      {t.personality.summaryText && (
+                                                        <div>總結：{t.personality.summaryText}</div>
+                                                      )}
+                                                      {t.personality.extraversion && (
+                                                        <div>外向傾向：{t.personality.extraversion}</div>
+                                                      )}
+                                                      {t.personality.conscientiousness && (
+                                                        <div>盡責程度：{t.personality.conscientiousness}</div>
+                                                      )}
+                                                      {t.personality.detail_attentiveness && (
+                                                        <div>細心程度：{t.personality.detail_attentiveness}</div>
+                                                      )}
+                                                    </div>
+                                                  </div>
+                                                )}
+                                              </div>
+                                            )
+                                          })}
+                                        </div>
+                                      ) : (
+                                        <span>尚無面試對話紀錄</span>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <strong>建立時間：</strong>
+                                      {session.created_at
+                                        ? new Date(session.created_at).toLocaleString('zh-TW')
+                                        : '—'}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div>尚未產生面試紀錄</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </>
                   )}
               </li>
               )

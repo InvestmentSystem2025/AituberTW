@@ -10,7 +10,8 @@ import {
   INTERVIEW_PROMPT_TEMPLATES, 
   INTERVIEW_STAGES, 
   formatPrompt,
-  parseInterviewResponse
+  parseInterviewResponse,
+  PERSONALITY_QUESTION_LIST,
 } from './interviewPromptTemplates'
 import { InterviewScoringEngine } from '@/features/interview/interviewScoring'
 import { AnswerScore } from '@/types/interviewScoring'
@@ -305,7 +306,13 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
       scores[key] = Math.max(-max, Math.min(max, value))
     })
   }
-  
+
+  // 擷取人格判斷結果（如果模型在 SCORE JSON 中輸出了 personality 欄位）
+  let personality: any | undefined = undefined
+  if (scoreData && typeof scoreData === 'object' && scoreData.personality && typeof scoreData.personality === 'object') {
+    personality = scoreData.personality
+  }
+
   return {
     answerId: questionId,
     questionId: questionId,
@@ -393,7 +400,8 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
     })(),
     aiFeedback: String(scoreData.aiFeedback || ''),
     additionsDetail: typeof scoreData.additions_detail === 'string' ? scoreData.additions_detail : undefined,
-    deductionsDetail: typeof scoreData.deductions_detail === 'string' ? scoreData.deductions_detail : undefined
+    deductionsDetail: typeof scoreData.deductions_detail === 'string' ? scoreData.deductions_detail : undefined,
+    personality,
   }
 }
 
@@ -670,11 +678,17 @@ export async function getInterviewAIResponse(
   // 格式化對話歷史
   const conversationHistory = formatConversationHistory(messages)
 
-  // 格式化問題列表
-  // 注意：這些問題需要在自我介紹完成後才開始提問
+  // 格式化人格判斷問題列表（固定題目，優先於一般職務相關問題）
+  const personalityQuestionsText =
+    PERSONALITY_QUESTION_LIST && PERSONALITY_QUESTION_LIST.length > 0
+      ? PERSONALITY_QUESTION_LIST.map((q, idx) => `性格問題 ${idx + 1}：${q}`).join('\n')
+      : '（目前未設定人格判斷用問題，可直接依一般面試問題與對話內容自行判斷性格傾向。）'
+
+  // 格式化一般問題列表
+  // 注意：這些問題需要在自我介紹完成、且人格相關問題問完後才開始提問
   const questionsText = interviewQuestions && interviewQuestions.length > 0
-    ? `以下問題請在面試者完成自我介紹後，按照順序逐一提問：\n${interviewQuestions.map((q, idx) => `問題 ${idx + 1}：${q}`).join('\n')}\n\n提醒：這些問題不能在第一句話就問，必須先完成打招呼和請自我介紹的步驟。`
-    : '無特定問題列表，請根據對話內容自然提問。'
+    ? `以下一般面試問題請在完成自我介紹與人格相關問題之後，按照順序逐一提問：\n${interviewQuestions.map((q, idx) => `問題 ${idx + 1}：${q}`).join('\n')}\n\n提醒：這些問題不能在第一句話就問，必須先完成打招呼、自我介紹與人格相關問題的步驟。`
+    : '無特定一般面試問題列表，可在完成人格相關問題後，根據對話內容自然提問。'
 
   // 格式化評分標準
   let scoringCriteriaText = ''
@@ -688,16 +702,39 @@ export async function getInterviewAIResponse(
         const additionRules = Array.isArray(criteria.addition_rules) 
           ? criteria.addition_rules 
           : (criteria.addition_rules ? [criteria.addition_rules] : [])
-        rules = additionRules.filter((r: any) => r && r.trim()).join('，')
-      } else {
+        rules = `加分規則：${additionRules.filter((r: any) => r && r.trim()).join('，') || '無特定規則'}`
+      } else if (logic === 'deduction') {
         const deductionRules = Array.isArray(criteria.deduction_rules) 
           ? criteria.deduction_rules 
           : (criteria.deduction_rules ? [criteria.deduction_rules] : [])
-        rules = deductionRules.filter((r: any) => r && r.trim()).join('，')
+        rules = `扣分規則：${deductionRules.filter((r: any) => r && r.trim()).join('，') || '無特定規則'}`
+      } else {
+        // 綜合制：同時支援加分與扣分規則
+        const additionRules = Array.isArray(criteria.addition_rules) 
+          ? criteria.addition_rules 
+          : (criteria.addition_rules ? [criteria.addition_rules] : [])
+        const deductionRules = Array.isArray(criteria.deduction_rules) 
+          ? criteria.deduction_rules 
+          : (criteria.deduction_rules ? [criteria.deduction_rules] : [])
+        const additionText = additionRules.filter((r: any) => r && r.trim()).join('，') || '無特定加分規則'
+        const deductionText = deductionRules.filter((r: any) => r && r.trim()).join('，') || '無特定扣分規則'
+        rules = `加分規則：${additionText}；扣分規則：${deductionText}`
       }
       
-      const initialValue = logic === 'addition' ? '0分' : `${maxScore}分（滿分）`
-      return `${criteria.display_name} (${criteria.key}) - 滿分${maxScore}分，${logic === 'addition' ? '加分制（初始值0分）' : '扣分制（初始值滿分）'}，初始值：${initialValue}，${logic === 'addition' ? '加分' : '扣分'}規則：${rules || '無特定規則'}`
+      let logicDesc = ''
+      let initialValue = ''
+      if (logic === 'addition') {
+        logicDesc = '加分制（初始值0分，只會加分）'
+        initialValue = '0分'
+      } else if (logic === 'deduction') {
+        logicDesc = '扣分制（初始值滿分，只會扣分）'
+        initialValue = `${maxScore}分（滿分）`
+      } else {
+        logicDesc = '綜合制（初始值0分，可以同時加分與扣分）'
+        initialValue = '0分'
+      }
+
+      return `${criteria.display_name} (${criteria.key}) - 滿分${maxScore}分，${logicDesc}，初始值：${initialValue}，${rules}`
     }).join('\n')
   } else {
     // 理論上不會執行（資料庫 trigger 會自動插入預設值），僅作為備用
@@ -712,6 +749,7 @@ export async function getInterviewAIResponse(
       conversationHistory,
       currentStage,
       interviewQuestions: questionsText,
+      personalityQuestions: personalityQuestionsText,
       scoringCriteria: scoringCriteriaText
     }),
   }
@@ -860,11 +898,17 @@ export async function getInterviewAIResponseStream(
   // 格式化對話歷史
   const conversationHistory = formatConversationHistory(messages)
 
-  // 格式化問題列表
-  // 注意：這些問題需要在自我介紹完成後才開始提問
+  // 格式化人格判斷問題列表（固定題目，優先於一般職務相關問題）
+  const personalityQuestionsText =
+    PERSONALITY_QUESTION_LIST && PERSONALITY_QUESTION_LIST.length > 0
+      ? PERSONALITY_QUESTION_LIST.map((q, idx) => `性格問題 ${idx + 1}：${q}`).join('\n')
+      : '（目前未設定人格判斷用問題，可直接依一般面試問題與對話內容自行判斷性格傾向。）'
+
+  // 格式化一般問題列表
+  // 注意：這些問題需要在自我介紹完成、且人格相關問題問完後才開始提問
   const questionsText = interviewQuestions && interviewQuestions.length > 0
-    ? `以下問題請在面試者完成自我介紹後，按照順序逐一提問：\n${interviewQuestions.map((q, idx) => `問題 ${idx + 1}：${q}`).join('\n')}\n\n提醒：這些問題不能在第一句話就問，必須先完成打招呼和請自我介紹的步驟。`
-    : '無特定問題列表，請根據對話內容自然提問。'
+    ? `以下一般面試問題請在完成自我介紹與人格相關問題之後，按照順序逐一提問：\n${interviewQuestions.map((q, idx) => `問題 ${idx + 1}：${q}`).join('\n')}\n\n提醒：這些問題不能在第一句話就問，必須先完成打招呼、自我介紹與人格相關問題的步驟。`
+    : '無特定一般面試問題列表，可在完成人格相關問題後，根據對話內容自然提問。'
 
   // 格式化評分標準
   let scoringCriteriaText = ''
@@ -878,16 +922,39 @@ export async function getInterviewAIResponseStream(
         const additionRules = Array.isArray(criteria.addition_rules) 
           ? criteria.addition_rules 
           : (criteria.addition_rules ? [criteria.addition_rules] : [])
-        rules = additionRules.filter((r: any) => r && r.trim()).join('，')
-      } else {
+        rules = `加分規則：${additionRules.filter((r: any) => r && r.trim()).join('，') || '無特定規則'}`
+      } else if (logic === 'deduction') {
         const deductionRules = Array.isArray(criteria.deduction_rules) 
           ? criteria.deduction_rules 
           : (criteria.deduction_rules ? [criteria.deduction_rules] : [])
-        rules = deductionRules.filter((r: any) => r && r.trim()).join('，')
+        rules = `扣分規則：${deductionRules.filter((r: any) => r && r.trim()).join('，') || '無特定規則'}`
+      } else {
+        // 綜合制：同時支援加分與扣分規則
+        const additionRules = Array.isArray(criteria.addition_rules) 
+          ? criteria.addition_rules 
+          : (criteria.addition_rules ? [criteria.addition_rules] : [])
+        const deductionRules = Array.isArray(criteria.deduction_rules) 
+          ? criteria.deduction_rules 
+          : (criteria.deduction_rules ? [criteria.deduction_rules] : [])
+        const additionText = additionRules.filter((r: any) => r && r.trim()).join('，') || '無特定加分規則'
+        const deductionText = deductionRules.filter((r: any) => r && r.trim()).join('，') || '無特定扣分規則'
+        rules = `加分規則：${additionText}；扣分規則：${deductionText}`
       }
       
-      const initialValue = logic === 'addition' ? '0分' : `${maxScore}分（滿分）`
-      return `${criteria.display_name} (${criteria.key}) - 滿分${maxScore}分，${logic === 'addition' ? '加分制（初始值0分）' : '扣分制（初始值滿分）'}，初始值：${initialValue}，${logic === 'addition' ? '加分' : '扣分'}規則：${rules || '無特定規則'}`
+      let logicDesc = ''
+      let initialValue = ''
+      if (logic === 'addition') {
+        logicDesc = '加分制（初始值0分，只會加分）'
+        initialValue = '0分'
+      } else if (logic === 'deduction') {
+        logicDesc = '扣分制（初始值滿分，只會扣分）'
+        initialValue = `${maxScore}分（滿分）`
+      } else {
+        logicDesc = '綜合制（初始值0分，可以同時加分與扣分）'
+        initialValue = '0分'
+      }
+
+      return `${criteria.display_name} (${criteria.key}) - 滿分${maxScore}分，${logicDesc}，初始值：${initialValue}，${rules}`
     }).join('\n')
   } else {
     // 理論上不會執行（資料庫 trigger 會自動插入預設值），僅作為備用
@@ -902,6 +969,7 @@ export async function getInterviewAIResponseStream(
       conversationHistory,
       currentStage,
       interviewQuestions: questionsText,
+      personalityQuestions: personalityQuestionsText,
       scoringCriteria: scoringCriteriaText
     }),
   }

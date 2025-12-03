@@ -25,7 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // 獲取使用者的 profile
   const { data: profile } = await supa
     .from('profiles')
-    .select('id, role')
+    .select('id, role,email')
     .eq('auth_id', authUserId)
     .single()
   
@@ -50,7 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         company_name
       )
     `)
-    .eq('profiles_id', profile.id)
+    .or(`profiles_id.eq.${profile.id},candidate_email.eq.${profile.email?.toLowerCase() || ''}`)
     .order('start_time', { ascending: false })
 
   if (error) {

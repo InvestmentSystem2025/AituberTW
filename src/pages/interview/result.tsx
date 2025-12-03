@@ -1,14 +1,25 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
 import { InterviewResults } from '@/components/interview/InterviewResults'
-import { InterviewResult, DEFAULT_SCORING_CRITERIA } from '@/types/interviewScoring'
+import { InterviewResult, DEFAULT_SCORING_CRITERIA, PersonalitySummary } from '@/types/interviewScoring'
 import { supabase } from '@/lib/supabaseClient'
+
+type TranscriptItem = {
+  role: string
+  content: string
+  timestamp: string
+  aiFeedback?: string
+  additions_detail?: string
+  deductions_detail?: string
+  current_scores?: any
+  personality?: any
+}
 
 type SessionRow = {
   id: string
   interviews_id: string
   ai_evaluations: Array<{ key: string; score: number; evidence?: string }>
-  interview_transcript?: Array<{ role: string; content: string; timestamp: string }>
+  interview_transcript?: TranscriptItem[]
   interview_result?: 'hired' | 'rejected' | 'pending'
   created_at?: string
 }
@@ -27,20 +38,28 @@ export default function InterviewResultPage() {
       setLoading(true)
       setError(null)
       try {
-        // 使用 Supabase client 直接查詢，自動處理認證
-        const { data: { session: authSession } } = await supabase.auth.getSession()
+        // 先取得目前使用者的 access token
+        const { data: authData } = await supabase.auth.getSession()
+        const authSession = authData.session
         if (!authSession) throw new Error('Not authenticated')
-        
-        const { data: sessionRow, error: sessionError } = await supabase
-          .from('interview_sessions')
-          .select('*')
-          .eq('interviews_id', interviewId)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-        
-        if (sessionError) throw new Error(sessionError.message)
-        if (mounted) setSession(sessionRow || null)
+
+        // 改為呼叫後端 API，由 service client 讀取 session（避免前端直接被 RLS 卡住）
+        const resp = await fetch(`/api/interviews/get-session?interview_id=${encodeURIComponent(interviewId)}`, {
+          headers: {
+            Authorization: `Bearer ${authSession.access_token}`,
+          },
+        })
+
+        if (!resp.ok) {
+          let body: any = null
+          try {
+            body = await resp.json()
+          } catch {}
+          throw new Error(body?.error || `HTTP ${resp.status}`)
+        }
+
+        const body = await resp.json()
+        if (mounted) setSession(body.session || null)
       } catch (e: any) {
         if (mounted) setError(e?.message || 'Load failed')
       } finally {
@@ -75,6 +94,14 @@ export default function InterviewResultPage() {
     return result
   }, [session])
 
+  const personalitySummary: PersonalitySummary | undefined = useMemo(() => {
+    if (!session || !Array.isArray(session.interview_transcript)) return undefined
+    // 從最後一則有 personality 的 AI 訊息中取出人格總結
+    const reversed = [...session.interview_transcript].reverse()
+    const lastAiWithPersonality = reversed.find(item => item && item.role === 'ai' && item.personality)
+    return (lastAiWithPersonality?.personality || undefined) as PersonalitySummary | undefined
+  }, [session])
+
   if (!interviewId) {
     return (
       <div className="min-h-screen flex items-center justify-center text-gray-700">缺少參數 id</div>
@@ -97,8 +124,9 @@ export default function InterviewResultPage() {
     <InterviewResults
       answers={[]}
       interviewResult={interviewResult}
+      personalitySummary={personalitySummary}
       onRestart={() => router.push('/interview')}
-      onExit={() => router.push('/')}
+      onExit={() => router.push('/me?tab=interviews')}
     />
   )
 }

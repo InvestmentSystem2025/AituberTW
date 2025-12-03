@@ -23,7 +23,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // 獲取interview信息並檢查權限
   const { data: interview } = await supa
     .from('interviews')
-    .select('company_id, profiles_id, candidate_email')
+    .select('company_id, profiles_id, candidate_email, review_type')
     .eq('id', interviews_id)
     .single()
 
@@ -51,7 +51,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     company_id: interview.company_id,
     interviews_id,
     duration_seconds: duration_seconds || 0,
-    review_type: 'AI',
+  }
+
+  // 根據面試設定決定 review_type，預設為 AI
+  const baseReviewType = (interview as any).review_type as 'AI' | 'HUMAN' | 'MIXED' | null
+  if (baseReviewType && ['AI', 'HUMAN', 'MIXED'].includes(baseReviewType)) {
+    sessionData.review_type = baseReviewType
+  } else {
+    sessionData.review_type = 'AI'
   }
 
   if (interview_transcript) sessionData.interview_transcript = interview_transcript

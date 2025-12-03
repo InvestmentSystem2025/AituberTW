@@ -1,7 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { NextApiRequest, NextApiResponse } from 'next'
-import fs from 'fs'
-import path from 'path'
 import { InterviewResult } from '@/types/interviewScoring'
 
 // Supabase 客戶端初始化（可選）
@@ -56,18 +54,7 @@ export default async function handler(
       return res.status(400).json({ message: 'Invalid interview record data' })
     }
 
-    const interviewDataDir = path.join(process.cwd(), 'interview-data')
-
-    // 確保 interview-data 目錄存在
-    if (!fs.existsSync(interviewDataDir)) {
-      fs.mkdirSync(interviewDataDir, { recursive: true })
-    }
-
-    // 生成檔案名稱：interview_YYYY-MM-DDTHH-MM-SS-SSSZ.json
-    const fileName = `interview_${currentTime.replace(/[:.]/g, '-')}.json`
-    const filePath = path.join(interviewDataDir, fileName)
-
-    // 準備要保存的數據
+    // 準備要保存的數據（改為僅保存在資料庫，不再寫入 JSON 檔案）
     const dataToSave: InterviewRecordData = {
       candidateId: recordData.candidateId,
       interviewDate: recordData.interviewDate || currentTime,
@@ -78,10 +65,7 @@ export default async function handler(
       settings: recordData.settings,
     }
 
-    // 寫入檔案
-    fs.writeFileSync(filePath, JSON.stringify(dataToSave, null, 2), 'utf-8')
-
-    console.log(`✅ 面試記錄已保存: ${fileName}`)
+    console.log(`✅ 面試記錄請求已接收（僅儲存於資料庫，無本地 JSON 檔案）`)
 
     // 如果配置了 Supabase，也可以保存到資料庫
     if (supabase) {
@@ -95,7 +79,6 @@ export default async function handler(
             answered_questions: dataToSave.answeredQuestions,
             total_score: recordData.interviewResult?.totalScore,
             is_passed: recordData.interviewResult?.isPassed,
-            file_name: fileName,
             created_at: currentTime,
           })
           .select('id')
@@ -113,9 +96,7 @@ export default async function handler(
 
     return res.status(200).json({
       success: true,
-      message: 'Interview record saved successfully',
-      fileName,
-      filePath: filePath,
+      message: 'Interview record saved successfully (stored in database only)',
     })
   } catch (error) {
     console.error('保存面試記錄時發生錯誤:', error)
