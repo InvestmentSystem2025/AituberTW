@@ -311,6 +311,9 @@ const Interview = () => {
             initialGreeting={resumeData.aiGreeting || undefined}
             interviewConfig={interviewConfig}
             interviewId={typeof interview_id === 'string' ? interview_id : undefined}
+            resultNotificationMethod={
+              (interviewConfig?.interview?.job_opening?.result_notification_method as 'immediate' | 'later' | undefined) || 'immediate'
+            }
           />
         )
       ) : interviewFlow.interviewStatus === 'completed' || interviewFlow.showResults ? (

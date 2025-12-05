@@ -100,6 +100,7 @@ interface InterviewInterfaceProps {
   initialGreeting?: string  // 預先生成的 AI 問候語
   interviewConfig?: InterviewConfig | null
   interviewId?: string
+  resultNotificationMethod?: 'immediate' | 'later'
 }
 
 export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
@@ -108,6 +109,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   initialGreeting,
   interviewConfig,
   interviewId,
+  resultNotificationMethod = 'immediate',
 }) => {
   const modelType = settingsStore((s) => s.modelType)
   const router = useRouter()
@@ -1347,22 +1349,27 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                   stopCamera()
                   setShowLocalVideo(false)
                   if (interviewId) {
-                    // 在新分頁打開結果頁面（立即執行，避免被彈出視窗阻擋器阻擋）
-                    const resultUrl = `/interview/result?id=${encodeURIComponent(interviewId)}`
-                    const newWindow = window.open(resultUrl, '_blank')
-                    if (newWindow) {
-                      newWindow.focus() // 確保新分頁獲得焦點
-                      // 將當前頁面完整重新載入到首頁（像 F5 一樣），確保組件完全卸載並釋放攝影機資源
-                      setTimeout(() => {
-                        console.log('準備完整重新載入到首頁')
-                        window.location.replace('/')
-                      }, 1000) // 增加延遲時間，確保新分頁已打開
+                    if (resultNotificationMethod === 'later') {
+                      // 後續通知：不顯示面試結果頁，直接回到個人頁（面試列表）
+                      window.location.replace('/me?tab=interviews')
                     } else {
-                      // 如果被阻擋，則在當前頁面完整重新載入結果頁面（像 F5 一樣）
-                      console.warn('新分頁被阻擋，改為在當前頁面完整重新載入結果')
-                      console.log('準備完整重新載入到:', resultUrl)
-                      // 使用 replace 強制完整重新載入，繞過 Next.js 路由
-                      window.location.replace(resultUrl)
+                      // 即時通知：在新分頁打開結果頁面（立即執行，避免被彈出視窗阻擋器阻擋）
+                      const resultUrl = `/interview/result?id=${encodeURIComponent(interviewId)}`
+                      const newWindow = window.open(resultUrl, '_blank')
+                      if (newWindow) {
+                        newWindow.focus() // 確保新分頁獲得焦點
+                        // 將當前頁面完整重新載入到首頁（像 F5 一樣），確保組件完全卸載並釋放攝影機資源
+                        setTimeout(() => {
+                          console.log('準備完整重新載入到首頁')
+                          window.location.replace('/')
+                        }, 1000) // 增加延遲時間，確保新分頁已打開
+                      } else {
+                        // 如果被阻擋，則在當前頁面完整重新載入結果頁面（像 F5 一樣）
+                        console.warn('新分頁被阻擋，改為在當前頁面完整重新載入結果')
+                        console.log('準備完整重新載入到:', resultUrl)
+                        // 使用 replace 強制完整重新載入，繞過 Next.js 路由
+                        window.location.replace(resultUrl)
+                      }
                     }
                   } else {
                     onInterviewComplete(finalResult)

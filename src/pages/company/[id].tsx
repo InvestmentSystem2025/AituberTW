@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/router'
 import { supabase } from '@/lib/supabaseClient'
+import settingsStore from '@/features/stores/settings'
+import type { AIService } from '@/features/constants/settings'
 
 type Member = { profile_id: string; company_role: 'admin' | 'recruiter' | 'viewer'; email?: string }
 type AIInterviewer = { id: string; name: string; model_name: string; model_config?: any }
@@ -35,6 +37,9 @@ export default function CompanyAdminPage() {
   const companyId = String(router.query.id || '')
   const [token, setToken] = useState('')
   const [tab, setTab] = useState<'members' | 'ai' | 'jobs' | 'qbank' | 'joq' | 'interviews'>('members')
+
+  // company info
+  const [companyName, setCompanyName] = useState<string>('')
 
   // common lists
   const [members, setMembers] = useState<Member[]>([])
@@ -110,6 +115,7 @@ export default function CompanyAdminPage() {
   })
   const [newJOQ, setNewJOQ] = useState({ job_opening_id: '', question_bank_id: '', questions: [] as string[], showForm: false })
   const [newIV, setNewIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'AI' as 'AI' | 'HUMAN' | 'MIXED' })
+  const [isGeneratingJOQAI, setIsGeneratingJOQAI] = useState(false)
 
   // edit forms (starts with empty)
   const [editAI, setEditAI] = useState({ name: '', model_name: 'yuki.vrm', model_config: '{}' })
@@ -197,6 +203,7 @@ export default function CompanyAdminPage() {
       const t = data.session?.access_token || ''
       setToken(t)
       if (companyId) {
+        await loadCompanyName()
         await Promise.all([
           loadMembers(t),
           loadAI(t),
@@ -239,6 +246,17 @@ export default function CompanyAdminPage() {
   }
 
   // loaders
+  const loadCompanyName = async () => {
+    if (!companyId) return
+    const { data, error } = await supabase
+      .from('company')
+      .select('company_name')
+      .eq('id', companyId)
+      .single()
+    if (!error && data) {
+      setCompanyName(data.company_name || '')
+    }
+  }
   const loadMembers = async (t: string) => {
     const r = await fetch(`/api/company/members/list?company_id=${companyId}`, { headers: headers(t) })
     const j = await r.json(); setMembers(j.items || [])
@@ -488,6 +506,154 @@ export default function CompanyAdminPage() {
     
     setNewJOQ({ job_opening_id: '', question_bank_id: '', questions: [], showForm: false })
     await loadJOQ(token)
+  }
+  const generateJOQQuestionsWithAI = async (mode: 'new' | 'edit') => {
+    const target = mode === 'new' ? newJOQ : editJOQ
+    const jobOpeningId = target.job_opening_id
+
+    if (!jobOpeningId) {
+      alert('請先選擇職種，才可使用 AI 生成問題')
+      return
+    }
+    if (!companyId) {
+      alert('公司資訊缺失，請重新整理頁面後再試')
+      return
+    }
+    const job = jobs.find(j => j.id === jobOpeningId)
+    const jobTitle = job?.job_title || ''
+    if (!jobTitle) {
+      alert('找不到對應的職種名稱，請重新選擇職種後再試')
+      return
+    }
+
+    const ss = settingsStore.getState()
+    const aiService = ss.selectAIService as AIService
+
+    if (ss.selectAIService === 'dify') {
+      alert('目前「AI 生成問題」僅支援一般 AI 服務，請在設定中選擇 OpenAI / Groq 等服務後再試')
+      return
+    }
+
+    setIsGeneratingJOQAI(true)
+    try {
+      const criteriaRes = await fetch(
+        `/api/evaluation-criteria/list?company_id=${companyId}&job_opening_id=${jobOpeningId}`,
+        { headers: headers(token) }
+      )
+      if (!criteriaRes.ok) {
+        console.error('載入 evaluation_criteria 失敗', await criteriaRes.text())
+        alert('載入評價標準失敗，無法使用 AI 生成問題')
+        return
+      }
+      const criteriaJson = await criteriaRes.json()
+      const criteriaItems = Array.isArray(criteriaJson)
+        ? criteriaJson
+        : (criteriaJson.items || [])
+
+      if (!Array.isArray(criteriaItems) || criteriaItems.length === 0) {
+        alert('找不到此職種的評價標準，無法使用 AI 生成問題')
+        return
+      }
+
+      const criteriaText = criteriaItems
+        .map((c: any, idx: number) => {
+          const additionRules = Array.isArray(c.addition_rules)
+            ? c.addition_rules
+            : (c.addition_rules ? [c.addition_rules] : [])
+          const deductionRules = Array.isArray(c.deduction_rules)
+            ? c.deduction_rules
+            : (c.deduction_rules ? [c.deduction_rules] : [])
+          return [
+            `${idx + 1}. key: ${c.key}`,
+            `   display_name: ${c.display_name}`,
+            `   scoring_logic: ${c.scoring_logic || 'deduction'}`,
+            `   addition_rules: ${additionRules.filter((r: string) => r && r.trim()).join('；') || '無'}`,
+            `   deduction_rules: ${deductionRules.filter((r: string) => r && r.trim()).join('；') || '無'}`,
+          ].join('\n')
+        })
+        .join('\n')
+
+      const prompt = `
+你是一個專業的面試官，這次要面試的職種為「${jobTitle}」。
+該職種的評價標準如下（每項包含 key、display_name、scoring_logic、addition_rules、deduction_rules）：
+${criteriaText}
+
+請根據上述職種以及評價標準，生成 5〜10 題適合的面試問題。
+請只輸出問題列表本身，可以使用編號或分行，每行代表一題，不需要額外解釋。`.trim()
+
+      let apiKey = ''
+      if (typeof aiService === 'string' && aiService !== 'dify') {
+        apiKey = (ss[`${aiService}Key` as keyof typeof ss] as string) || ''
+      }
+
+      const requestData: any = {
+        messages: [
+          { role: 'system', content: '你是一位專業的人資面試官，請用繁體中文回答。' },
+          { role: 'user', content: prompt },
+        ],
+        stream: false,
+        apiKey,
+        aiService,
+        model: ss.selectAIModel,
+        localLlmUrl: ss.localLlmUrl,
+        azureEndpoint: ss.azureEndpoint,
+        temperature: ss.temperature,
+        maxTokens: ss.maxTokens,
+      }
+
+      const aiRes = await fetch('/api/ai/vercel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestData),
+      })
+
+      if (!aiRes.ok) {
+        console.error('AI 生成問題失敗', await aiRes.text())
+        alert('AI 生成問題失敗，請稍後再試')
+        return
+      }
+
+      const aiJson = await aiRes.json()
+      const aiText = typeof aiJson.text === 'string' ? aiJson.text : ''
+
+      if (!aiText.trim()) {
+        alert('AI 沒有返回可用的問題，請稍後再試')
+        return
+      }
+
+      const lines = aiText
+        .split(/\r?\n/)
+        .map((l: string) => l.trim())
+        .filter(Boolean)
+
+      const parsedQuestions = lines
+        .map((line: string) =>
+          line.replace(/^(\d+[\.\)]\s*|\d+\s+|[-•]\s*)/, '').trim()
+        )
+        .filter((line: string) => line.length > 0)
+
+      if (parsedQuestions.length === 0) {
+        alert('無法從 AI 回覆中解析出問題，請稍後再試')
+        return
+      }
+
+      if (mode === 'new') {
+        const base = newJOQ.questions
+        const hasOnlyEmpty = base.length === 0 || (base.length === 1 && !base[0].trim())
+        const merged = hasOnlyEmpty ? parsedQuestions : [...base, ...parsedQuestions]
+        setNewJOQ({ ...newJOQ, questions: merged })
+      } else {
+        const base = editJOQ.questions
+        const hasOnlyEmpty = base.length === 0 || (base.length === 1 && !base[0].trim())
+        const merged = hasOnlyEmpty ? parsedQuestions : [...base, ...parsedQuestions]
+        setEditJOQ({ ...editJOQ, questions: merged })
+      }
+    } catch (error) {
+      console.error('AI 生成問題例外:', error)
+      alert('AI 生成問題發生錯誤，請稍後再試')
+    } finally {
+      setIsGeneratingJOQAI(false)
+    }
   }
   const addIV = async (e: React.FormEvent) => {
     e.preventDefault(); 
@@ -1052,6 +1218,11 @@ export default function CompanyAdminPage() {
 
   return (
     <div style={{ maxWidth: 1100, margin: '36px auto', padding: 24 }}>
+      {companyName && (
+        <h1 style={{ textAlign: 'center', fontSize: '2em', fontWeight: 'bold', marginBottom: 24 }}>
+          {companyName}
+        </h1>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 12, borderBottom: '1px solid #e5e7eb' }}>
         {tabBtn('members', '成員')}
@@ -1198,12 +1369,7 @@ export default function CompanyAdminPage() {
         <div>
           <form onSubmit={addJob} style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
             <input placeholder="職種名稱" value={newJob.job_title} onChange={(e) => setNewJob({ ...newJob, job_title: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
-            
-            <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input type="checkbox" checked={newJob.use_ai_generate_question} onChange={(e) => setNewJob({ ...newJob, use_ai_generate_question: e.target.checked })} />
-              <span>使用 AI 生成問題</span>
-            </label>
-            
+
             <select value={newJob.result_notification_method} onChange={(e) => setNewJob({ ...newJob, result_notification_method: e.target.value as 'immediate' | 'later' })} style={{ padding: 8, border: '2px solid #000' }}>
               <option value="immediate">即時通知</option>
               <option value="later">後續通知</option>
@@ -1549,10 +1715,6 @@ export default function CompanyAdminPage() {
                 {editingJob === j.id ? (
                   <div style={{ display: 'grid', gap: 12 }}>
                     <input value={editJob.job_title} onChange={(e) => setEditJob({ ...editJob, job_title: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
-                    <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <input type="checkbox" checked={editJob.use_ai_generate_question} onChange={(e) => setEditJob({ ...editJob, use_ai_generate_question: e.target.checked })} />
-                      <span>使用 AI 生成問題</span>
-                    </label>
                     <select value={editJob.result_notification_method} onChange={(e) => setEditJob({ ...editJob, result_notification_method: e.target.value as 'immediate' | 'later' })} style={{ padding: 8, border: '2px solid #000' }}>
                       <option value="immediate">即時通知</option>
                       <option value="later">後續通知</option>
@@ -2126,13 +2288,23 @@ export default function CompanyAdminPage() {
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <label style={{ fontWeight: 'bold' }}>問題列表：</label>
-                <button
-                  type="button"
-                  onClick={() => setNewJOQ({ ...newJOQ, questions: [...newJOQ.questions, ''] })}
-                  style={{ padding: '4px 8px', background: '#2196F3', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}
-                >
-                  + 新增問題
-                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => setNewJOQ({ ...newJOQ, questions: [...newJOQ.questions, ''] })}
+                    style={{ padding: '4px 8px', background: '#2196F3', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                  >
+                    + 新增問題
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isGeneratingJOQAI}
+                    onClick={() => generateJOQQuestionsWithAI('new')}
+                    style={{ padding: '4px 8px', background: isGeneratingJOQAI ? '#9e9e9e' : '#673ab7', color: 'white', border: 'none', borderRadius: 4, cursor: isGeneratingJOQAI ? 'not-allowed' : 'pointer' }}
+                  >
+                    {isGeneratingJOQAI ? 'AI 生成中…' : 'AI 生成問題'}
+                  </button>
+                </div>
               </div>
               {newJOQ.questions.map((question, idx) => (
                 <div key={idx} style={{ marginBottom: 8, display: 'flex', gap: 8 }}>
@@ -2213,13 +2385,23 @@ export default function CompanyAdminPage() {
                           <div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                               <label style={{ fontWeight: 'bold' }}>問題列表：</label>
-                              <button
-                                type="button"
-                                onClick={() => setEditJOQ({ ...editJOQ, questions: [...editJOQ.questions, ''] })}
-                                style={{ padding: '4px 8px', background: '#2196F3', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}
-                              >
-                                + 新增問題
-                              </button>
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditJOQ({ ...editJOQ, questions: [...editJOQ.questions, ''] })}
+                                  style={{ padding: '4px 8px', background: '#2196F3', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                                >
+                                  + 新增問題
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isGeneratingJOQAI}
+                                  onClick={() => generateJOQQuestionsWithAI('edit')}
+                                  style={{ padding: '4px 8px', background: isGeneratingJOQAI ? '#9e9e9e' : '#673ab7', color: 'white', border: 'none', borderRadius: 4, cursor: isGeneratingJOQAI ? 'not-allowed' : 'pointer' }}
+                                >
+                                  {isGeneratingJOQAI ? 'AI 生成中…' : 'AI 生成問題'}
+                                </button>
+                              </div>
                             </div>
                             {editJOQ.questions.map((question, idx) => (
                               <div key={idx} style={{ marginBottom: 8, display: 'flex', gap: 8 }}>
