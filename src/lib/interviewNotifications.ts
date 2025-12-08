@@ -172,8 +172,8 @@ export async function sendInterviewCreationEmail(interview: InterviewRecord): Pr
   const base = getFrontendBaseUrl()
   const signupUrl = registered ? undefined : `${base}/tos`
   
-  // 如果使用 profiles_id（已註冊用戶），加入個人頁面連結，直接導向面試預定 tab
-  const profilePageUrl = interview.profiles_id ? `${base}/me?tab=interviews` : undefined
+  // 如果使用 profiles_id 或候選人已註冊，加入個人頁面連結，直接導向面試預定 tab
+  const profilePageUrl = (interview.profiles_id || registered) ? `${base}/me?tab=interviews` : undefined
 
   const mail = buildMailContent({
     companyName,
