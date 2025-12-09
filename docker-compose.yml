@@ -89,6 +89,8 @@
     volumes:
       - ./mcp-server/uploads:/app/uploads
       - ./mcp-server/data:/app/data
+    env_file:
+      - .env
     environment:
       - NODE_ENV=production
       - PORT=3001
