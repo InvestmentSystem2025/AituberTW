@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next'
 import fs from 'fs'
 import path from 'path'
+import { uploadInterviewVideoToS3 } from '@/lib/s3Upload'
 
 export const config = {
   api: {
@@ -35,20 +36,33 @@ export default async function handler(
     const base64Data = videoData.replace(/^data:video\/webm;base64,/, '')
     const videoBuffer = Buffer.from(base64Data, 'base64')
 
-    // 保存檔案
+    // 保存檔案到本地
     const filePath = path.join(recordingsDir, filename)
     fs.writeFileSync(filePath, videoBuffer)
 
-    console.log(`✅ 錄製檔案已保存: ${filePath}`)
+    // 上傳到 S3（如果配置了 S3_BUCKET）
+    let s3Result = null
+
+    if (process.env.S3_BUCKET) {
+      s3Result = await uploadInterviewVideoToS3(
+        videoBuffer,
+        filename,
+        filePath
+      )
+      if (!s3Result.success) {
+        console.error(`Failed to upload recording to S3: ${s3Result.error}`)
+      }
+    }
 
     return res.status(200).json({
       success: true,
       message: 'Recording saved successfully',
       filename,
       filePath,
+      s3Upload: s3Result,
     })
   } catch (error) {
-    console.error('保存錄製檔案時發生錯誤:', error)
+    console.error('Error saving recording file:', error)
     return res.status(500).json({
       success: false,
       message: 'Failed to save recording',
