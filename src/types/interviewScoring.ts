@@ -10,6 +10,10 @@ export interface PersonalitySummary {
   extraversion?: string              // 外向/內向 傾向與說明
   conscientiousness?: string         // 盡責/隨性 傾向與說明
   detail_attentiveness?: string      // 細心/粗心 傾向與說明
+  proactivity?: string               // 主動/被動 傾向與說明
+  learning_mindset?: string          // 學習與成長心態 傾向與說明
+  stress_resilience?: string          // 抗壓與情緒穩定 傾向與說明
+  collaboration?: string             // 合作與溝通方式 傾向與說明
   summaryText?: string               // 1-3 句整體性格總結
   // 預留其他欄位，方便日後擴充
   [key: string]: any

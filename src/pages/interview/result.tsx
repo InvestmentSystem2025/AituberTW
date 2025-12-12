@@ -20,7 +20,7 @@ type SessionRow = {
   interviews_id: string
   ai_evaluations: Array<{ key: string; score: number; evidence?: string }>
   interview_transcript?: TranscriptItem[]
-  interview_result?: 'hired' | 'rejected' | 'pending'
+  interview_result?: 'hired' | 'rejected' | 'pending' | 'cancelByUser' | 'onHold'
   created_at?: string
 }
 
@@ -72,6 +72,7 @@ export default function InterviewResultPage() {
 
   const interviewResult: InterviewResult | undefined = useMemo(() => {
     if (!session) return undefined
+    if (session.interview_result === 'cancelByUser') return undefined
     const finalScores: Record<string, number> = {}
     const evals = Array.isArray(session.ai_evaluations) ? session.ai_evaluations : []
     evals.forEach((e) => {
@@ -117,6 +118,35 @@ export default function InterviewResultPage() {
   if (error || !session) {
     return (
       <div className="min-h-screen flex items-center justify-center text-red-600">讀取失敗：{error || '找不到資料'}</div>
+    )
+  }
+
+  // 面試者提早結束的專用畫面：不顯示錄取／未錄取紅字
+  if (session.interview_result === 'cancelByUser') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+        <div className="max-w-xl w-full bg-white rounded-xl shadow-md p-8">
+          <h1 className="text-2xl font-bold text-gray-800 mb-4 text-center">面試者提早結束</h1>
+          <p className="text-gray-700 text-sm leading-relaxed mb-6">
+            你已在面試過程中主動結束本次 AI 面試，因此本場面試不會產生正式的錄取／未錄取判定。
+            你先前的作答與對話內容仍會保留，做為招募方日後參考之用。
+          </p>
+          <div className="flex justify-center gap-4">
+            <button
+              onClick={() => router.push('/me?tab=interviews')}
+              className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+            >
+              回到面試列表
+            </button>
+            <button
+              onClick={() => router.push('/')}
+              className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm font-medium hover:bg-gray-200"
+            >
+              回首頁
+            </button>
+          </div>
+        </div>
+      </div>
     )
   }
 

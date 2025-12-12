@@ -1,5 +1,6 @@
 import React, { useCallback, useRef, useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useRouter } from 'next/router'
 
 import homeStore from '@/features/stores/home'
 import menuStore from '@/features/stores/menu'
@@ -39,6 +40,7 @@ const useIsMobile = () => {
 }
 
 export const Menu = () => {
+  const router = useRouter()
   const selectAIService = settingsStore((s) => s.selectAIService)
   const selectAIModel = settingsStore((s) => s.selectAIModel)
   const enableMultiModal = settingsStore((s) => s.enableMultiModal)
@@ -224,7 +226,10 @@ export const Menu = () => {
                 <IconButton
                   iconName="24/Settings"
                   isProcessing={false}
-                  onClick={() => setShowSettings(true)}
+                  onClick={() => {
+                    // 導向管理後台設定頁，而不是在首頁開啟完整設定 UI
+                    router.push('/adminSetting')
+                  }}
                 ></IconButton>
               </div>
               <div className="md:order-2 order-1">

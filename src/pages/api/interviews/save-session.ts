@@ -11,7 +11,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     interview_transcript, 
     ai_evaluations, 
     duration_seconds,
-    video_path 
+    video_path,
+    is_cancelled_by_user,
   } = req.body || {}
   
   if (!interviews_id) return res.status(400).json({ error: 'MISSING_INTERVIEWS_ID' })
@@ -46,6 +47,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!scope) return res.status(403).json({ error: 'FORBIDDEN' })
   }
 
+  const isCancelledByUser = !!is_cancelled_by_user
+
   // 準備數據
   const sessionData: any = {
     company_id: interview.company_id,
@@ -65,6 +68,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (ai_evaluations) sessionData.ai_evaluations = ai_evaluations
   if (video_path) sessionData.video_path = video_path
 
+  // 若使用者提早結束，直接在 session 上標記結果與理由
+  if (isCancelledByUser) {
+    sessionData.interview_result = 'cancelByUser'
+    sessionData.result_reason = 'cancelled_by_user'
+  }
+
   // 插入或更新session（使用upsert因為interviews_id是UNIQUE）
   const { data: session, error } = await supa
     .from('interview_sessions')
@@ -77,8 +86,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'SAVE_SESSION_FAILED', details: error.message })
   }
 
-  // 如果提供了ai_evaluations，調用評價函數計算總分
-  if (ai_evaluations && Array.isArray(ai_evaluations) && ai_evaluations.length > 0) {
+  // 如果提供了ai_evaluations，且不是「使用者提早結束」，才調用評價函數計算總分
+  if (!isCancelledByUser && ai_evaluations && Array.isArray(ai_evaluations) && ai_evaluations.length > 0) {
     try {
       const { data: evalResult, error: evalError } = await supa.rpc('evaluate_interview_total', {
         p_interviews_id: interviews_id
@@ -93,10 +102,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // 更新interview狀態為completed
+  // 更新interview狀態：正常完成 => completed；提早結束 => cancelled
   await supa
     .from('interviews')
-    .update({ status: 'completed' })
+    .update({ status: isCancelledByUser ? 'cancelled' : 'completed' })
     .eq('id', interviews_id)
 
   return res.status(200).json({ ok: true, session })

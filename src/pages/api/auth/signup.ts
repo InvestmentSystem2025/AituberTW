@@ -3,7 +3,13 @@ import crypto from 'crypto'
 import { getServiceClient } from '@/lib/supabaseServer'
 import { sendMail } from '@/lib/mailer'
 
-type Req = { email: string; password: string; role: 'jobSeeker' | 'recruiter'; nonce: string }
+type Req = {
+  email: string
+  password: string
+  role: 'jobSeeker' | 'recruiter'
+  nonce: string
+  preferredLanguage?: 'zh-TW' | 'en-US' | 'ja-JP'
+}
 type Resp = { ok: true } | { error: string; code?: string }
 
 const trimTrailingSlash = (url: string) => url.replace(/\/+$/, '')
@@ -22,8 +28,10 @@ const buildEmailRedirectUrl = (): string | undefined => {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
   if (req.method !== 'POST') return res.status(405).end()
-  const { email, password, role, nonce } = (req.body || {}) as Req
-  if (!email || !password || !role || !nonce) return res.status(400).json({ error: 'MISSING_FIELDS' })
+  const { email, password, role, nonce, preferredLanguage } = (req.body || {}) as Req
+  if (!email || !password || !role || !nonce) {
+    return res.status(400).json({ error: 'MISSING_FIELDS' })
+  }
 
   const svc = getServiceClient()
 
@@ -32,7 +40,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     email,
     password,
     email_confirm: false,
-    user_metadata: { nonce, role }
+    user_metadata: {
+      nonce,
+      role,
+      // 將偏好語言寫入 user_metadata，之後在觸發器中用來建立 profiles
+      preferred_language: preferredLanguage || 'zh-TW',
+    },
   })
 
   if (error) {

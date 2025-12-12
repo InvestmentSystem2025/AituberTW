@@ -267,10 +267,10 @@ const getInitialValuesFromEnv = (): SettingsState => ({
   selectAIService:
     (process.env.NEXT_PUBLIC_SELECT_AI_SERVICE as AIService) || 'openai',
   selectAIModel: migrateOpenAIModelName(
-    process.env.NEXT_PUBLIC_SELECT_AI_MODEL || 'gpt-4.1'
+    process.env.NEXT_PUBLIC_SELECT_AI_MODEL || 'gpt-4.1-mini'
   ),
   localLlmUrl: process.env.NEXT_PUBLIC_LOCAL_LLM_URL || '',
-  selectVoice: (process.env.NEXT_PUBLIC_SELECT_VOICE as AIVoice) || 'voicevox',
+  selectVoice: (process.env.NEXT_PUBLIC_SELECT_VOICE as AIVoice) || 'voai',
   koeiroParam: DEFAULT_PARAM,
   googleTtsType: process.env.NEXT_PUBLIC_GOOGLE_TTS_TYPE || '',
   voicevoxSpeaker: process.env.NEXT_PUBLIC_VOICEVOX_SPEAKER || '46',
@@ -616,8 +616,7 @@ const settingsStore = create<SettingsState>()(
       youtubeApiKey: state.youtubeApiKey,
       elevenlabsApiKey: state.elevenlabsApiKey,
       azureEndpoint: state.azureEndpoint,
-      selectAIService: state.selectAIService,
-      selectAIModel: state.selectAIModel,
+      // selectAIService / selectAIModel / temperature / maxTokens 改由 DB 全域設定控管，不再持久化到各客戶端
       localLlmUrl: state.localLlmUrl,
       selectVoice: state.selectVoice,
       koeiroParam: state.koeiroParam,
@@ -730,8 +729,8 @@ const settingsStore = create<SettingsState>()(
       maxPastMessages: state.maxPastMessages,
       useVideoAsBackground: state.useVideoAsBackground,
       showQuickMenu: state.showQuickMenu,
-      temperature: state.temperature,
-      maxTokens: state.maxTokens,
+      // temperature: state.temperature,
+      // maxTokens: state.maxTokens,
       noSpeechTimeout: state.noSpeechTimeout,
       showSilenceProgressBar: state.showSilenceProgressBar,
       continuousMicListeningMode: state.continuousMicListeningMode,

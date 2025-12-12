@@ -101,6 +101,8 @@ interface InterviewInterfaceProps {
   interviewConfig?: InterviewConfig | null
   interviewId?: string
   resultNotificationMethod?: 'immediate' | 'later'
+   // 使用者偏好面試語言（來自 profiles.preferred_language，例如 zh-TW / en-US / ja-JP）
+  preferredLanguage?: string
 }
 
 export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
@@ -110,6 +112,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   interviewConfig,
   interviewId,
   resultNotificationMethod = 'immediate',
+  preferredLanguage = 'zh-TW',
 }) => {
   const modelType = settingsStore((s) => s.modelType)
   const router = useRouter()
@@ -118,7 +121,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   const [userInput, setUserInput] = useState('')
   const [isWaitingForAnswer, setIsWaitingForAnswer] = useState(false)
   const [isAIResponding, setIsAIResponding] = useState(false)
-  const [interviewLanguage, setInterviewLanguage] = useState('zh-TW') // 面試專用語言設定
+  const [interviewCompletionStatus, setInterviewCompletionStatus] = useState<'incomplete' | 'complete'>('incomplete')
+  const [interviewLanguage, setInterviewLanguage] = useState(preferredLanguage) // 面試專用語言設定
   const [showLocalVideo, setShowLocalVideo] = useState(true)
   const videoRef = useRef<HTMLVideoElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
@@ -463,7 +467,10 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   )
 
   // 保存面試session到資料庫
-  const saveInterviewSession = useCallback(async (finalResult: InterviewResult): Promise<'hired' | 'rejected' | 'pending' | undefined> => {
+  const saveInterviewSession = useCallback(async (
+    finalResult: InterviewResult,
+    options?: { userCancelled?: boolean }
+  ): Promise<'hired' | 'rejected' | 'pending' | 'cancelByUser' | undefined> => {
     if (!interviewId) return
 
     try {
@@ -542,6 +549,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           interview_transcript: transcript,
           ai_evaluations: aiEvaluations,
           duration_seconds: durationSeconds,
+          is_cancelled_by_user: options?.userCancelled === true,
         }),
       })
 
@@ -561,6 +569,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         const interviewResultFromDb = body?.session?.interview_result as string | undefined
         if (interviewResultFromDb === 'hired') return 'hired'
         if (interviewResultFromDb === 'rejected') return 'rejected'
+        if (interviewResultFromDb === 'cancelByUser') return 'cancelByUser'
         if (interviewResultFromDb) return 'pending'
       } catch {}
 
@@ -574,6 +583,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           const interviewResultFromDb = data?.session?.interview_result as string | undefined
           if (interviewResultFromDb === 'hired') return 'hired'
           if (interviewResultFromDb === 'rejected') return 'rejected'
+          if (interviewResultFromDb === 'cancelByUser') return 'cancelByUser'
           return 'pending'
         }
       } catch (e) {
@@ -671,7 +681,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         currentQuestionIndex + 1,
         questionsList,
         evaluationCriteria,
-        trackingId // 傳遞追蹤 ID
+        trackingId, // 傳遞追蹤 ID
+        interviewLanguage // 面試偏好語言（決定 AI 回覆語言）
       )
       
       // 創建一個新的 AI 消息用於實時更新
@@ -823,6 +834,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         const isInterviewEnding = endKeywords.some(keyword => streamingContent.includes(keyword))
         
         if (isInterviewEnding) {
+          // 標記本場面試已由 AI 正常結束
+          setInterviewCompletionStatus('complete')
           // 先等待 3 秒讓 AI 最後的回覆完全顯示，再停止錄製
           setTimeout(() => {
             recording.stopRecording()
@@ -939,7 +952,9 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           [], // 空的對話歷史，觸發打招呼
           0,  // questionIndex = 0（還未開始問問題）
           questionsList,
-          evaluationCriteria
+          evaluationCriteria,
+          undefined,
+          interviewLanguage // 面試偏好語言（決定 AI 回覆語言）
         )
         
         // 創建一個新的 AI 消息用於實時更新
@@ -1207,12 +1222,6 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             <div className="font-bold">面試對話記錄</div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setShowScoringSettings(true)}
-                className="px-2 py-1 bg-white/20 hover:bg-white/30 rounded text-sm transition-colors"
-              >
-                評分設定
-              </button>
-              <button
                 onClick={() => setShowResponseTimeAnalysis(true)}
                 className="px-2 py-1 bg-white/20 hover:bg-white/30 rounded text-sm transition-colors"
               >
@@ -1329,22 +1338,25 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             </button>
             <button
               onClick={async () => {
+                const isCancelledByUser = interviewCompletionStatus !== 'complete'
+
                 // 等待 2 秒再停止錄製（給最後的對話時間錄製）
                 setTimeout(() => {
                   recording.stopRecording()
                 }, 2000)
                 
-                // 總共等待 5 秒後顯示結果
+                // 總共等待 5 秒後顯示結果 / 儲存記錄
                 setTimeout(async () => {
                   const finalResult = scoringEngine.generateFinalResult('candidate-001')
                   // 保存到資料庫並讀取DB決策
                   if (interviewId) {
-                    const outcome = await saveInterviewSession(finalResult)
-                    if (outcome) {
+                    const outcome = await saveInterviewSession(finalResult, isCancelledByUser ? { userCancelled: true } : undefined)
+                    // 只有在非「面試者提早結束」情況下，才依 DB 結果更新 isPassed
+                    if (outcome && !isCancelledByUser) {
                       finalResult.isPassed = outcome === 'hired'
                     }
                   }
-                  // 停止攝像機
+                  // 停止攝像機與麥克風
                   try { stopListening() } catch {}
                   stopCamera()
                   setShowLocalVideo(false)

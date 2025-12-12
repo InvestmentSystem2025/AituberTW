@@ -78,6 +78,9 @@ const Interview = () => {
   const [interviewConfig, setInterviewConfig] = useState<InterviewConfig | null>(null)
   const [loadingConfig, setLoadingConfig] = useState(false)
 
+  // 使用者偏好面試語言（來自 profiles.preferred_language）
+  const [preferredInterviewLanguage, setPreferredInterviewLanguage] = useState<'zh-TW' | 'en-US' | 'ja-JP'>('zh-TW')
+
   // 處理履歷上傳完成
   const handleResumeProcessed = (resumeInfo: ResumeInfo, questions: string[], aiGreeting: string) => {
     setResumeData({
@@ -111,7 +114,8 @@ const Interview = () => {
       try {
         const { data: session } = await supabase.auth.getSession()
         const token = session.session?.access_token
-        if (!token) {
+        const authUserId = session.session?.user?.id
+        if (!token || !authUserId) {
           toastStore.getState().addToast({
             message: '請先登入',
             type: 'error',
@@ -119,6 +123,7 @@ const Interview = () => {
           return
         }
 
+        // 1) 載入面試配置
         const response = await fetch(`/api/interviews/get?interview_id=${interview_id}`, {
           headers: { Authorization: `Bearer ${token}` }
         })
@@ -134,6 +139,25 @@ const Interview = () => {
 
         const data = await response.json()
         setInterviewConfig(data)
+
+        // 2) 讀取目前登入使用者的 profiles.preferred_language，作為面試偏好語言
+        try {
+          const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('preferred_language')
+            .eq('auth_id', authUserId)
+            .single()
+
+          if (!profileError && profile?.preferred_language) {
+            const lang = profile.preferred_language as 'zh-TW' | 'en-US' | 'ja-JP'
+            setPreferredInterviewLanguage(lang)
+            console.log('[Interview] Loaded preferred interview language from profile:', lang)
+          } else {
+            console.log('[Interview] No preferred_language found in profile, using default zh-TW')
+          }
+        } catch (e) {
+          console.warn('[Interview] Failed to load preferred_language from profiles:', e)
+        }
         
         // 如果有AI面試官配置，更新model設定
         if (data.ai_interviewer?.model_name) {
@@ -314,6 +338,7 @@ const Interview = () => {
             resultNotificationMethod={
               (interviewConfig?.interview?.job_opening?.result_notification_method as 'immediate' | 'later' | undefined) || 'immediate'
             }
+            preferredLanguage={preferredInterviewLanguage}
           />
         )
       ) : interviewFlow.interviewStatus === 'completed' || interviewFlow.showResults ? (
