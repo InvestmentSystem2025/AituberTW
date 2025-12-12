@@ -9,6 +9,8 @@ export default function MePage() {
   const [email, setEmail] = useState('')
   const [profileId, setProfileId] = useState<string>('')
   const [userRole, setUserRole] = useState<'jobSeeker' | 'recruiter' | null>(null)
+  const [preferredLanguage, setPreferredLanguage] = useState<'zh-TW' | 'en-US' | 'ja-JP'>('zh-TW')
+  const [savingPreferredLanguage, setSavingPreferredLanguage] = useState(false)
   const [copied, setCopied] = useState(false)
   const [tos, setTos] = useState<TosResp | null>(null)
   const [activeTab, setActiveTab] = useState<'profile' | 'company' | 'interviews'>('profile')
@@ -99,7 +101,7 @@ export default function MePage() {
       if (token && session.session?.user?.id) {
         const { data: profile } = await supabase
           .from('profiles')
-          .select('id, role')
+          .select('id, role, preferred_language')
           .eq('auth_id', session.session.user.id)
           .single()
         
@@ -110,6 +112,11 @@ export default function MePage() {
           setUserRole(profile.role as 'jobSeeker' | 'recruiter')
           // 不需要在這裡設定預設 tab，因為已經在初始化時從 URL 讀取了
           // 如果沒有 URL 參數，getInitialTab() 已經返回 'profile' 作為預設值
+        }
+        if (profile?.preferred_language) {
+          setPreferredLanguage(
+            profile.preferred_language as 'zh-TW' | 'en-US' | 'ja-JP'
+          )
         }
       }
       
@@ -151,6 +158,26 @@ export default function MePage() {
     const r = await fetch('/api/interviews/my-interviews', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
     const j = await r.json()
     setInterviews(j.items || [])
+  }
+
+  const handleSavePreferredLanguage = async () => {
+    if (!profileId) return
+    setSavingPreferredLanguage(true)
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ preferred_language: preferredLanguage })
+        .eq('id', profileId)
+      if (error) {
+        alert('更新偏好語言失敗：' + error.message)
+        return
+      }
+      alert('偏好面試語言已更新')
+    } catch (e: any) {
+      alert('更新偏好語言時發生錯誤')
+    } finally {
+      setSavingPreferredLanguage(false)
+    }
   }
 
   const markInterviewAsRead = (interviewId: string) => {
@@ -371,6 +398,60 @@ export default function MePage() {
                 >
                   {copied ? '已複製！' : '複製 ID'}
                 </button>
+              </div>
+            </div>
+          )}
+
+          {profileId && (
+            <div
+              style={{
+                marginTop: 24,
+                padding: 16,
+                border: '2px solid #000',
+                borderRadius: 8,
+                background: '#f9fafb',
+              }}
+            >
+              <div style={{ marginBottom: 8, fontWeight: 'bold' }}>
+                偏好面試語言
+              </div>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <select
+                  value={preferredLanguage}
+                  onChange={(e) =>
+                    setPreferredLanguage(
+                      e.target.value as 'zh-TW' | 'en-US' | 'ja-JP'
+                    )
+                  }
+                  style={{
+                    padding: 8,
+                    border: '2px solid #000',
+                    borderRadius: 4,
+                    background: '#fff',
+                  }}
+                >
+                  <option value="zh-TW">繁體中文 (zh-TW)</option>
+                  <option value="en-US">English (en-US)</option>
+                  <option value="ja-JP">日本語 (ja-JP)</option>
+                </select>
+                <button
+                  onClick={handleSavePreferredLanguage}
+                  disabled={savingPreferredLanguage}
+                  style={{
+                    padding: '8px 16px',
+                    background: '#111827',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    fontWeight: 500,
+                  }}
+                >
+                  {savingPreferredLanguage ? '儲存中…' : '儲存偏好'}
+                </button>
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
+                這個設定會用在 AI 面試官的問答語言上，之後可隨時在此修改。
               </div>
             </div>
           )}

@@ -44,11 +44,27 @@ grant usage on schema auth to anon, authenticated, service_role;
 -- 面試システム 専用 DDL
 -- =========================
 
+-- 全域 AI 設定表（所有前端客戶端共用）
+CREATE TABLE IF NOT EXISTS public.admin_settings (
+  id TEXT PRIMARY KEY,
+  ai_service TEXT NOT NULL,
+  ai_model TEXT NOT NULL,
+  temperature NUMERIC NOT NULL DEFAULT 1.0,
+  max_tokens INTEGER NOT NULL DEFAULT 4096,
+  settings_json JSONB,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 初始化預設全域設定（若尚未存在）
+INSERT INTO public.admin_settings (id, ai_service, ai_model, temperature, max_tokens)
+VALUES ('default', 'openai', 'gpt-4.1-mini', 1.0, 4096)
+ON CONFLICT (id) DO NOTHING;
+
 -- ENUM 型別
 CREATE TYPE public.result_notification_method_type AS ENUM ('immediate','later');
 CREATE TYPE public.interview_status_type           AS ENUM ('waitToStart','completed','lateButComplete','noShow','cancelled');
 CREATE TYPE public.review_type_type                AS ENUM ('AI','HUMAN','MIXED');
-CREATE TYPE public.interview_result_type           AS ENUM ('hired','rejected','onHold');
+CREATE TYPE public.interview_result_type           AS ENUM ('hired','rejected','onHold','cancelByUser');
 CREATE TYPE public.question_source_type            AS ENUM ('AI','USER');
 
 -- profiles
@@ -57,8 +73,37 @@ CREATE TABLE public.profiles (
   auth_id UUID UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT,
   role TEXT NOT NULL CHECK (role IN ('jobSeeker','recruiter')),
+  -- 使用者偏好面試語言（預設繁體中文），目前支援 zh-TW / en-US / ja-JP
+  preferred_language TEXT NOT NULL DEFAULT 'zh-TW' CHECK (
+    preferred_language IN ('zh-TW','en-US','ja-JP')
+  ),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 若已存在舊版 profiles 表，補上 preferred_language 欄位與限制條件
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'profiles'
+      AND column_name = 'preferred_language'
+  ) THEN
+    ALTER TABLE public.profiles
+      ADD COLUMN preferred_language TEXT;
+
+    UPDATE public.profiles
+    SET preferred_language = 'zh-TW'
+    WHERE preferred_language IS NULL;
+
+    ALTER TABLE public.profiles
+      ALTER COLUMN preferred_language SET DEFAULT 'zh-TW',
+      ALTER COLUMN preferred_language SET NOT NULL,
+      ADD CONSTRAINT profiles_preferred_language_chk
+        CHECK (preferred_language IN ('zh-TW','en-US','ja-JP'));
+  END IF;
+END $$;
 
 -- company
 CREATE TABLE public.company (
@@ -805,18 +850,30 @@ SET search_path = public, auth
 AS $$
 DECLARE
   v_role TEXT;
+  v_lang TEXT;
 BEGIN
   -- 從 user_metadata 中讀取 role
   v_role := NEW.raw_user_meta_data->>'role';
+  -- 從 user_metadata 中讀取偏好語言
+  v_lang := NEW.raw_user_meta_data->>'preferred_language';
   
   -- 如果 role 不在 user_metadata 中，嘗試從 raw_app_meta_data 中讀取
   IF v_role IS NULL THEN
     v_role := NEW.raw_app_meta_data->>'role';
   END IF;
+  -- 如果偏好語言不在 user_metadata 中，嘗試從 raw_app_meta_data 中讀取
+  IF v_lang IS NULL THEN
+    v_lang := NEW.raw_app_meta_data->>'preferred_language';
+  END IF;
   
   -- 使用 SECURITY DEFINER 權限直接插入，繞過 RLS
-  INSERT INTO public.profiles (auth_id, email, role)
-  VALUES (NEW.id, NEW.email, COALESCE(v_role, 'jobSeeker'))
+  INSERT INTO public.profiles (auth_id, email, role, preferred_language)
+  VALUES (
+    NEW.id,
+    NEW.email,
+    COALESCE(v_role, 'jobSeeker'),
+    COALESCE(v_lang, 'zh-TW')
+  )
   ON CONFLICT (auth_id) DO NOTHING;
   RETURN NEW;
 EXCEPTION

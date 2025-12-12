@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useRouter } from 'next/router'
 import { Form } from '@/components/form'
 import MessageReceiver from '@/components/messageReceiver'
 import { Introduction } from '@/components/introduction'
@@ -20,6 +21,7 @@ import { YoutubeManager } from '@/components/youtubeManager'
 import toastStore from '@/features/stores/toast'
 
 const Home = () => {
+  const router = useRouter()
   const webcamStatus = homeStore((s) => s.webcamStatus)
   const captureStatus = homeStore((s) => s.captureStatus)
   const backgroundImageUrl = homeStore((s) => s.backgroundImageUrl)
@@ -102,6 +104,15 @@ const Home = () => {
     <div className="h-[100svh] bg-cover" style={backgroundStyle}>
       <Meta />
       <Introduction />
+      {/* AI面試按鈕 - 右上角 */}
+      <div className="absolute top-6 right-6 z-20">
+        <button
+          onClick={() => router.push('/tos')}
+          className="bg-primary hover:bg-primary-hover active:bg-primary-press text-theme rounded-2xl px-6 py-3 text-sm font-bold shadow-lg transition-colors"
+        >
+          AI面試
+        </button>
+      </div>
       {modelType === 'vrm' ? <VrmViewer /> : <Live2DViewer />}
       <Form />
       <Menu />

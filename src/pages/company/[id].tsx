@@ -295,7 +295,11 @@ export default function CompanyAdminPage() {
     setNewAI({ name: '', model_name: 'yuki.vrm', model_config: '{}' }); await loadAI(token)
   }
   const addJob = async (e: React.FormEvent) => {
-    e.preventDefault(); if (!newJob.job_title) return
+    e.preventDefault()
+    if (!newJob.job_title || !newJob.job_title.trim()) {
+      alert('請輸入職種名稱')
+      return
+    }
     
     // 如果啟用了自訂評估項目，驗證 weight 總和
     if (newJob.enableCustomCriteria) {
@@ -439,18 +443,23 @@ export default function CompanyAdminPage() {
   }
   const addQB = async (e: React.FormEvent) => {
     e.preventDefault(); 
-    if (!newQB.name) {
+    if (!newQB.name || !newQB.name.trim()) {
       alert('請輸入題庫名稱')
       return
     }
-    if (newQB.questions.length === 0) {
-      alert('請至少新增一個問題')
+    // 過濾掉空白問題，確保至少有一題有內容
+    const trimmedQuestions = newQB.questions
+      .map(q => q.trim())
+      .filter(q => q.length > 0)
+
+    if (trimmedQuestions.length === 0) {
+      alert('問題內容不能為空，請至少輸入一個有效問題')
       return
     }
     
     // 將問題列表轉換為 JSON 格式
     const detail = {
-      questions: newQB.questions.filter(q => q.trim())
+      questions: trimmedQuestions
     }
     
     const r = await fetch('/api/question-bank/create', { 
@@ -478,14 +487,20 @@ export default function CompanyAdminPage() {
       alert('請選擇職種')
       return
     }
-    if (newJOQ.questions.length === 0) {
-      alert('請至少新增一個問題')
+
+    // 過濾掉空白問題，確保至少有一題有內容
+    const trimmedQuestions = newJOQ.questions
+      .map(q => q.trim())
+      .filter(q => q.length > 0)
+
+    if (trimmedQuestions.length === 0) {
+      alert('問題內容不能為空，請至少輸入一個有效問題')
       return
     }
     
     // 將問題列表轉換為 JSON 格式
     const detail = {
-      questions: newJOQ.questions.filter(q => q.trim())
+      questions: trimmedQuestions
     }
     
     const r = await fetch('/api/job-opening-questions/create', { 
@@ -1182,10 +1197,11 @@ ${criteriaText}
     return status || '未知狀態'
   }
 
-  const formatInterviewResult = (result?: 'hired' | 'rejected' | 'onHold' | null) => {
+  const formatInterviewResult = (result?: 'hired' | 'rejected' | 'onHold' | 'cancelByUser' | null) => {
     if (result === 'hired') return '錄取'
     if (result === 'rejected') return '拒絕'
     if (result === 'onHold') return '保留觀察'
+    if (result === 'cancelByUser') return '面試者提早結束'
     return '尚未評價'
   }
 
@@ -1209,6 +1225,7 @@ ${criteriaText}
     if (reason === 'passed threshold') return 'AI 評分通過門檻'
     if (reason === 'below threshold') return 'AI 評分低於門檻'
     if (reason === 'per_criteria_minimums/must_meet not satisfied') return '未達個別項目或必備條件'
+    if (reason === 'cancelled_by_user') return '面試者提早結束（候選人主動結束面試）'
     return reason
   }
 
@@ -1480,7 +1497,7 @@ ${criteriaText}
                         <tr style={{ background: '#ddd' }}>
                           <th style={{ padding: 8, textAlign: 'left' }}>Key (英文)</th>
                           <th style={{ padding: 8, textAlign: 'left' }}>Display Name (中文)</th>
-                          <th style={{ padding: 8, textAlign: 'left' }}>Weight (0-1)</th>
+                          <th style={{ padding: 8, textAlign: 'left' }}>比重 (0-1)</th>
                           <th style={{ padding: 8, textAlign: 'left' }}>Max Score</th>
                           <th style={{ padding: 8, textAlign: 'center' }}>操作</th>
                         </tr>
@@ -1844,7 +1861,7 @@ ${criteriaText}
                               <tr style={{ background: '#ddd' }}>
                                 <th style={{ padding: 8, textAlign: 'left' }}>Key (英文)</th>
                                 <th style={{ padding: 8, textAlign: 'left' }}>Display Name (中文)</th>
-                                <th style={{ padding: 8, textAlign: 'left' }}>Weight (0-1)</th>
+                                <th style={{ padding: 8, textAlign: 'left' }}>比重 (0-1)</th>
                                 <th style={{ padding: 8, textAlign: 'left' }}>Max Score</th>
                                 <th style={{ padding: 8, textAlign: 'center' }}>操作</th>
                               </tr>
@@ -2859,6 +2876,18 @@ ${criteriaText}
                                                       )}
                                                       {t.personality.detail_attentiveness && (
                                                         <div>細心程度：{t.personality.detail_attentiveness}</div>
+                                                      )}
+                                                      {t.personality.proactivity && (
+                                                        <div>主動性：{t.personality.proactivity}</div>
+                                                      )}
+                                                      {t.personality.learning_mindset && (
+                                                        <div>學習與成長心態：{t.personality.learning_mindset}</div>
+                                                      )}
+                                                      {t.personality.stress_resilience && (
+                                                        <div>抗壓與情緒穩定：{t.personality.stress_resilience}</div>
+                                                      )}
+                                                      {t.personality.collaboration && (
+                                                        <div>合作與溝通方式：{t.personality.collaboration}</div>
                                                       )}
                                                     </div>
                                                   </div>

@@ -54,32 +54,19 @@ function detectInterviewStage(messages: Message[]): string {
 }
 
 /**
- * 檢測用戶語言
+ * 將面試語言代碼（如 zh-TW / en-US / ja-JP）映射為提示詞中使用的語言名稱
+ * 注意：這裡的字串會直接出現在「回答語言必須使用：{userLanguage}」中
  */
-function detectUserLanguage(text: string): string {
-  // 檢測中文字符
-  const chineseRegex = /[\u4e00-\u9fff]/
-  // 檢測日文字符
-  const japaneseRegex = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]/
-  // 檢測韓文字符
-  const koreanRegex = /[\uac00-\ud7af]/
-  // 檢測阿拉伯文字符
-  const arabicRegex = /[\u0600-\u06ff]/
-  // 檢測俄文字符
-  const russianRegex = /[\u0400-\u04ff]/
-
-  if (chineseRegex.test(text)) {
-    return '繁體中文'
-  } else if (japaneseRegex.test(text)) {
-    return '日本語'
-  } else if (koreanRegex.test(text)) {
-    return '한국어'
-  } else if (arabicRegex.test(text)) {
-    return 'العربية'
-  } else if (russianRegex.test(text)) {
-    return 'Русский'
-  } else {
-    return 'English'
+function mapInterviewLanguageToLabel(code?: string): string {
+  switch (code) {
+    case 'en-US':
+      return 'English'
+    case 'ja-JP':
+      return '日本語'
+    case 'zh-TW':
+      return '繁體中文'
+    default:
+      return '繁體中文'
   }
 }
 
@@ -650,7 +637,8 @@ export async function getInterviewAIResponse(
   questionIndex?: number,
   interviewQuestions?: string[],
   evaluationCriteria?: any[],
-  trackingId?: string
+  trackingId?: string,
+  preferredLanguageCode?: string
 ) {
   const {
     aiApiKey,
@@ -666,11 +654,8 @@ export async function getInterviewAIResponse(
     customApiIncludeMimeType,
   } = getAIConfig()
 
-  // 檢測用戶語言
-  const lastUserMessage = messages.filter((msg) => msg.role === 'user').pop()
-  const userLanguage = lastUserMessage && typeof lastUserMessage.content === 'string' 
-    ? detectUserLanguage(lastUserMessage.content) 
-    : '繁體中文'
+  // 使用面試偏好語言（來自前端傳入的 preferredLanguageCode）
+  const userLanguage = mapInterviewLanguageToLabel(preferredLanguageCode)
 
   // 檢測當前面試階段
   const currentStage = detectInterviewStage(messages)
@@ -870,7 +855,8 @@ export async function getInterviewAIResponseStream(
   questionIndex?: number,
   interviewQuestions?: string[],
   evaluationCriteria?: any[],
-  trackingId?: string
+  trackingId?: string,
+  preferredLanguageCode?: string
 ): Promise<ReadableStream<string>> {
   const {
     aiApiKey,
@@ -886,11 +872,8 @@ export async function getInterviewAIResponseStream(
     customApiIncludeMimeType,
   } = getAIConfig()
 
-  // 檢測用戶語言
-  const lastUserMessage = messages.filter((msg) => msg.role === 'user').pop()
-  const userLanguage = lastUserMessage && typeof lastUserMessage.content === 'string' 
-    ? detectUserLanguage(lastUserMessage.content) 
-    : '繁體中文'
+  // 使用面試偏好語言（來自前端傳入的 preferredLanguageCode）
+  const userLanguage = mapInterviewLanguageToLabel(preferredLanguageCode)
 
   // 檢測當前面試階段
   const currentStage = detectInterviewStage(messages)

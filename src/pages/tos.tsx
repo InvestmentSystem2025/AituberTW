@@ -11,6 +11,7 @@ export default function TosAndSignupPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState<'jobSeeker' | 'recruiter'>('jobSeeker')
+  const [preferredLanguage, setPreferredLanguage] = useState<'zh-TW' | 'en-US' | 'ja-JP'>('zh-TW')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [token, setToken] = useState<string | null>(null)
@@ -110,7 +111,13 @@ export default function TosAndSignupPage() {
       const resp = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, role, nonce: nonceInfo.nonce })
+        body: JSON.stringify({
+          email,
+          password,
+          role,
+          nonce: nonceInfo.nonce,
+          preferredLanguage,
+        })
       })
       if (!resp.ok) {
         const j = await resp.json().catch(() => ({}))
@@ -190,6 +197,21 @@ export default function TosAndSignupPage() {
             <select value={role} onChange={(e) => setRole(e.target.value as any)} style={{ width: '100%', padding: 8, marginTop: 4 }}>
               <option value="jobSeeker">jobSeeker</option>
               <option value="recruiter">recruiter</option>
+            </select>
+          </label>
+          <label>
+            偏好面試語言 / Preferred interview language
+            <select
+              value={preferredLanguage}
+              onChange={(e) =>
+                setPreferredLanguage(e.target.value as 'zh-TW' | 'en-US' | 'ja-JP')
+              }
+              style={{ width: '100%', padding: 8, marginTop: 4 }}
+              required
+            >
+              <option value="zh-TW">繁體中文 (zh-TW)</option>
+              <option value="en-US">English (en-US)</option>
+              <option value="ja-JP">日本語 (ja-JP)</option>
             </select>
           </label>
           <button type="submit" disabled={loading} style={{ padding: 10 }}>

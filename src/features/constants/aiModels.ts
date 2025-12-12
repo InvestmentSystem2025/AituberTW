@@ -3,7 +3,7 @@ import { AIService } from './settings'
 /**
  * モデルの属性定義
  */
-interface ModelInfo {
+export interface ModelInfo {
   /** モデル名 */
   name: string
   /** マルチモーダル対応かどうか */
@@ -15,7 +15,7 @@ interface ModelInfo {
 /**
  * 各AIサービスのモデル定義（属性付き）
  */
-const modelDefinitions: Record<AIService, ModelInfo[]> = {
+export const modelDefinitions: Record<AIService, ModelInfo[]> = {
   openai: [
     { name: 'gpt-4.1', multiModal: true, isDefault: true },
     { name: 'gpt-4.1-mini', multiModal: true },

@@ -161,6 +161,30 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
                     <span>{personalitySummary.detail_attentiveness}</span>
                   </div>
                 )}
+                {personalitySummary.proactivity && (
+                  <div>
+                    <span className="font-medium">主動性：</span>
+                    <span>{personalitySummary.proactivity}</span>
+                  </div>
+                )}
+                {personalitySummary.learning_mindset && (
+                  <div>
+                    <span className="font-medium">學習與成長心態：</span>
+                    <span>{personalitySummary.learning_mindset}</span>
+                  </div>
+                )}
+                {personalitySummary.stress_resilience && (
+                  <div>
+                    <span className="font-medium">抗壓與情緒穩定：</span>
+                    <span>{personalitySummary.stress_resilience}</span>
+                  </div>
+                )}
+                {personalitySummary.collaboration && (
+                  <div>
+                    <span className="font-medium">合作與溝通方式：</span>
+                    <span>{personalitySummary.collaboration}</span>
+                  </div>
+                )}
                 {personalitySummary.summaryText && (
                   <div>
                     <span className="font-medium">整體總結：</span>
