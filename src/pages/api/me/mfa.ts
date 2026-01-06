@@ -1,0 +1,27 @@
+import type { NextApiRequest, NextApiResponse } from 'next'
+import { getAuthUserIdFromRequest, getServiceClient } from '@/lib/supabaseServer'
+
+type Resp = { mfa_enabled: boolean; role?: string } | { error: string }
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
+  if (req.method !== 'GET') return res.status(405).end()
+
+  const authUserId = await getAuthUserIdFromRequest(req)
+  if (!authUserId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+
+  const supa = getServiceClient()
+  const { data: profile, error } = await supa
+    .from('profiles')
+    .select('role, mfa_totp_enabled_at')
+    .eq('auth_id', authUserId)
+    .maybeSingle()
+
+  if (error || !profile) return res.status(500).json({ error: 'PROFILE_NOT_FOUND' })
+
+  return res.status(200).json({
+    mfa_enabled: !!profile.mfa_totp_enabled_at,
+    role: profile.role,
+  })
+}
+
+

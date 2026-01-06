@@ -19,6 +19,8 @@ export default function MePage() {
   const [interviews, setInterviews] = useState<any[]>([])
   const [readInterviewIds, setReadInterviewIds] = useState<Set<string>>(new Set())
   const [accessToken, setAccessToken] = useState<string>('')
+  const [centerNotice, setCenterNotice] = useState<string>('')
+  const [quotaInfo, setQuotaInfo] = useState<{ remaining: number; used_count: number; free_quota: number } | null>(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({
@@ -128,8 +130,30 @@ export default function MePage() {
           window.location.href = '/tos'
           return
         }
+
+        // MFA 未完成則強制導去設定頁（首次登入 gate）
+        const mfaResp = await fetch('/api/me/mfa', { headers: { Authorization: `Bearer ${token}` } })
+        const mfaJson = await mfaResp.json()
+        if (mfaResp.ok && mfaJson && mfaJson.mfa_enabled === false) {
+          window.location.href = '/mfa/setup'
+          return
+        }
       }
       if (token) setAccessToken(token)
+
+      // jobSeeker：顯示剩餘免費次數（free_quota - used_count）
+      if (token) {
+        try {
+          const r = await fetch('/api/me/quota', { headers: { Authorization: `Bearer ${token}` } })
+          const j = await r.json()
+          if (r.ok && j?.ok) {
+            setQuotaInfo({ remaining: j.remaining, used_count: j.used_count, free_quota: j.free_quota })
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       await loadCompanies(token || '')
       await loadInterviews(token || '')
       
@@ -198,8 +222,39 @@ export default function MePage() {
   }
 
   const handleStartInterview = (interviewId: string) => {
-    markInterviewAsRead(interviewId)
-    window.location.href = `/interview?interview_id=${interviewId}`
+    const run = async () => {
+      if (!accessToken) {
+        window.location.href = '/login'
+        return
+      }
+
+      // 先做 server-side gate 檢查（不扣點），避免 quota 用完還先跳轉到面試頁再被擋回來
+      try {
+        const r = await fetch(`/api/interviews/get?interview_id=${encodeURIComponent(interviewId)}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        })
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}))
+          if (err?.error === 'FREE_QUOTA_EXCEEDED') {
+            setCenterNotice('免費使用次數已用完，若需要再次使用請參考月費方案。')
+            return
+          }
+          if (err?.error === 'MFA_REQUIRED') {
+            window.location.href = '/mfa/setup'
+            return
+          }
+          setCenterNotice('目前無法開始面試，請稍後再試。')
+          return
+        }
+      } catch {
+        setCenterNotice('目前無法開始面試，請稍後再試。')
+        return
+      }
+
+      markInterviewAsRead(interviewId)
+      window.location.href = `/interview?interview_id=${interviewId}`
+    }
+    run()
   }
 
   const startEdit = (c: any) => {
@@ -279,6 +334,52 @@ export default function MePage() {
 
   return (
     <div style={{ maxWidth: 980, margin: '36px auto', padding: 24 }}>
+      {centerNotice && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: 16,
+          }}
+          onClick={() => setCenterNotice('')}
+        >
+          <div
+            style={{
+              width: 'min(560px, 92vw)',
+              background: '#fff',
+              borderRadius: 12,
+              padding: 20,
+              boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+              textAlign: 'center',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 10 }}>提示</div>
+            <div style={{ fontSize: 15, color: '#111827', lineHeight: 1.6 }}>{centerNotice}</div>
+            <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setCenterNotice('')}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #d1d5db',
+                  background: '#fff',
+                  cursor: 'pointer',
+                }}
+              >
+                關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 16, borderBottom: '1px solid #e5e7eb' }}>
           <button onClick={() => setActiveTab('profile')} style={{ padding: '8px 12px', borderBottom: activeTab === 'profile' ? '2px solid #111' : '2px solid transparent' }}>個人</button>
@@ -321,20 +422,27 @@ export default function MePage() {
             <button onClick={() => setActiveTab('company')} style={{ padding: '8px 12px', borderBottom: activeTab === 'company' ? '2px solid #111' : '2px solid transparent' }}>公司</button>
           )}
         </div>
-        <button 
-          onClick={handleLogout}
-          style={{
-            padding: '8px 16px',
-            background: '#f44336',
-            color: 'white',
-            border: 'none',
-            borderRadius: 4,
-            cursor: 'pointer',
-            fontWeight: 500
-          }}
-        >
-          登出
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+          <button
+            onClick={handleLogout}
+            style={{
+              padding: '8px 16px',
+              background: '#f44336',
+              color: 'white',
+              border: 'none',
+              borderRadius: 4,
+              cursor: 'pointer',
+              fontWeight: 500,
+            }}
+          >
+            登出
+          </button>
+          {userRole === 'jobSeeker' && quotaInfo && (
+            <div style={{ fontSize: 13, color: '#111827' }}>
+              當前剩餘免費次數：<b>{quotaInfo.remaining}</b>（{quotaInfo.used_count}/{quotaInfo.free_quota}）
+            </div>
+          )}
+        </div>
       </div>
 
       {activeTab === 'profile' && (

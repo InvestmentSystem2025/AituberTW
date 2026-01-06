@@ -73,6 +73,12 @@ CREATE TABLE public.profiles (
   auth_id UUID UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT,
   role TEXT NOT NULL CHECK (role IN ('jobSeeker','recruiter')),
+  -- Authenticator (TOTP) MFA：首次登入後必須完成設定才可進站（jobSeeker 也需完成才可開始面試/取得免費額度）
+  mfa_totp_enabled_at TIMESTAMPTZ,
+  -- TOTP secret（AES-256-GCM 加密後的密文），不可存明碼
+  mfa_totp_secret_enc TEXT,
+  -- 加密版本（未來輪替用）
+  mfa_totp_secret_ver INT NOT NULL DEFAULT 1,
   -- 使用者偏好面試語言（預設繁體中文），目前支援 zh-TW / en-US / ja-JP
   preferred_language TEXT NOT NULL DEFAULT 'zh-TW' CHECK (
     preferred_language IN ('zh-TW','en-US','ja-JP')
@@ -104,6 +110,85 @@ BEGIN
         CHECK (preferred_language IN ('zh-TW','en-US','ja-JP'));
   END IF;
 END $$;
+
+-- 若已存在舊版 profiles 表，補上 MFA 欄位
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'profiles'
+      AND column_name = 'mfa_totp_enabled_at'
+  ) THEN
+    ALTER TABLE public.profiles
+      ADD COLUMN mfa_totp_enabled_at TIMESTAMPTZ;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'profiles'
+      AND column_name = 'mfa_totp_secret_enc'
+  ) THEN
+    ALTER TABLE public.profiles
+      ADD COLUMN mfa_totp_secret_enc TEXT;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'profiles'
+      AND column_name = 'mfa_totp_secret_ver'
+  ) THEN
+    ALTER TABLE public.profiles
+      ADD COLUMN mfa_totp_secret_ver INT NOT NULL DEFAULT 1;
+  END IF;
+END $$;
+
+-- =========================
+-- Authenticator(TOTP) Enrollment（自建 MFA）
+-- =========================
+CREATE TABLE IF NOT EXISTS public.totp_enrollments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  profile_id UUID NOT NULL UNIQUE REFERENCES public.profiles(id) ON DELETE CASCADE,
+  secret_enc TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  attempt_count INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_totp_enrollments_expires_at ON public.totp_enrollments (expires_at);
+
+ALTER TABLE public.totp_enrollments ENABLE ROW LEVEL SECURITY;
+-- 不允許 anon/authenticated 直接存取；一律走後端（service_role）
+CREATE POLICY totp_enrollments_block_select ON public.totp_enrollments FOR SELECT TO anon, authenticated USING (false);
+CREATE POLICY totp_enrollments_block_insert ON public.totp_enrollments FOR INSERT TO anon, authenticated WITH CHECK (false);
+CREATE POLICY totp_enrollments_block_update ON public.totp_enrollments FOR UPDATE TO anon, authenticated USING (false) WITH CHECK (false);
+CREATE POLICY totp_enrollments_block_delete ON public.totp_enrollments FOR DELETE TO anon, authenticated USING (false);
+
+-- =========================
+-- JobSeeker 免費額度（每帳號 3 次，完成 MFA 後初始化）
+-- =========================
+CREATE TABLE IF NOT EXISTS public.job_seeker_usage (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  profile_id UUID NOT NULL UNIQUE REFERENCES public.profiles(id) ON DELETE CASCADE,
+  used_count INT NOT NULL DEFAULT 0,
+  free_quota INT NOT NULL DEFAULT 3,
+  last_used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.job_seeker_usage ENABLE ROW LEVEL SECURITY;
+-- 預設也封鎖前端直連，避免被竄改；如需顯示剩餘次數，走 API 回傳
+CREATE POLICY job_seeker_usage_block_select ON public.job_seeker_usage FOR SELECT TO anon, authenticated USING (false);
+CREATE POLICY job_seeker_usage_block_insert ON public.job_seeker_usage FOR INSERT TO anon, authenticated WITH CHECK (false);
+CREATE POLICY job_seeker_usage_block_update ON public.job_seeker_usage FOR UPDATE TO anon, authenticated USING (false) WITH CHECK (false);
+CREATE POLICY job_seeker_usage_block_delete ON public.job_seeker_usage FOR DELETE TO anon, authenticated USING (false);
 
 -- company
 CREATE TABLE public.company (
@@ -346,6 +431,10 @@ GRANT SELECT, INSERT, UPDATE ON public.question_bank TO authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.job_opening_questions TO authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.interviews TO authenticated;
 GRANT SELECT ON public.interview_sessions TO authenticated; -- video_path は参照のみ許可（更新不可）
+
+-- MFA/Quota テーブルはクライアント直アクセスをブロックし、後端（service_role）経由のみ運用
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.totp_enrollments TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.job_seeker_usage TO service_role;
 
 -- ============
 -- profiles
@@ -1024,6 +1113,149 @@ BEGIN
   RETURN v_total;
 END;
 $$;
+
+-- =========================
+-- Interview start gate & quota atomic increment (jobSeeker)
+-- =========================
+CREATE OR REPLACE FUNCTION public.start_interview_session(p_interviews_id uuid, p_auth_user_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_profile public.profiles%ROWTYPE;
+  v_interview public.interviews%ROWTYPE;
+  v_usage public.job_seeker_usage%ROWTYPE;
+  v_existing_session public.interview_sessions%ROWTYPE;
+  v_email text;
+  v_did_increment boolean := false;
+BEGIN
+  IF p_interviews_id IS NULL OR p_auth_user_id IS NULL THEN
+    RAISE EXCEPTION 'INVALID_ARGS';
+  END IF;
+
+  SELECT * INTO v_profile
+  FROM public.profiles
+  WHERE auth_id = p_auth_user_id
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PROFILE_NOT_FOUND';
+  END IF;
+
+  SELECT * INTO v_interview
+  FROM public.interviews
+  WHERE id = p_interviews_id
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'INTERVIEW_NOT_FOUND';
+  END IF;
+
+  -- Authorization: jobSeeker 只能開始自己的面試（profiles_id 或 candidate_email 匹配）
+  IF v_profile.role = 'jobSeeker' THEN
+    v_email := lower(coalesce(v_profile.email, ''));
+    IF v_interview.profiles_id IS NOT NULL THEN
+      IF v_interview.profiles_id <> v_profile.id THEN
+        RAISE EXCEPTION 'FORBIDDEN';
+      END IF;
+    ELSE
+      IF v_interview.candidate_email IS NULL OR lower(v_interview.candidate_email) <> v_email THEN
+        RAISE EXCEPTION 'FORBIDDEN';
+      END IF;
+    END IF;
+  END IF;
+
+  -- Gate: MFA 必須完成（僅 jobSeeker）
+  IF v_profile.role = 'jobSeeker' AND v_profile.mfa_totp_enabled_at IS NULL THEN
+    RAISE EXCEPTION 'MFA_REQUIRED';
+  END IF;
+
+  -- 若 session 已存在，直接回傳（idempotent；不重複扣點）
+  SELECT * INTO v_existing_session
+  FROM public.interview_sessions
+  WHERE interviews_id = p_interviews_id
+  LIMIT 1;
+
+  IF FOUND THEN
+    -- 若 usage 不存在，補建（保險）
+    IF v_profile.role = 'jobSeeker' THEN
+      INSERT INTO public.job_seeker_usage(profile_id, used_count, free_quota, updated_at)
+      VALUES (v_profile.id, 0, 3, now())
+      ON CONFLICT (profile_id) DO NOTHING;
+
+      SELECT * INTO v_usage FROM public.job_seeker_usage WHERE profile_id = v_profile.id LIMIT 1;
+    END IF;
+
+    RETURN jsonb_build_object(
+      'ok', true,
+      'did_increment', false,
+      'usage', CASE
+        WHEN v_profile.role = 'jobSeeker' THEN jsonb_build_object('used_count', v_usage.used_count, 'free_quota', v_usage.free_quota)
+        ELSE NULL
+      END,
+      'session_id', v_existing_session.id
+    );
+  END IF;
+
+  -- Quota: 需存在且剩餘 >= 1（僅 jobSeeker）
+  IF v_profile.role = 'jobSeeker' THEN
+    INSERT INTO public.job_seeker_usage(profile_id, used_count, free_quota, updated_at)
+    VALUES (v_profile.id, 0, 3, now())
+    ON CONFLICT (profile_id) DO NOTHING;
+
+    -- 鎖住 usage row，避免競態重複扣點
+    SELECT * INTO v_usage
+    FROM public.job_seeker_usage
+    WHERE profile_id = v_profile.id
+    FOR UPDATE;
+
+    IF v_usage.used_count >= v_usage.free_quota THEN
+      RAISE EXCEPTION 'FREE_QUOTA_EXCEEDED';
+    END IF;
+  END IF;
+
+  -- 建立 placeholder session（讓後續 save-session upsert 更新同一筆）
+  BEGIN
+    INSERT INTO public.interview_sessions(company_id, interviews_id, duration_seconds, created_at)
+    VALUES (v_interview.company_id, p_interviews_id, 0, now())
+    RETURNING * INTO v_existing_session;
+  EXCEPTION
+    WHEN unique_violation THEN
+      -- 另一個並行請求已建立 session；視為可重入，且不應重複扣點
+      SELECT * INTO v_existing_session
+      FROM public.interview_sessions
+      WHERE interviews_id = p_interviews_id
+      LIMIT 1;
+      v_did_increment := false;
+  END;
+
+  IF v_profile.role = 'jobSeeker' AND v_did_increment THEN
+    UPDATE public.job_seeker_usage
+    SET used_count = used_count + 1,
+        last_used_at = now(),
+        updated_at = now()
+    WHERE profile_id = v_profile.id;
+    v_did_increment := true;
+    SELECT * INTO v_usage FROM public.job_seeker_usage WHERE profile_id = v_profile.id LIMIT 1;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'did_increment', v_did_increment,
+    'usage', CASE
+      WHEN v_profile.role = 'jobSeeker' THEN jsonb_build_object('used_count', v_usage.used_count, 'free_quota', v_usage.free_quota)
+      ELSE NULL
+    END,
+    'session_id', v_existing_session.id
+  );
+END;
+$$;
+
+-- 確保函數擁有者（通常是 postgres）有足夠權限（SECURITY DEFINER）
+ALTER FUNCTION public.start_interview_session(uuid, uuid) OWNER TO postgres;
+GRANT EXECUTE ON FUNCTION public.start_interview_session(uuid, uuid) TO service_role;
 
 -- =========================
 -- ToS（サインアップ前同意）テーブル

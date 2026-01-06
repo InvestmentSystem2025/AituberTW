@@ -25,6 +25,14 @@ export default function LoginPage() {
           window.location.href = '/tos'
           return
         }
+
+        // MFA 未完成則強制導去設定頁（首次登入 gate）
+        const mfaResp = await fetch('/api/me/mfa', { headers: { Authorization: `Bearer ${token}` } })
+        const mfaJson = await mfaResp.json()
+        if (mfaResp.ok && mfaJson && mfaJson.mfa_enabled === false) {
+          window.location.href = '/mfa/setup'
+          return
+        }
       }
       window.location.href = '/me'
     } catch (err: any) {

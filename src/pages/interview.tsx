@@ -131,13 +131,46 @@ const Interview = () => {
         if (!response.ok) {
           const error = await response.json()
           toastStore.getState().addToast({
-            message: `載入面試配置失敗: ${error.error || '未知錯誤'}`,
+            message: error?.message || `載入面試配置失敗: ${error.error || '未知錯誤'}`,
             type: 'error',
           })
+          // 若被 gate 擋下，做導頁（避免停在空白面試頁）
+          if (error?.error === 'MFA_REQUIRED') {
+            window.location.href = '/mfa/setup'
+            return
+          }
+          if (error?.error === 'FREE_QUOTA_EXCEEDED') {
+            window.location.href = '/me?tab=interviews'
+            return
+          }
           return
         }
 
         const data = await response.json()
+        
+        // 1.5) 開始面試扣點（server-side）
+        const startResp = await fetch('/api/interviews/start-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ interviews_id: interview_id }),
+        })
+        if (!startResp.ok) {
+          const err = await startResp.json().catch(() => ({}))
+          toastStore.getState().addToast({
+            message: err?.message || '開始面試失敗',
+            type: 'error',
+          })
+          if (err?.error === 'MFA_REQUIRED') {
+            window.location.href = '/mfa/setup'
+            return
+          }
+          if (err?.error === 'FREE_QUOTA_EXCEEDED') {
+            window.location.href = '/me?tab=interviews'
+            return
+          }
+          return
+        }
+
         setInterviewConfig(data)
 
         // 2) 讀取目前登入使用者的 profiles.preferred_language，作為面試偏好語言

@@ -49,6 +49,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const isCancelledByUser = !!is_cancelled_by_user
 
+  // 重要：save-session 不負責扣點；必須先呼叫 /api/interviews/start-session 建立 placeholder session。
+  // 否則攻擊者可直接 upsert 繞過 quota。
+  const { data: existingSession } = await supa
+    .from('interview_sessions')
+    .select('id')
+    .eq('interviews_id', interviews_id)
+    .maybeSingle()
+  if (!existingSession) {
+    return res.status(403).json({ error: 'SESSION_NOT_STARTED' })
+  }
+
   // 準備數據
   const sessionData: any = {
     company_id: interview.company_id,
@@ -74,10 +85,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     sessionData.result_reason = 'cancelled_by_user'
   }
 
-  // 插入或更新session（使用upsert因為interviews_id是UNIQUE）
+  // 僅更新既有 session（避免繞過 start-session/quota）
   const { data: session, error } = await supa
     .from('interview_sessions')
-    .upsert(sessionData, { onConflict: 'interviews_id' })
+    .update(sessionData)
+    .eq('interviews_id', interviews_id)
     .select()
     .single()
 

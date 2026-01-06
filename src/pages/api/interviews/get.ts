@@ -43,14 +43,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (ivError || !interview) return res.status(404).json({ error: 'INTERVIEW_NOT_FOUND' })
 
   // 檢查權限：如果是jobSeeker，只能查看自己的interview
-  const { data: profile } = await supa.from('profiles').select('role').eq('auth_id', authUserId).single()
+  const { data: profile } = await supa
+    .from('profiles')
+    .select('role, email, mfa_totp_enabled_at')
+    .eq('auth_id', authUserId)
+    .single()
   if (profile?.role === 'jobSeeker') {
     if (interview.profiles_id !== me.id) {
       // 檢查email是否匹配
-      const { data: userProfile } = await supa.from('profiles').select('email').eq('auth_id', authUserId).single()
-      if (userProfile?.email?.toLowerCase() !== interview.candidate_email?.toLowerCase()) {
+      if (profile.email?.toLowerCase() !== interview.candidate_email?.toLowerCase()) {
         return res.status(403).json({ error: 'FORBIDDEN' })
       }
+    }
+
+    // Gate 1: 必須完成 MFA
+    if (!profile.mfa_totp_enabled_at) {
+      return res.status(403).json({
+        error: 'MFA_REQUIRED',
+        message: '開始面試前需要完成 Authenticator 認證。'
+      })
+    }
+
+    // Gate 2: quota 必須剩餘 >= 1
+    const { data: usage } = await supa
+      .from('job_seeker_usage')
+      .select('used_count, free_quota')
+      .eq('profile_id', me.id)
+      .maybeSingle()
+
+    // 完成 MFA 後理論上已初始化；若缺失視為 0/3
+    const used = usage?.used_count ?? 0
+    const quota = usage?.free_quota ?? 3
+    if (used >= quota) {
+      return res.status(403).json({
+        error: 'FREE_QUOTA_EXCEEDED',
+        message: '免費使用次數已用完，請升級方案以繼續使用。'
+      })
     }
     
     // 自動授予該公司的 viewer 身份（如果還沒有）
