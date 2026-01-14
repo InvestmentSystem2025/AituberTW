@@ -8,50 +8,17 @@ import {
 import settingsStore from '../stores/settings'
 import { 
   INTERVIEW_PROMPT_TEMPLATES, 
-  INTERVIEW_STAGES, 
   formatPrompt,
   parseInterviewResponse,
   PERSONALITY_QUESTION_LIST,
 } from './interviewPromptTemplates'
 import { InterviewScoringEngine } from '@/features/interview/interviewScoring'
-import { AnswerScore } from '@/types/interviewScoring'
+import { AnswerScore, ScoreReasonItem } from '@/types/interviewScoring'
 import { speakCharacter } from '../messages/speakCharacter'
 import { generateMessageId } from '@/utils/messageUtils'
 import { responseTimeTracker } from '@/utils/responseTimeTracker'
 
-/**
- * 檢測當前面試階段
- */
-function detectInterviewStage(messages: Message[]): string {
-  const lastAIMessage = messages.filter(msg => msg.role === 'assistant').pop()
-  if (!lastAIMessage) return INTERVIEW_STAGES.GREETING
-  
-  const content = typeof lastAIMessage.content === 'string' 
-    ? lastAIMessage.content.toLowerCase()
-    : ''
-  
-  if (content.includes('自我介紹') || content.includes('介紹一下')) {
-    return INTERVIEW_STAGES.SELF_INTRO
-  } else if (content.includes('為什麼') || content.includes('動機') || content.includes('加入')) {
-    return INTERVIEW_STAGES.MOTIVATION
-  } else if (content.includes('公司') || content.includes('產品') || content.includes('服務')) {
-    return INTERVIEW_STAGES.COMPANY_KNOWLEDGE
-  } else if (content.includes('挑戰') || content.includes('經驗') || content.includes('解決')) {
-    return INTERVIEW_STAGES.EXPERIENCE
-  } else if (content.includes('優勢') || content.includes('技能') || content.includes('專長')) {
-    return INTERVIEW_STAGES.SKILLS
-  } else if (content.includes('團隊') || content.includes('合作') || content.includes('衝突')) {
-    return INTERVIEW_STAGES.TEAMWORK
-  } else if (content.includes('規劃') || content.includes('目標') || content.includes('未來')) {
-    return INTERVIEW_STAGES.CAREER_GOALS
-  } else if (content.includes('問題') || content.includes('疑問') || content.includes('了解')) {
-    return INTERVIEW_STAGES.CANDIDATE_QUESTIONS
-  } else if (content.includes('結束') || content.includes('謝謝') || content.includes('結果')) {
-    return INTERVIEW_STAGES.CLOSING
-  }
-  
-  return INTERVIEW_STAGES.GREETING
-}
+const DEBUG_INTERVIEW = process.env.NEXT_PUBLIC_DEBUG_INTERVIEW === '1'
 
 /**
  * 將面試語言代碼（如 zh-TW / en-US / ja-JP）映射為提示詞中使用的語言名稱
@@ -131,6 +98,75 @@ function formatConversationHistory(messages: Message[]): string {
  * 創建AnswerScore對象
  */
 function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCriteria?: any[]): AnswerScore | null {
+  const normalizeReasonContainer = (
+    input: any,
+    kind: 'deduction' | 'addition'
+  ): {
+    items: Record<string, ScoreReasonItem[]>
+    legacy: Record<string, string[]>
+    deltaByKey: Record<string, number>
+  } => {
+    const items: Record<string, ScoreReasonItem[]> = {}
+    const legacy: Record<string, string[]> = {}
+    const deltaByKey: Record<string, number> = {}
+    const sign = kind === 'deduction' ? -1 : 1
+
+    if (!input || typeof input !== 'object') return { items, legacy, deltaByKey }
+
+    for (const [criteriaKey, raw] of Object.entries(input)) {
+      const list: ScoreReasonItem[] = []
+
+      const pushItem = (it: any, fallbackDetail?: string) => {
+        if (!it) return
+        if (typeof it === 'string') {
+          list.push({ points: 0, detail: it })
+          return
+        }
+        if (typeof it === 'number') {
+          list.push({ points: Math.abs(it), detail: fallbackDetail || '' })
+          return
+        }
+        if (typeof it === 'object') {
+          const points = Number((it as any).points)
+          const detail = typeof (it as any).detail === 'string'
+            ? (it as any).detail
+            : (fallbackDetail || '')
+          list.push({
+            points: Number.isFinite(points) ? Math.abs(points) : 0,
+            detail,
+            ...(it as any),
+          })
+        }
+      }
+
+      if (Array.isArray(raw)) {
+        raw.forEach((it) => pushItem(it))
+      } else if (raw && typeof raw === 'object') {
+        if ('points' in raw || 'detail' in raw) {
+          pushItem(raw)
+        } else {
+          for (const [k, v] of Object.entries(raw)) pushItem(v, k)
+        }
+      } else {
+        pushItem(raw)
+      }
+
+      if (list.length > 0) {
+        items[criteriaKey] = list
+        const sum = list.reduce((acc, it) => acc + (Number(it.points) || 0), 0)
+        deltaByKey[criteriaKey] = sign * sum
+        legacy[criteriaKey] = list.map((it) => {
+          const p = Number(it.points) || 0
+          const s = kind === 'deduction' ? `(-${p}分)` : `(+${p}分)`
+          const d = (it.detail || '').trim()
+          return d ? `${d} ${s}` : s
+        })
+      }
+    }
+
+    return { items, legacy, deltaByKey }
+  }
+
   // 驗證必要的字段
   if (!scoreData.scores || typeof scoreData.scores !== 'object') {
     console.warn('評分數據缺少scores字段或格式不正確')
@@ -263,6 +299,10 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
     const m = rule.match(/[+\-]?\d+(?:\.\d+)?(?=\s*分)/)
     return m ? Number(m[0]) : 0
   }
+  // deductions/additions：支援新結構（事件陣列）
+  const dedParsed = normalizeReasonContainer((scoreData as any).deductions, 'deduction')
+  const addParsed = normalizeReasonContainer((scoreData as any).additions, 'addition')
+
   if (evaluationCriteria && evaluationCriteria.length > 0) {
     evaluationCriteria.forEach((c: any) => {
       const key = c.key
@@ -272,8 +312,14 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
       // 以 0 為基準，根據加分/扣分規則累加，作為「本題的加減分數」
       let value = 0
       const displayName = c.display_name || key
-      const adds = getReasons(scoreData.additions, key, displayName)
-      const deds = getReasons(scoreData.deductions, key, displayName)
+      // 優先用結構化事件推導 delta（更穩定且可統計）
+      if (addParsed.deltaByKey[key] !== undefined || dedParsed.deltaByKey[key] !== undefined) {
+        value += Number(addParsed.deltaByKey[key] || 0)
+        value += Number(dedParsed.deltaByKey[key] || 0)
+      } else {
+        // fallback：舊字串陣列原因（向後兼容）
+        const adds = getReasons((scoreData as any).additions, key, displayName)
+        const deds = getReasons((scoreData as any).deductions, key, displayName)
       if (Array.isArray(adds) && c.addition_rules) {
         // addition_rules 可能是字串或陣列，統一成陣列
         const rules: string[] = Array.isArray(c.addition_rules) ? c.addition_rules : [c.addition_rules]
@@ -288,6 +334,7 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
           const rule = rules.find(r => typeof r === 'string' && r.includes(reason))
           if (rule) value += parseDeltaFromRule(rule) // 規則內含負號
         })
+      }
       }
       // 限幅到可接受的變化範圍（-max ~ +max）
       scores[key] = Math.max(-max, Math.min(max, value))
@@ -308,86 +355,54 @@ function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCri
     timestamp: new Date(),
     scores,
     totalScore: Number(scoreData.totalScore) || 0,
-    deductions: (() => {
+    // 新：結構化事件（優先用於統計與 console）
+    deductionItems: dedParsed.items,
+    additionItems: addParsed.items,
+    // 舊：字串陣列原因（保留給既有 UI/儲存 evidence）
+    deductions: Object.keys(dedParsed.legacy).length ? dedParsed.legacy : (() => {
       const deductions: Record<string, string[]> = {}
-      // 處理預設項目的扣分原因（支援 DB key 與前端 key）
-      if (scoreData.deductions) {
+      const raw = (scoreData as any).deductions
+      if (raw && typeof raw === 'object') {
+        // fallback：舊版可能是字串陣列（並可能用 frontend key）
         const map: Record<string, string> = {
           contentCompleteness: 'content_integrity',
           logicalClarity: 'logical_clarity',
-          communicationSkills: 'communication'
+          communicationSkills: 'communication',
         }
-        Object.entries(map).forEach(([frontendKey, dbKey]) => {
-          const list = scoreData.deductions[frontendKey] || scoreData.deductions[dbKey]
-          if (Array.isArray(list)) {
-            deductions[dbKey] = list
-          }
+        Object.entries(raw).forEach(([k, v]) => {
+          if (!Array.isArray(v)) return
+          const arr = v.filter(x => typeof x === 'string')
+          const mappedKey = map[k] || k
+          if (arr.length) deductions[mappedKey] = arr
         })
       }
-      // 處理自訂項目的扣分原因
-      if (evaluationCriteria) {
-        evaluationCriteria.forEach((criteria: any) => {
-          if (criteria.scoring_logic === 'deduction' && scoreData.deductions) {
-            const key = criteria.key
-            if (scoreData.deductions[key] && Array.isArray(scoreData.deductions[key])) {
-              deductions[key] = scoreData.deductions[key]
-            }
-            // 也嘗試用顯示名稱
-            if (scoreData.deductions[criteria.display_name] && Array.isArray(scoreData.deductions[criteria.display_name])) {
-              deductions[key] = scoreData.deductions[criteria.display_name]
-            }
-          }
-        })
-      }
-      // 去重每個項目的原因
-      Object.keys(deductions).forEach((k) => {
-        if (Array.isArray(deductions[k])) {
-          deductions[k] = Array.from(new Set(deductions[k]))
-        }
-      })
       return deductions
     })(),
-    additions: (() => {
+    additions: Object.keys(addParsed.legacy).length ? addParsed.legacy : (() => {
       const additions: Record<string, string[]> = {}
-      // 處理預設項目的加分原因（支援 DB key 與前端 key）
-      if (scoreData.additions) {
+      const raw = (scoreData as any).additions
+      if (raw && typeof raw === 'object') {
         const map: Record<string, string> = {
           professionalDepth: 'professional_depth',
-          personalTraits: 'personal_attributes'
+          personalTraits: 'personal_attributes',
         }
-        Object.entries(map).forEach(([frontendKey, dbKey]) => {
-          const list = scoreData.additions[frontendKey] || scoreData.additions[dbKey]
-          if (Array.isArray(list)) {
-            additions[dbKey] = list
-          }
+        Object.entries(raw).forEach(([k, v]) => {
+          if (!Array.isArray(v)) return
+          const arr = v.filter(x => typeof x === 'string')
+          const mappedKey = map[k] || k
+          if (arr.length) additions[mappedKey] = arr
         })
       }
-      // 處理自訂項目的加分原因
-      if (evaluationCriteria) {
-        evaluationCriteria.forEach((criteria: any) => {
-          if (criteria.scoring_logic === 'addition' && scoreData.additions) {
-            const key = criteria.key
-            if (scoreData.additions[key] && Array.isArray(scoreData.additions[key])) {
-              additions[key] = scoreData.additions[key]
-            }
-            // 也嘗試用顯示名稱
-            if (scoreData.additions[criteria.display_name] && Array.isArray(scoreData.additions[criteria.display_name])) {
-              additions[key] = scoreData.additions[criteria.display_name]
-            }
-          }
-        })
-      }
-      // 去重每個項目的原因
-      Object.keys(additions).forEach((k) => {
-        if (Array.isArray(additions[k])) {
-          additions[k] = Array.from(new Set(additions[k]))
-        }
-      })
       return additions
     })(),
     aiFeedback: String(scoreData.aiFeedback || ''),
     additionsDetail: typeof scoreData.additions_detail === 'string' ? scoreData.additions_detail : undefined,
     deductionsDetail: typeof scoreData.deductions_detail === 'string' ? scoreData.deductions_detail : undefined,
+    nextAction: (() => {
+      const a = scoreData && typeof scoreData.nextAction === 'string' ? scoreData.nextAction : undefined
+      if (a === 'followup' || a === 'next' || a === 'end') return a
+      return undefined
+    })(),
     personality,
   }
 }
@@ -557,6 +572,7 @@ function parseScoreFromResponseFallback(jsonString: string, questionIndex?: numb
  * 記錄評分結果到控制台
  */
 function logScoreResult(answerScore: AnswerScore): void {
+  if (!DEBUG_INTERVIEW) return
   console.log('=== 面試評分結果 ===')
   console.log(`問題: ${answerScore.questionText}`)
   console.log(`回答: ${answerScore.answerText}`)
@@ -638,7 +654,12 @@ export async function getInterviewAIResponse(
   interviewQuestions?: string[],
   evaluationCriteria?: any[],
   trackingId?: string,
-  preferredLanguageCode?: string
+  preferredLanguageCode?: string,
+  currentQuestionText?: string,
+  isFollowUp?: boolean,
+  followUpCount?: number,
+  maxFollowUps?: number,
+  isLastQuestion?: boolean
 ) {
   const {
     aiApiKey,
@@ -656,9 +677,6 @@ export async function getInterviewAIResponse(
 
   // 使用面試偏好語言（來自前端傳入的 preferredLanguageCode）
   const userLanguage = mapInterviewLanguageToLabel(preferredLanguageCode)
-
-  // 檢測當前面試階段
-  const currentStage = detectInterviewStage(messages)
 
   // 格式化對話歷史
   const conversationHistory = formatConversationHistory(messages)
@@ -732,10 +750,16 @@ export async function getInterviewAIResponse(
     content: formatPrompt(INTERVIEW_PROMPT_TEMPLATES.SYSTEM_PROMPT, {
       userLanguage,
       conversationHistory,
-      currentStage,
       interviewQuestions: questionsText,
       personalityQuestions: personalityQuestionsText,
-      scoringCriteria: scoringCriteriaText
+      scoringCriteria: scoringCriteriaText,
+      // 新增：系統控題用的上下文（避免模型自行發明下一題）
+      questionId: String(questionIndex ?? ''),
+      currentQuestionText: currentQuestionText || '',
+      isFollowUp: String(Boolean(isFollowUp)),
+      followUpCount: String(followUpCount ?? 0),
+      maxFollowUps: String(maxFollowUps ?? 2),
+      isLastQuestion: String(Boolean(isLastQuestion)),
     }),
   }
 
@@ -743,11 +767,13 @@ export async function getInterviewAIResponse(
   const processedMessages = [interviewSystemMessage, ...messages]
 
   // 🔍 DEBUG: 在發送前輸出完整的 prompt 到 console
-  console.log('='.repeat(80))
-  console.log('📤 Interview System Prompt:')
-  console.log('='.repeat(80))
-  console.log(interviewSystemMessage.content)
-  console.log('='.repeat(80))
+  if (DEBUG_INTERVIEW) {
+    console.log('='.repeat(80))
+    console.log('📤 Interview System Prompt:')
+    console.log('='.repeat(80))
+    console.log(interviewSystemMessage.content)
+    console.log('='.repeat(80))
+  }
 
   // APIエンドポイントを決定
   const apiEndpoint = getApiEndpoint(selectAIService)
@@ -856,7 +882,13 @@ export async function getInterviewAIResponseStream(
   interviewQuestions?: string[],
   evaluationCriteria?: any[],
   trackingId?: string,
-  preferredLanguageCode?: string
+  preferredLanguageCode?: string,
+  currentQuestionText?: string,
+  nextQuestionText?: string,
+  isFollowUp?: boolean,
+  followUpCount?: number,
+  maxFollowUps?: number,
+  isLastQuestion?: boolean
 ): Promise<ReadableStream<string>> {
   const {
     aiApiKey,
@@ -874,9 +906,6 @@ export async function getInterviewAIResponseStream(
 
   // 使用面試偏好語言（來自前端傳入的 preferredLanguageCode）
   const userLanguage = mapInterviewLanguageToLabel(preferredLanguageCode)
-
-  // 檢測當前面試階段
-  const currentStage = detectInterviewStage(messages)
 
   // 格式化對話歷史
   const conversationHistory = formatConversationHistory(messages)
@@ -950,10 +979,17 @@ export async function getInterviewAIResponseStream(
     content: formatPrompt(INTERVIEW_PROMPT_TEMPLATES.SYSTEM_PROMPT, {
       userLanguage,
       conversationHistory,
-      currentStage,
       interviewQuestions: questionsText,
       personalityQuestions: personalityQuestionsText,
-      scoringCriteria: scoringCriteriaText
+      scoringCriteria: scoringCriteriaText,
+      // 新增：系統控題用的上下文（避免模型自行發明下一題）
+      questionId: String(questionIndex ?? ''),
+      currentQuestionText: currentQuestionText || '',
+      nextQuestionText: nextQuestionText || '',
+      isFollowUp: String(Boolean(isFollowUp)),
+      followUpCount: String(followUpCount ?? 0),
+      maxFollowUps: String(maxFollowUps ?? 2),
+      isLastQuestion: String(Boolean(isLastQuestion)),
     }),
   }
 
@@ -1029,6 +1065,90 @@ export async function getInterviewAIResponseStream(
         let buffer = ''
         let fullResponse = '' // 收集完整的回應用於最終解析
         let displayBuffer = '' // 用於顯示的緩衝區（已清理標籤）
+
+        // 嘗試從資料流的 metadata 事件抓 token usage（不同 provider/SDK 可能格式不同）
+        const usageAcc = { input: 0, output: 0, total: 0, found: false }
+        const toNum = (v: any) => {
+          const n = typeof v === 'string' ? Number(v) : v
+          return Number.isFinite(n) ? Number(n) : null
+        }
+        const extractTokens = (obj: any) => {
+          const pick = (x: any) => {
+            if (!x || typeof x !== 'object') return null
+            // 先吃我們 server 直接 append 的 tokens 格式
+            if ((x as any).tokens && typeof (x as any).tokens === 'object') {
+              const t = (x as any).tokens
+              const input =
+                toNum((t as any).tokens_input) ??
+                toNum((t as any).input) ??
+                toNum((t as any).prompt_tokens) ??
+                toNum((t as any).promptTokens) ??
+                null
+              const output =
+                toNum((t as any).tokens_output) ??
+                toNum((t as any).output) ??
+                toNum((t as any).completion_tokens) ??
+                toNum((t as any).completionTokens) ??
+                null
+              const total =
+                toNum((t as any).tokens_total) ??
+                toNum((t as any).total) ??
+                toNum((t as any).total_tokens) ??
+                toNum((t as any).totalTokens) ??
+                (input != null && output != null ? input + output : null)
+              if (input == null && output == null && total == null) return null
+              return { input: input ?? 0, output: output ?? 0, total: total ?? 0 }
+            }
+
+            // 再吃 provider/SDK 常見 usage 格式
+            const u = (x as any).usage || (x as any).tokenUsage || (x as any).tokens || null
+            const ux = u && typeof u === 'object' ? u : x
+            const input =
+              toNum((ux as any).promptTokens) ??
+              toNum((ux as any).prompt_tokens) ??
+              toNum((ux as any).inputTokens) ??
+              toNum((ux as any).input_tokens) ??
+              null
+            const output =
+              toNum((ux as any).completionTokens) ??
+              toNum((ux as any).completion_tokens) ??
+              toNum((ux as any).outputTokens) ??
+              toNum((ux as any).output_tokens) ??
+              null
+            const total =
+              toNum((ux as any).totalTokens) ??
+              toNum((ux as any).total_tokens) ??
+              (input != null && output != null ? input + output : null)
+            if (input == null && output == null && total == null) return null
+            return { input: input ?? 0, output: output ?? 0, total: total ?? 0 }
+          }
+
+          // 直接命中
+          const direct = pick(obj)
+          if (direct) return direct
+
+          // StreamData 可能會包一層（例如 { type, data } / array），做淺層遞迴搜尋（深度限制避免爆）
+          const seen = new Set<any>()
+          const stack: Array<{ v: any; d: number }> = [{ v: obj, d: 0 }]
+          while (stack.length > 0) {
+            const cur = stack.pop()!
+            if (!cur || cur.d > 4) continue
+            const v = cur.v
+            if (!v || typeof v !== 'object') continue
+            if (seen.has(v)) continue
+            seen.add(v)
+
+            const hit = pick(v)
+            if (hit) return hit
+
+            if (Array.isArray(v)) {
+              for (const it of v) stack.push({ v: it, d: cur.d + 1 })
+            } else {
+              for (const vv of Object.values(v)) stack.push({ v: vv, d: cur.d + 1 })
+            }
+          }
+          return null
+        }
         
         // 標籤解析狀態
         let emotionExtracted = false
@@ -1241,7 +1361,24 @@ export async function getInterviewAIResponseStream(
                 } catch (error) {
                   console.error('Error parsing tool call JSON:', error)
                 }
-              } else if (line.startsWith('e:') || line.startsWith('d:')) {
+              } else if (line.startsWith('e:') || line.startsWith('d:') || line.startsWith('2:')) {
+                // Data stream metadata（可能包含 token usage）
+                // 注意：ai SDK 的 StreamData.append(...) 通常會以 `2:` 前綴送出
+                const content = line.substring(2).trim()
+                if (content && (content.startsWith('{') || content.startsWith('['))) {
+                  try {
+                    const decoded = JSON.parse(content)
+                    const t = extractTokens(decoded)
+                    if (t) {
+                      usageAcc.input += Math.max(0, Math.floor(t.input))
+                      usageAcc.output += Math.max(0, Math.floor(t.output))
+                      usageAcc.total += Math.max(0, Math.floor(t.total))
+                      usageAcc.found = true
+                    }
+                  } catch {
+                    // ignore
+                  }
+                }
                 continue
               } else if (line.match(/^([a-z]|\d):/)) {
                 // これらは通常、ストリームの終了やメタデータを示すものであり、コンテンツではない
@@ -1293,7 +1430,16 @@ export async function getInterviewAIResponseStream(
               type: 'metadata',
               emotion,
               scoreResult,
-              cleanResponse: displayBuffer.trim() || cleanResponse
+              cleanResponse: displayBuffer.trim() || cleanResponse,
+              ...(usageAcc.found
+                ? {
+                    tokens: {
+                      tokens_input: usageAcc.input,
+                      tokens_output: usageAcc.output,
+                      tokens_total: usageAcc.total || (usageAcc.input + usageAcc.output),
+                    },
+                  }
+                : {}),
             })
             controller.enqueue(`\n[INTERVIEW_METADATA_START]${metadata}[INTERVIEW_METADATA_END]`)
           }

@@ -1,5 +1,6 @@
-import React from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { InterviewResult, AnswerScore, ScoreLevel, getScoreLevel, SCORE_LEVEL_DESCRIPTIONS, SCORE_LEVEL_COLORS, PersonalitySummary } from '@/types/interviewScoring'
+import { supabase } from '@/lib/supabaseClient'
 
 interface Answer {
   question: {
@@ -16,6 +17,7 @@ interface InterviewResultsProps {
   answers?: Answer[]
   interviewResult?: InterviewResult
   personalitySummary?: PersonalitySummary
+  interviewId?: string
   onRestart: () => void
   onExit: () => void
 }
@@ -24,6 +26,7 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
   answers = [],
   interviewResult,
   personalitySummary,
+  interviewId,
   onRestart,
   onExit,
 }) => {
@@ -33,6 +36,154 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
   const completedAnswers = hasScoringResult ? interviewResult.answeredQuestions : answers.filter(
     (answer) => answer.answer.trim().length > 0
   ).length
+
+  // ======================
+  // Jobseeker feedback form
+  // ======================
+  const ISSUE_OPTIONS = useMemo(
+    () => [
+      { key: 'audio_mic', label: '聲音/麥克風' },
+      { key: 'latency', label: '延遲' },
+      { key: 'freeze', label: '卡住' },
+      { key: 'weird_questions', label: '題目怪' },
+      { key: 'misjudge', label: '誤判' },
+      { key: 'ui_unclear', label: 'UI 不清楚' },
+      { key: 'repeated_questions', label: '重複詢問同樣問題' },
+      { key: 'other', label: '其他' },
+    ],
+    []
+  )
+
+  const [fbLoading, setFbLoading] = useState(false)
+  const [fbSaving, setFbSaving] = useState(false)
+  const [fbError, setFbError] = useState<string | null>(null)
+  const [fbSavedAt, setFbSavedAt] = useState<string | null>(null)
+
+  const [ratings, setRatings] = useState({
+    usability: 3,
+    speed: 3,
+    accuracy: 3,
+    satisfaction: 3,
+  })
+  const [touched, setTouched] = useState({
+    usability: false,
+    speed: false,
+    accuracy: false,
+    satisfaction: false,
+  })
+  const [issueTypes, setIssueTypes] = useState<string[]>([])
+  const [issueOtherText, setIssueOtherText] = useState('')
+  const [comment, setComment] = useState('')
+
+  useEffect(() => {
+    let mounted = true
+    const loadFeedback = async () => {
+      if (!interviewId) return
+      setFbLoading(true)
+      setFbError(null)
+      try {
+        const { data: authData } = await supabase.auth.getSession()
+        const authSession = authData.session
+        if (!authSession) return
+
+        const resp = await fetch(
+          `/api/interviews/feedback/jobseeker?interview_id=${encodeURIComponent(interviewId)}`,
+          { headers: { Authorization: `Bearer ${authSession.access_token}` } }
+        )
+        if (!resp.ok) return
+        const body = await resp.json()
+        const payload = body?.feedback?.payload
+        if (!payload || typeof payload !== 'object') return
+
+        if (!mounted) return
+        const r = payload.ratings || {}
+        setRatings({
+          usability: Number(r.usability) || 3,
+          speed: Number(r.speed) || 3,
+          accuracy: Number(r.accuracy) || 3,
+          satisfaction: Number(r.satisfaction) || 3,
+        })
+        setIssueTypes(Array.isArray(payload.issue_types) ? payload.issue_types : [])
+        setIssueOtherText(typeof payload.issue_other_text === 'string' ? payload.issue_other_text : '')
+        setComment(typeof payload.comment === 'string' ? payload.comment : '')
+        setFbSavedAt(body?.feedback?.updated_at || body?.feedback?.created_at || null)
+      } catch (e: any) {
+        if (mounted) setFbError(e?.message || '載入回饋失敗')
+      } finally {
+        if (mounted) setFbLoading(false)
+      }
+    }
+    void loadFeedback()
+    return () => { mounted = false }
+  }, [interviewId])
+
+  const toggleIssueType = (key: string) => {
+    setIssueTypes((prev) => {
+      const set = new Set(prev)
+      if (set.has(key)) set.delete(key)
+      else set.add(key)
+      return Array.from(set)
+    })
+  }
+
+  const submitFeedback = async () => {
+    if (!interviewId) return
+    setFbSaving(true)
+    setFbError(null)
+    try {
+      const { data: authData } = await supabase.auth.getSession()
+      const authSession = authData.session
+      if (!authSession) throw new Error('Not authenticated')
+
+      const resp = await fetch('/api/interviews/feedback/jobseeker', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authSession.access_token}`,
+        },
+        body: JSON.stringify({
+          interview_id: interviewId,
+          ratings,
+          issue_types: issueTypes,
+          issue_other_text: issueOtherText,
+          comment,
+          touched,
+        }),
+      })
+      const body = await resp.json().catch(() => ({}))
+      if (!resp.ok) throw new Error(body?.error || '送出失敗')
+
+      setFbSavedAt(body?.feedback?.updated_at || body?.feedback?.created_at || new Date().toISOString())
+    } catch (e: any) {
+      setFbError(e?.message || '送出回饋失敗')
+    } finally {
+      setFbSaving(false)
+    }
+  }
+
+  const renderRating = (label: string, key: keyof typeof ratings) => {
+    return (
+      <div className="flex items-center justify-between gap-3 py-2">
+        <div className="text-sm text-gray-700">{label}</div>
+        <div className="flex items-center gap-2">
+          {[1, 2, 3, 4, 5].map((v) => (
+            <label key={v} className="flex items-center gap-1 text-xs text-gray-700 cursor-pointer">
+              <input
+                type="radio"
+                name={`rating-${String(key)}`}
+                checked={ratings[key] === v}
+                onChange={() => {
+                  setRatings((prev) => ({ ...prev, [key]: v }))
+                  setTouched((prev) => ({ ...prev, [key]: true }))
+                }}
+              />
+              {v}
+            </label>
+          ))}
+        </div>
+      </div>
+    )
+  }
 
   const getDifficultyColor = (difficulty: string) => {
     switch (difficulty) {
@@ -256,7 +407,7 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
 
                   {/* 評分詳情 */}
                   <div className="bg-blue-50 p-4 rounded-lg">
-                    <div className="text-sm font-medium text-blue-800 mb-3">📊 評分詳情</div>
+                    <div className="text-sm font-medium text-blue-800 mb-3">📊 評分詳情（本題 delta）</div>
                     <div className="grid grid-cols-2 gap-3 text-sm">
                       {Object.entries(scoreResult.scores).map(([key, score]) => {
                         // 嘗試查找評估項目的顯示名稱
@@ -268,28 +419,49 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
                           personalTraits: '個人特質'
                         }
                         const displayName = criteriaNames[key] || key
+                        const s = Number(score) || 0
                         
                         return (
                           <div key={key} className="flex justify-between">
                             <span>{displayName}:</span>
-                            <span className="font-medium">{score.toFixed(1)}/10</span>
+                            <span className="font-medium">{`${s > 0 ? '+' : ''}${s.toFixed(1)}`}</span>
                           </div>
                         )
                       })}
                       <div className="flex justify-between col-span-2 border-t pt-2">
-                        <span className="font-medium">總分:</span>
-                        <span className="font-bold text-blue-600">{scoreResult.totalScore.toFixed(1)}/10</span>
+                        <span className="font-medium">本題淨變化:</span>
+                        <span className="font-bold text-blue-600">
+                          {(() => {
+                            const sumDelta = Object.values(scoreResult.scores || {}).reduce((a, b) => a + (Number(b) || 0), 0)
+                            return `${sumDelta > 0 ? '+' : ''}${sumDelta.toFixed(1)}`
+                          })()}
+                        </span>
                       </div>
                     </div>
                     
                     {/* 扣分和加分原因 */}
                     {(() => {
                       const allDeductions: string[] = []
-                      Object.entries(scoreResult.deductions).forEach(([key, reasons]) => {
-                        if (Array.isArray(reasons) && reasons.length > 0) {
-                          allDeductions.push(...reasons)
-                        }
-                      })
+
+                      // 優先顯示結構化事件
+                      const items = (scoreResult as any).deductionItems
+                      if (items && typeof items === 'object') {
+                        Object.entries(items).forEach(([k, arr]) => {
+                          if (!Array.isArray(arr)) return
+                          arr.forEach((it: any) => {
+                            const p = Number(it?.points) || 0
+                            const d = String(it?.detail || '').trim()
+                            allDeductions.push(d ? `${d} (-${p}分)` : `(-${p}分)`)
+                          })
+                        })
+                      }
+
+                      // fallback：舊字串原因
+                      if (allDeductions.length === 0) {
+                        Object.entries(scoreResult.deductions || {}).forEach(([_, reasons]) => {
+                          if (Array.isArray(reasons) && reasons.length > 0) allDeductions.push(...reasons)
+                        })
+                      }
                       
                       if (allDeductions.length > 0) {
                         return (
@@ -306,11 +478,24 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
                     
                     {(() => {
                       const allAdditions: string[] = []
-                      Object.entries(scoreResult.additions).forEach(([key, reasons]) => {
-                        if (Array.isArray(reasons) && reasons.length > 0) {
-                          allAdditions.push(...reasons)
-                        }
-                      })
+
+                      const items = (scoreResult as any).additionItems
+                      if (items && typeof items === 'object') {
+                        Object.entries(items).forEach(([k, arr]) => {
+                          if (!Array.isArray(arr)) return
+                          arr.forEach((it: any) => {
+                            const p = Number(it?.points) || 0
+                            const d = String(it?.detail || '').trim()
+                            allAdditions.push(d ? `${d} (+${p}分)` : `(+${p}分)`)
+                          })
+                        })
+                      }
+
+                      if (allAdditions.length === 0) {
+                        Object.entries(scoreResult.additions || {}).forEach(([_, reasons]) => {
+                          if (Array.isArray(reasons) && reasons.length > 0) allAdditions.push(...reasons)
+                        })
+                      }
                       
                       if (allAdditions.length > 0) {
                         return (
@@ -374,6 +559,80 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
             )}
           </div>
         </div>
+
+        {/* 回饋（jobseeker） */}
+        {interviewId && (
+          <div className="mb-8 border border-gray-200 rounded-lg p-6 bg-gray-50">
+            <h2 className="text-xl font-semibold text-gray-800 mb-2">使用者回饋</h2>
+            <div className="text-sm text-gray-600 mb-4">
+              你的回饋會用於改善題目品質、評分與系統體驗。
+            </div>
+
+            {fbError && <div className="text-sm text-red-600 mb-3">{fbError}</div>}
+            {fbSavedAt && (
+              <div className="text-xs text-green-700 mb-3">
+                已提交（最後更新：{new Date(fbSavedAt).toLocaleString('zh-TW')}）
+              </div>
+            )}
+
+            <div className="grid md:grid-cols-2 gap-2">
+              {renderRating('易用性', 'usability')}
+              {renderRating('處理速度', 'speed')}
+              {renderRating('判定準確度', 'accuracy')}
+              {renderRating('滿意度', 'satisfaction')}
+            </div>
+
+            <div className="mt-4">
+              <div className="text-sm font-medium text-gray-800 mb-2">遇到的問題類型（可複選）</div>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                {ISSUE_OPTIONS.map((opt) => (
+                  <label key={opt.key} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={issueTypes.includes(opt.key)}
+                      onChange={() => toggleIssueType(opt.key)}
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+              {issueTypes.includes('other') && (
+                <div className="mt-2">
+                  <input
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    placeholder="其他（請填寫）"
+                    value={issueOtherText}
+                    onChange={(e) => setIssueOtherText(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4">
+              <div className="text-sm font-medium text-gray-800 mb-2">意見反饋（自由記述）</div>
+              <textarea
+                className="w-full min-h-[96px] px-3 py-2 border rounded-lg text-sm"
+                placeholder="例如：題目方向、評分理由、UI 操作、希望新增的功能..."
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+              />
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-3">
+              {fbLoading && <div className="text-xs text-gray-500">載入中...</div>}
+              <button
+                type="button"
+                disabled={fbSaving}
+                className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                  fbSaving ? 'bg-gray-300 text-gray-600' : 'bg-blue-600 text-white hover:bg-blue-700'
+                }`}
+                onClick={submitFeedback}
+              >
+                {fbSaving ? '送出中...' : '送出回饋'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* 總結和建議 */}
         {hasScoringResult && (

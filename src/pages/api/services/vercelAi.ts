@@ -10,7 +10,7 @@ import { createDeepSeek } from '@ai-sdk/deepseek'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { createOllama } from 'ollama-ai-provider'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
-import { streamText, generateText, CoreMessage } from 'ai'
+import { streamText, generateText, CoreMessage, StreamData } from 'ai'
 import { VercelAIService } from '@/features/constants/settings'
 
 type AIServiceConfig = Record<VercelAIService, (params: any) => any>
@@ -19,7 +19,9 @@ type AIServiceConfig = Record<VercelAIService, (params: any) => any>
  * Vercel AI SDKを使用したAIサービス設定
  */
 export const aiServiceConfig: AIServiceConfig = {
-  openai: ({ apiKey }) => createOpenAI({ apiKey }),
+  // 注意：@ai-sdk/openai 預設 compatibility='compatible'，會刻意不送 stream_options（因此串流拿不到 usage/token）
+  // 使用真正的 OpenAI API 時必須設為 strict，才會送出 stream_options.include_usage
+  openai: ({ apiKey }) => createOpenAI({ apiKey, compatibility: 'strict' }),
   //openai: ({ apiKey }) => createOpenAI({ apiKey }).responses,
   anthropic: ({ apiKey }) => createAnthropic({ apiKey }),
   google: ({ apiKey }) => createGoogleGenerativeAI({ apiKey }),
@@ -55,6 +57,7 @@ export const aiServiceConfig: AIServiceConfig = {
  * ストリーミングでテキスト生成を行う
  */
 export async function streamAiText({
+  aiService,
   model,
   modelInstance,
   messages,
@@ -63,6 +66,7 @@ export async function streamAiText({
   options = {},
   aiApiKey,
 }: {
+  aiService?: VercelAIService | string
   model: string
   modelInstance: any
   messages: Message[]
@@ -139,6 +143,11 @@ export async function streamAiText({
                       `data: ${JSON.stringify(ssePayload)}\n`
                     )
                   } else if (event.type === 'response.completed') {
+                    // 盡可能把 usage/tokens 透過 data stream metadata 傳到前端（interviewAIChat 會解析 d:）
+                    const u = (event as any)?.response?.usage || (event as any)?.usage || null
+                    if (u && typeof u === 'object') {
+                      controller.enqueue(`d:${JSON.stringify({ usage: u })}\n`)
+                    }
                     controller.enqueue('data: [DONE]\n')
                   }
                 } catch (e) {
@@ -165,14 +174,79 @@ export async function streamAiText({
       })
     } else {
       // 一般模式使用 streamText
+      const streamData = new StreamData()
+      // provider 專用參數（例如 OpenAI 的 stream_options）要放在 providerOptions 才會真的送到上游
+      const providerOptions: any = {}
+      const rawStreamOptions = options?.stream_options || options?.streamOptions
+      if (aiService === 'openai') {
+        // OpenAI Chat Completions: 要拿到 usage，必須 include_usage
+        const includeUsage =
+          (rawStreamOptions && (rawStreamOptions.include_usage ?? rawStreamOptions.includeUsage)) ?? true
+        providerOptions.openai = {
+          stream_options: {
+            ...(rawStreamOptions && typeof rawStreamOptions === 'object' ? rawStreamOptions : {}),
+            include_usage: Boolean(includeUsage),
+          },
+        }
+        // 部分 SDK 版本可能吃 camelCase，保險起見一併提供（無副作用）
+        providerOptions.openai.streamOptions = {
+          ...(rawStreamOptions && typeof rawStreamOptions === 'object' ? rawStreamOptions : {}),
+          includeUsage: Boolean(includeUsage),
+        }
+      }
+
+      // model 設定不應包含 stream_options（避免被誤當成 model settings 或被忽略造成困惑）
+      const { stream_options: _so, streamOptions: _sO, ...modelOptions } = options || {}
+      const toNum = (v: any) => {
+        const n = typeof v === 'string' ? Number(v) : v
+        return Number.isFinite(n) ? Number(n) : null
+      }
+      const normalizeUsageToTokens = (usage: any) => {
+        if (!usage || typeof usage !== 'object') return null
+        const input =
+          toNum((usage as any).promptTokens) ??
+          toNum((usage as any).prompt_tokens) ??
+          toNum((usage as any).inputTokens) ??
+          toNum((usage as any).input_tokens) ??
+          null
+        const output =
+          toNum((usage as any).completionTokens) ??
+          toNum((usage as any).completion_tokens) ??
+          toNum((usage as any).outputTokens) ??
+          toNum((usage as any).output_tokens) ??
+          null
+        const total =
+          toNum((usage as any).totalTokens) ??
+          toNum((usage as any).total_tokens) ??
+          (input != null && output != null ? input + output : null)
+        if (input == null && output == null && total == null) return null
+        return {
+          tokens_input: Math.max(0, Math.floor(input ?? 0)),
+          tokens_output: Math.max(0, Math.floor(output ?? 0)),
+          tokens_total: Math.max(0, Math.floor(total ?? ((input ?? 0) + (output ?? 0)))),
+        }
+      }
+
       const result = await streamText({
-        model: modelInstance(model, options),
+        model: modelInstance(model, modelOptions),
         messages: messages as CoreMessage[],
         temperature,
         maxTokens,
+        ...(Object.keys(providerOptions).length > 0 ? { providerOptions } : {}),
+        onFinish: ({ usage }) => {
+          // Vercel AI SDK usage 會在串流結束後才知道；這裡轉成 tokens 欄位（前端更好解析）
+          const tokens = normalizeUsageToTokens(usage)
+          if (tokens) {
+            streamData.append({ tokens })
+          } else if (usage && typeof usage === 'object') {
+            // fallback：仍送 usage，讓前端遞迴嘗試抽取
+            streamData.append({ usage })
+          }
+          streamData.close()
+        },
       })
 
-      return result.toDataStreamResponse()
+      return result.toDataStreamResponse({ data: streamData })
     }
   } catch (error: any) {
     console.error(`Vercel AI Stream Error: ${error.message || 'Unknown error'}`)

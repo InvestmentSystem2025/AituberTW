@@ -201,6 +201,32 @@ CREATE TABLE public.company (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- =========================
+-- Company: AI 生成職種問題免費額度（company 維度永久累計 5 次；不分職種）
+-- =========================
+CREATE TABLE IF NOT EXISTS public.company_ai_usage (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL UNIQUE REFERENCES public.company(id) ON DELETE CASCADE,
+  joq_used_count INT NOT NULL DEFAULT 0,
+  joq_free_quota INT NOT NULL DEFAULT 5,
+  last_used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.company_ai_usage ENABLE ROW LEVEL SECURITY;
+-- 封鎖前端直連，避免被竄改；一律走後端（service_role）/ RPC
+CREATE POLICY company_ai_usage_block_select ON public.company_ai_usage FOR SELECT TO anon, authenticated USING (false);
+CREATE POLICY company_ai_usage_block_insert ON public.company_ai_usage FOR INSERT TO anon, authenticated WITH CHECK (false);
+CREATE POLICY company_ai_usage_block_update ON public.company_ai_usage FOR UPDATE TO anon, authenticated USING (false) WITH CHECK (false);
+CREATE POLICY company_ai_usage_block_delete ON public.company_ai_usage FOR DELETE TO anon, authenticated USING (false);
+
+-- backfill：若已有 company，補齊 company_ai_usage（不覆蓋既有）
+INSERT INTO public.company_ai_usage(company_id, joq_used_count, joq_free_quota, updated_at)
+SELECT c.id, 0, 5, now()
+FROM public.company c
+ON CONFLICT (company_id) DO NOTHING;
+
 -- company_members
 CREATE TABLE public.company_members (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -317,6 +343,9 @@ CREATE TABLE public.interview_sessions (
   interviews_id UUID NOT NULL REFERENCES public.interviews(id) ON DELETE CASCADE,
   interview_transcript JSONB,
   ai_evaluations JSONB,
+  tokens_input INT,
+  tokens_output INT,
+  already_feedback BOOLEAN NOT NULL DEFAULT false,
   duration_seconds INTEGER NOT NULL CHECK (duration_seconds >= 0),
   video_path TEXT,
   interview_result public.interview_result_type,
@@ -329,6 +358,65 @@ CREATE TABLE public.interview_sessions (
     total_score IS NULL OR (total_score >= 0 AND total_score <= 100)
   )
 );
+
+-- interview_session_feedback（jobseeker/recruiter 的回饋：支持多人 HR、同一提交者 latest-wins）
+CREATE TABLE public.interview_session_feedback (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES public.company(id) ON DELETE CASCADE,
+  interview_session_id UUID NOT NULL REFERENCES public.interview_sessions(id) ON DELETE CASCADE,
+  interviews_id UUID NOT NULL REFERENCES public.interviews(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('jobseeker', 'recruiter')),
+  submitted_by_profile_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (interview_session_id, kind, submitted_by_profile_id)
+);
+
+CREATE INDEX idx_interview_feedback_company_kind_updated_at
+  ON public.interview_session_feedback (company_id, kind, updated_at DESC);
+CREATE INDEX idx_interview_feedback_interviews_id
+  ON public.interview_session_feedback (interviews_id);
+CREATE INDEX idx_interview_feedback_session_id
+  ON public.interview_session_feedback (interview_session_id);
+
+-- updated_at 自動更新
+CREATE OR REPLACE FUNCTION public.fn_set_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$;
+
+-- company 新建時自動初始化 company_ai_usage（避免表看起來是空的）
+CREATE OR REPLACE FUNCTION public.fn_init_company_ai_usage()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+BEGIN
+  INSERT INTO public.company_ai_usage(company_id, joq_used_count, joq_free_quota, updated_at)
+  VALUES (NEW.id, 0, 5, now())
+  ON CONFLICT (company_id) DO NOTHING;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_company_init_ai_usage ON public.company;
+CREATE TRIGGER trg_company_init_ai_usage
+AFTER INSERT ON public.company
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_init_company_ai_usage();
+
+DROP TRIGGER IF EXISTS trg_interview_feedback_set_updated_at ON public.interview_session_feedback;
+CREATE TRIGGER trg_interview_feedback_set_updated_at
+BEFORE UPDATE ON public.interview_session_feedback
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_set_updated_at();
 
 -- Functions & Triggers
 
@@ -419,6 +507,7 @@ ALTER TABLE public.question_bank         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.job_opening_questions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.interviews            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.interview_sessions    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.interview_session_feedback ENABLE ROW LEVEL SECURITY;
 
 -- 権限付与（RLS 下での操作を有効化）。列レベル制御は行わず、ポリシーで制限。
 GRANT SELECT, INSERT, UPDATE ON public.profiles TO authenticated;
@@ -435,6 +524,7 @@ GRANT SELECT ON public.interview_sessions TO authenticated; -- video_path は参
 -- MFA/Quota テーブルはクライアント直アクセスをブロックし、後端（service_role）経由のみ運用
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.totp_enrollments TO service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.job_seeker_usage TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.company_ai_usage TO service_role;
 
 -- ============
 -- profiles
@@ -1221,6 +1311,8 @@ BEGIN
     INSERT INTO public.interview_sessions(company_id, interviews_id, duration_seconds, created_at)
     VALUES (v_interview.company_id, p_interviews_id, 0, now())
     RETURNING * INTO v_existing_session;
+    -- 只有在「新建成功」時才扣點
+    v_did_increment := true;
   EXCEPTION
     WHEN unique_violation THEN
       -- 另一個並行請求已建立 session；視為可重入，且不應重複扣點
@@ -1256,6 +1348,65 @@ $$;
 -- 確保函數擁有者（通常是 postgres）有足夠權限（SECURITY DEFINER）
 ALTER FUNCTION public.start_interview_session(uuid, uuid) OWNER TO postgres;
 GRANT EXECUTE ON FUNCTION public.start_interview_session(uuid, uuid) TO service_role;
+
+-- =========================
+-- Company: consume AI 生成職種問題免費額度（company 維度、永久累計）
+-- =========================
+CREATE OR REPLACE FUNCTION public.consume_company_joq_quota(p_company_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_usage public.company_ai_usage%ROWTYPE;
+BEGIN
+  IF p_company_id IS NULL THEN
+    RAISE EXCEPTION 'INVALID_ARGS';
+  END IF;
+
+  -- 若不存在先補建（company_id 有 FK，無效 company 會在此拋錯）
+  INSERT INTO public.company_ai_usage(company_id, joq_used_count, joq_free_quota, updated_at)
+  VALUES (p_company_id, 0, 5, now())
+  ON CONFLICT (company_id) DO NOTHING;
+
+  -- row lock，避免競態下重複扣點
+  SELECT * INTO v_usage
+  FROM public.company_ai_usage
+  WHERE company_id = p_company_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'USAGE_NOT_FOUND';
+  END IF;
+
+  IF v_usage.joq_used_count >= v_usage.joq_free_quota THEN
+    RAISE EXCEPTION 'AI_JOQ_QUOTA_EXCEEDED';
+  END IF;
+
+  UPDATE public.company_ai_usage
+  SET joq_used_count = joq_used_count + 1,
+      last_used_at = now(),
+      updated_at = now()
+  WHERE company_id = p_company_id;
+
+  SELECT * INTO v_usage
+  FROM public.company_ai_usage
+  WHERE company_id = p_company_id
+  LIMIT 1;
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'company_id', v_usage.company_id,
+    'used_count', v_usage.joq_used_count,
+    'free_quota', v_usage.joq_free_quota,
+    'remaining', GREATEST(0, v_usage.joq_free_quota - v_usage.joq_used_count)
+  );
+END;
+$$;
+
+ALTER FUNCTION public.consume_company_joq_quota(uuid) OWNER TO postgres;
+GRANT EXECUTE ON FUNCTION public.consume_company_joq_quota(uuid) TO service_role;
 
 -- =========================
 -- ToS（サインアップ前同意）テーブル

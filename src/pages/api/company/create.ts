@@ -27,6 +27,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .single()
   if (cErr || !company) return res.status(400).json({ error: 'COMPANY_CREATE_FAILED' })
 
+  // 初始化 company 的 AI 生成問題免費額度（company 維度、永久累計；idempotent）
+  // 讓後台一建立公司就可看到對應 usage row，也避免第一次使用才補建造成「看起來是空的」。
+  try {
+    await supa
+      .from('company_ai_usage')
+      .upsert(
+        {
+          company_id: company.id,
+          joq_used_count: 0,
+          joq_free_quota: 5,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'company_id' }
+      )
+  } catch {
+    // 不阻擋公司建立；扣點時 RPC 也會補建
+  }
+
   // 自動把本人加入 company_members 並設 admin
   const { error: mErr } = await supa
     .from('company_members')

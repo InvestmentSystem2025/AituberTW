@@ -59,7 +59,38 @@ export default function CompanyAdminPage() {
   const [reviewingIV, setReviewingIV] = useState<string | null>(null)
   const [reviewingLoading, setReviewingLoading] = useState(false)
   const [criteriaDisplayNames, setCriteriaDisplayNames] = useState<Record<string, Record<string, string>>>({})
+  const [criteriaListByJobOpeningId, setCriteriaListByJobOpeningId] = useState<
+    Record<string, Array<{ key: string; display_name: string; sort_order?: number }>>
+  >({})
   const criteriaLoadingRef = useRef<Set<string>>(new Set())
+
+  // recruiter feedback (per interview)
+  const [recruiterFeedbackByInterviewId, setRecruiterFeedbackByInterviewId] = useState<Record<string, any>>({})
+  const [alreadyFeedbackByInterviewId, setAlreadyFeedbackByInterviewId] = useState<Record<string, boolean>>({})
+  const [recruiterDraftByInterviewId, setRecruiterDraftByInterviewId] = useState<
+    Record<
+      string,
+      {
+        criteria_bias: Record<string, number>
+        overall_decision_bias: number
+        explainability: number
+        reason_flags?: string[]
+        other_detail?: string
+        comment: string
+      }
+    >
+  >({})
+  const [recruiterDraftDirtyByInterviewId, setRecruiterDraftDirtyByInterviewId] = useState<Record<string, boolean>>({})
+  const [recruiterDraftPromptedByInterviewId, setRecruiterDraftPromptedByInterviewId] = useState<Record<string, boolean>>({})
+  const [recruiterFeedbackNudge, setRecruiterFeedbackNudge] = useState<{ open: boolean; interviewId: string | null }>({
+    open: false,
+    interviewId: null,
+  })
+  const afterNudgeActionRef = useRef<null | (() => void)>(null)
+  const [recruiterFeedbackStatusByInterviewId, setRecruiterFeedbackStatusByInterviewId] = useState<
+    Record<string, { loading?: boolean; saving?: boolean; error?: string | null; savedAt?: string | null }>
+  >({})
+  const recruiterFeedbackLoadingRef = useRef<Set<string>>(new Set())
 
   // evaluation policy form state
   const criteriaNames: Record<string, string> = {
@@ -81,13 +112,12 @@ export default function CompanyAdminPage() {
       active_criteria: [] as string[]
     },
     customCriteria: [
-      { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '答非所問-2分\n回答不完整-1分', addition_rules: '' },
-      { key: 'logical_clarity', display_name: '邏輯清晰度', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '條理不清-2分\n邏輯錯誤-1分', addition_rules: '' },
-      // 專業深度：預設改為綜合制（composite）
-      { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '專業知識明顯錯誤-2分\n無法舉出實務案例-1分\n只背誦定義缺乏深入思考-1分', addition_rules: '正確回答專業問題+2.5分\n展現深度理解+1分' },
-      { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '表達不清晰-1分\n表達不流暢-1分', addition_rules: '' },
-      // 個人特質：預設改為綜合制（composite）
-      { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '缺乏企圖心與主動性-2分\n對學習成長明顯消極-1分\n團隊合作態度不佳-2分\n抗壓與面對挫折態度消極-1分', addition_rules: '向上心求知慾+2.5分\n持續學習+2.5分\n活潑外向+2.5分\n堅強抗壓+2.5分' }
+      // 預設五項：統一改為綜合制（composite），避免扣分制一路扣到 0 分
+      { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '答非所問-1.5分\n回答不完整或缺少關鍵資訊-1分', addition_rules: '切題且至少回答問題核心+0.5分\n提供具體例子/步驟/數據+1分' },
+      { key: 'logical_clarity', display_name: '邏輯清晰度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '條理不清-1分\n自相矛盾或邏輯錯誤-1.5分', addition_rules: '回答有結構（先結論後理由）+1分\n前後一致、因果清楚+1.5分' },
+      { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '專業知識明顯錯誤-1.5分\n無法舉出實務案例或只背誦定義-1分', addition_rules: '使用正確基本概念/術語+0.5分\n能解釋trade-off或提出實務案例+2分\n展現深度理解（拆解原因/限制）+1分' },
+      { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '表達不清晰-1分\n表達不流暢或跳躍導致難以理解-1分', addition_rules: '表達清楚、重點明確+0.5分\n主動釐清前提/確認需求/條列化表達+1分' },
+      { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '缺乏企圖心與主動性-1.5分\n對學習成長明顯消極-1分\n團隊合作態度不佳或推責-1.5分\n抗壓與面對挫折態度消極-1分', addition_rules: '展現正常職場合作/學習態度+0.5分\n向上心求知慾（具體例子）+1.5分\n持續學習（具體做法）+1.5分\n抗壓與面對挫折成熟+1.5分\n主動性/負責任態度+1.5分' }
     ] as Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction' | 'composite'; addition_rules: string; deduction_rules: string }>
   })
   const [editJob, setEditJob] = useState({ 
@@ -279,7 +309,17 @@ export default function CompanyAdminPage() {
   }
   const loadIVs = async (t: string) => {
     const r = await fetch(`/api/interviews/list?company_id=${companyId}`, { headers: headers(t) })
-    const j = await r.json(); setIvs(j.items || [])
+    const j = await r.json()
+    const items = j.items || []
+    setIvs(items)
+    // 從 session 帶回的 already_feedback 建立快取（避免已提交的面試還跳提醒）
+    const map: Record<string, boolean> = {}
+    ;(Array.isArray(items) ? items : []).forEach((iv: any) => {
+      const rawSession = iv?.interview_sessions
+      const s = Array.isArray(rawSession) ? rawSession[0] : rawSession
+      map[String(iv?.id || '')] = !!s?.already_feedback
+    })
+    setAlreadyFeedbackByInterviewId(map)
   }
 
   // actions (minimal creates)
@@ -430,13 +470,11 @@ export default function CompanyAdminPage() {
         active_criteria: []
       },
       customCriteria: [
-        { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '答非所問-2分\n回答不完整-1分', addition_rules: '' },
-        { key: 'logical_clarity', display_name: '邏輯清晰度', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '條理不清-2分\n邏輯錯誤-1分', addition_rules: '' },
-        // 專業深度：預設改為綜合制（composite）
-        { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '專業知識明顯錯誤-2分\n無法舉出實務案例-1分\n只背誦定義缺乏深入思考-1分', addition_rules: '正確回答專業問題+2.5分\n展現深度理解+1分' },
-        { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '表達不清晰-1分\n表達不流暢-1分', addition_rules: '' },
-        // 個人特質：預設改為綜合制（composite）
-        { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '缺乏企圖心與主動性-2分\n對學習成長明顯消極-1分\n團隊合作態度不佳-2分\n抗壓與面對挫折態度消極-1分', addition_rules: '向上心求知慾+2.5分\n持續學習+2.5分\n活潑外向+2.5分\n堅強抗壓+2.5分' }
+        { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '答非所問-1.5分\n回答不完整或缺少關鍵資訊-1分', addition_rules: '切題且至少回答問題核心+0.5分\n提供具體例子/步驟/數據+1分' },
+        { key: 'logical_clarity', display_name: '邏輯清晰度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '條理不清-1分\n自相矛盾或邏輯錯誤-1.5分', addition_rules: '回答有結構（先結論後理由）+0.5分\n前後一致、因果清楚+1分' },
+        { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '專業知識明顯錯誤-1.5分\n無法舉出實務案例或只背誦定義-1分', addition_rules: '使用正確基本概念/術語+0.5分\n能解釋trade-off或提出實務案例+2分\n展現深度理解（拆解原因/限制）+1分' },
+        { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '表達不清晰-1分\n表達不流暢或跳躍導致難以理解-1分', addition_rules: '表達清楚、重點明確+0.5分\n主動釐清前提/確認需求/條列化表達+1分' },
+        { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '缺乏企圖心與主動性-1.5分\n對學習成長明顯消極-1分\n團隊合作態度不佳或推責-1.5分\n抗壓與面對挫折態度消極-1分', addition_rules: '展現正常職場合作/學習態度+0.5分\n向上心求知慾（具體例子）+1.5分\n持續學習（具體做法）+1.5分\n抗壓與面對挫折成熟+1.5分\n主動性/負責任態度+1.5分' }
       ]
     })
     await loadJobs(token)
@@ -616,15 +654,16 @@ ${criteriaText}
         maxTokens: ss.maxTokens,
       }
 
-      const aiRes = await fetch('/api/ai/vercel', {
+      const aiRes = await fetch('/api/ai/generate-joq-questions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestData),
+        headers: headers(token, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ ...requestData, company_id: companyId }),
       })
 
       if (!aiRes.ok) {
-        console.error('AI 生成問題失敗', await aiRes.text())
-        alert('AI 生成問題失敗，請稍後再試')
+        const err = await aiRes.json().catch(() => ({} as any))
+        console.error('AI 生成問題失敗', err)
+        alert(err?.message || 'AI 生成問題失敗，請稍後再試')
         return
       }
 
@@ -1172,20 +1211,209 @@ ${criteriaText}
       const j = await r.json()
       const items = Array.isArray(j) ? j : (j.items || [])
       const map: Record<string, string> = {}
+      const list: Array<{ key: string; display_name: string; sort_order?: number }> = []
       items.forEach((c: any) => {
         if (c && c.key && c.display_name) {
           map[c.key] = c.display_name
+          list.push({ key: c.key, display_name: c.display_name, sort_order: c.sort_order })
         }
       })
       setCriteriaDisplayNames(prev => ({
         ...prev,
         [jobOpeningId]: map
       }))
+      setCriteriaListByJobOpeningId(prev => ({
+        ...prev,
+        [jobOpeningId]: list.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+      }))
     } catch (error) {
       console.error('載入 evaluation_criteria 失敗:', error)
     } finally {
       criteriaLoadingRef.current.delete(jobOpeningId)
     }
+  }
+
+  const ensureMyRecruiterFeedback = async (interviewId: string) => {
+    if (!interviewId || recruiterFeedbackByInterviewId[interviewId] || recruiterFeedbackLoadingRef.current.has(interviewId)) return
+    recruiterFeedbackLoadingRef.current.add(interviewId)
+    setRecruiterFeedbackStatusByInterviewId(prev => ({
+      ...prev,
+      [interviewId]: { ...(prev[interviewId] || {}), loading: true, error: null }
+    }))
+    try {
+      const r = await fetch(
+        `/api/interviews/feedback/recruiter?interview_id=${encodeURIComponent(interviewId)}`,
+        { headers: headers() }
+      )
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '')
+        throw new Error(txt || `HTTP ${r.status}`)
+      }
+      const j = await r.json()
+      setRecruiterFeedbackByInterviewId(prev => ({ ...prev, [interviewId]: j.feedback || null }))
+      // 從 API 端回傳同步 already_feedback（方便不 reload 時也能立刻抑制提醒）
+      if (typeof j?.already_feedback === 'boolean') {
+        setAlreadyFeedbackByInterviewId(prev => ({ ...prev, [interviewId]: j.already_feedback }))
+      }
+
+      // 如果尚未有 draft，優先用已提交內容初始化
+      if (!recruiterDraftByInterviewId[interviewId]) {
+        const p = j?.feedback?.payload
+        if (p && typeof p === 'object') {
+          setRecruiterDraftByInterviewId(prev => ({
+            ...prev,
+            [interviewId]: {
+              criteria_bias: (p.criteria_bias && typeof p.criteria_bias === 'object') ? p.criteria_bias : {},
+              overall_decision_bias: Number(p.overall_decision_bias) || 0,
+              explainability: Number(p.explainability) || 3,
+              reason_flags: Array.isArray(p.reason_flags) ? p.reason_flags : [],
+              other_detail: typeof p.other_detail === 'string' ? p.other_detail : '',
+              comment: typeof p.comment === 'string' ? p.comment : '',
+            }
+          }))
+          // 初始化後視為未修改
+          setRecruiterDraftDirtyByInterviewId(prev => ({ ...prev, [interviewId]: false }))
+        }
+      }
+
+      setRecruiterFeedbackStatusByInterviewId(prev => ({
+        ...prev,
+        [interviewId]: {
+          ...(prev[interviewId] || {}),
+          savedAt: j?.feedback?.updated_at || j?.feedback?.created_at || null,
+        }
+      }))
+    } catch (e: any) {
+      setRecruiterFeedbackStatusByInterviewId(prev => ({
+        ...prev,
+        [interviewId]: { ...(prev[interviewId] || {}), error: e?.message || '載入回饋失敗' }
+      }))
+    } finally {
+      recruiterFeedbackLoadingRef.current.delete(interviewId)
+      setRecruiterFeedbackStatusByInterviewId(prev => ({
+        ...prev,
+        [interviewId]: { ...(prev[interviewId] || {}), loading: false }
+      }))
+    }
+  }
+
+  const submitRecruiterFeedback = async (interviewId: string) => {
+    const draft = recruiterDraftByInterviewId[interviewId]
+    if (!draft) return
+    setRecruiterFeedbackStatusByInterviewId(prev => ({
+      ...prev,
+      [interviewId]: { ...(prev[interviewId] || {}), saving: true, error: null }
+    }))
+    try {
+      const r = await fetch('/api/interviews/feedback/recruiter', {
+        method: 'POST',
+        headers: headers(undefined, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          interview_id: interviewId,
+          criteria_bias: draft.criteria_bias,
+          overall_decision_bias: draft.overall_decision_bias,
+          explainability: draft.explainability,
+          reason_flags: draft.reason_flags || [],
+          other_detail: draft.other_detail || '',
+          comment: draft.comment,
+        }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      setRecruiterFeedbackByInterviewId(prev => ({ ...prev, [interviewId]: j.feedback || null }))
+      setRecruiterFeedbackStatusByInterviewId(prev => ({
+        ...prev,
+        [interviewId]: {
+          ...(prev[interviewId] || {}),
+          savedAt: j?.feedback?.updated_at || j?.feedback?.created_at || new Date().toISOString(),
+        }
+      }))
+      // 送出成功：清掉 dirty，並允許下次再改時再次提示一次
+      setRecruiterDraftDirtyByInterviewId(prev => ({ ...prev, [interviewId]: false }))
+      setRecruiterDraftPromptedByInterviewId(prev => ({ ...prev, [interviewId]: false }))
+      // 一旦送出，該面試不再提醒（依使用者需求）
+      setAlreadyFeedbackByInterviewId(prev => ({ ...prev, [interviewId]: true }))
+      setRecruiterFeedbackNudge({ open: false, interviewId: null })
+    } catch (e: any) {
+      setRecruiterFeedbackStatusByInterviewId(prev => ({
+        ...prev,
+        [interviewId]: { ...(prev[interviewId] || {}), error: e?.message || '送出失敗' }
+      }))
+    } finally {
+      setRecruiterFeedbackStatusByInterviewId(prev => ({
+        ...prev,
+        [interviewId]: { ...(prev[interviewId] || {}), saving: false }
+      }))
+    }
+  }
+
+  const maybePromptRecruiterFeedbackOnce = (interviewId: string) => {
+    if (!interviewId) return
+    const status = recruiterFeedbackStatusByInterviewId[interviewId] || {}
+    if (status.saving) return
+    const dirty = !!recruiterDraftDirtyByInterviewId[interviewId]
+    if (!dirty) return
+    // 已送出過回饋就不提醒
+    if (alreadyFeedbackByInterviewId[interviewId]) return
+
+    let already = !!recruiterDraftPromptedByInterviewId[interviewId]
+    if (already) return
+
+    // 輕提示一次（不追殺）
+    setRecruiterFeedbackNudge({ open: true, interviewId })
+    setRecruiterDraftPromptedByInterviewId(prev => ({ ...prev, [interviewId]: true }))
+  }
+
+  // 「未填回饋提醒」：不在展開瞬間跳，改成離開/切換時才提醒一次（避免擋住使用者）
+  const maybeNudgeRecruiterFeedbackBeforeLeave = (
+    interviewId: string | null | undefined,
+    afterAction?: () => void
+  ): boolean => {
+    const id = String(interviewId || '')
+    if (!id) return false
+    if (alreadyFeedbackByInterviewId[id]) return false
+    if (recruiterDraftPromptedByInterviewId[id]) return false
+    setRecruiterFeedbackNudge({ open: true, interviewId: id })
+    setRecruiterDraftPromptedByInterviewId(prev => ({ ...prev, [id]: true }))
+    afterNudgeActionRef.current = afterAction || null
+    return true
+  }
+
+  const closeNudgeAndProceed = () => {
+    setRecruiterFeedbackNudge({ open: false, interviewId: null })
+    const fn = afterNudgeActionRef.current
+    afterNudgeActionRef.current = null
+    try { fn?.() } catch { /* ignore */ }
+  }
+
+  // 攔截 Next.js 換頁（上一頁/下一頁、導頁），在離開前提醒一次
+  useEffect(() => {
+    const onRouteChangeStart = (url: string) => {
+      const id = expandedIV
+      if (!id) return
+      const didNudge = maybeNudgeRecruiterFeedbackBeforeLeave(id, () => {
+        try { void router.push(url) } catch { /* ignore */ }
+      })
+      if (didNudge) {
+        router.events.emit('routeChangeError')
+        // eslint-disable-next-line no-throw-literal
+        throw 'Route change aborted by recruiter feedback nudge'
+      }
+    }
+    router.events.on('routeChangeStart', onRouteChangeStart)
+    return () => {
+      router.events.off('routeChangeStart', onRouteChangeStart)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedIV, alreadyFeedbackByInterviewId, recruiterDraftPromptedByInterviewId])
+
+  const requestTabChange = (nextTab: typeof tab) => {
+    if (nextTab === tab) return
+    if (expandedIV) {
+      const didNudge = maybeNudgeRecruiterFeedbackBeforeLeave(expandedIV, () => setTab(nextTab))
+      if (didNudge) return
+    }
+    setTab(nextTab)
   }
 
   const formatInterviewStatus = (status?: Interview['status']) => {
@@ -1230,11 +1458,92 @@ ${criteriaText}
   }
 
   const tabBtn = (k: typeof tab, label: string) => (
-    <button onClick={() => setTab(k)} style={{ padding: '8px 12px', borderBottom: tab === k ? '2px solid #111' : '2px solid transparent' }}>{label}</button>
+    <button onClick={() => requestTabChange(k)} style={{ padding: '8px 12px', borderBottom: tab === k ? '2px solid #111' : '2px solid transparent' }}>{label}</button>
   )
 
   return (
     <div style={{ maxWidth: 1100, margin: '36px auto', padding: 24 }}>
+      {recruiterFeedbackNudge.open && recruiterFeedbackNudge.interviewId && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={closeNudgeAndProceed}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+            zIndex: 9999,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(560px, 96vw)',
+              background: '#fff',
+              borderRadius: 12,
+              boxShadow: '0 18px 60px rgba(0,0,0,0.25)',
+              border: '1px solid rgba(0,0,0,0.08)',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ padding: '16px 18px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontWeight: 800, fontSize: '1.05em' }}>使用者反饋</div>
+              <button
+                onClick={closeNudgeAndProceed}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  fontSize: 18,
+                  cursor: 'pointer',
+                  padding: 6,
+                  lineHeight: 1,
+                  color: '#555',
+                }}
+                aria-label="關閉"
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ padding: 18, color: '#222', lineHeight: 1.6 }}>
+              為了提供更好的服務，希望能讓我們聆聽您寶貴的意見，填寫使用者反饋。
+              <div style={{ marginTop: 10, fontSize: '0.9em', color: '#666' }}>
+                提醒：反饋表單就在此面試詳情下方的「使用者反饋」區塊。
+              </div>
+            </div>
+            <div style={{ padding: 18, borderTop: '1px solid #eee', display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button
+                onClick={closeNudgeAndProceed}
+                style={{
+                  padding: '8px 12px',
+                  background: '#f3f4f6',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                }}
+              >
+                稍後
+              </button>
+              <button
+                onClick={closeNudgeAndProceed}
+                style={{
+                  padding: '8px 12px',
+                  background: '#1976D2',
+                  color: 'white',
+                  border: '1px solid #1976D2',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                }}
+              >
+                我知道了
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {companyName && (
         <h1 style={{ textAlign: 'center', fontSize: '2em', fontWeight: 'bold', marginBottom: 24 }}>
           {companyName}
@@ -1836,11 +2145,11 @@ ${criteriaText}
                                 ...editJob, 
                                 enableCustomCriteria: true,
                                 customCriteria: [
-                                  { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '答非所問-2分\n回答不完整-1分', addition_rules: '' },
-                                  { key: 'logical_clarity', display_name: '邏輯清晰度', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '條理不清-2分\n邏輯錯誤-1分', addition_rules: '' },
-                                  { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'addition' as const, deduction_rules: '', addition_rules: '正確回答專業問題+2.5分\n展現深度理解+1分' },
-                                  { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'deduction' as const, deduction_rules: '表達不清晰-1分\n表達不流暢-1分', addition_rules: '' },
-                                  { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'addition' as const, deduction_rules: '', addition_rules: '向上心求知慾+2.5分\n持續學習+2.5分\n活潑外向+2.5分\n堅強抗壓+2.5分' }
+                                  { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '答非所問-1.5分\n回答不完整或缺少關鍵資訊-1分', addition_rules: '切題且至少回答問題核心+0.5分\n提供具體例子/步驟/數據+1分' },
+                                  { key: 'logical_clarity', display_name: '邏輯清晰度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '條理不清-1分\n自相矛盾或邏輯錯誤-1.5分', addition_rules: '回答有結構（先結論後理由）+0.5分\n前後一致、因果清楚+1分' },
+                                  { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '專業知識明顯錯誤-1.5分\n無法舉出實務案例或只背誦定義-1分', addition_rules: '使用正確基本概念/術語+0.5分\n能解釋trade-off或提出實務案例+2分\n展現深度理解（拆解原因/限制）+1分' },
+                                  { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '表達不清晰-1分\n表達不流暢或跳躍導致難以理解-1分', addition_rules: '表達清楚、重點明確+0.5分\n主動釐清前提/確認需求/條列化表達+1分' },
+                                  { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '缺乏企圖心與主動性-1.5分\n對學習成長明顯消極-1分\n團隊合作態度不佳或推責-1.5分\n抗壓與面對挫折態度消極-1分', addition_rules: '展現正常職場合作/學習態度+0.5分\n向上心求知慾（具體例子）+1.5分\n持續學習（具體做法）+1.5分\n抗壓與面對挫折成熟+1.5分\n主動性/負責任態度+1.5分' }
                                 ]
                               })
                             } else {
@@ -2657,12 +2966,25 @@ ${criteriaText}
                                 <button
                                   onClick={() => {
                                     if (expandedIV === iv.id) {
+                                      // 收合前：若尚未提交過回饋，提醒一次（非展開當下跳）
+                                      const didNudge = maybeNudgeRecruiterFeedbackBeforeLeave(iv.id, () => {
+                                        setExpandedIV(null)
+                                        setRecruiterFeedbackNudge({ open: false, interviewId: null })
+                                      })
+                                      if (didNudge) return
                                       setExpandedIV(null)
+                                      setRecruiterFeedbackNudge({ open: false, interviewId: null })
                                     } else {
+                                      // 切換到另一筆前：若尚未提交過回饋，提醒一次（再切換）
+                                      if (expandedIV) {
+                                        const didNudge = maybeNudgeRecruiterFeedbackBeforeLeave(expandedIV, () => setExpandedIV(iv.id))
+                                        if (didNudge) return
+                                      }
                                       setExpandedIV(iv.id)
                                       if (!criteriaDisplayNames[iv.job_opening_id]) {
                                         void ensureCriteriaDisplayNames(iv.job_opening_id)
                                       }
+                                      void ensureMyRecruiterFeedback(iv.id)
                                     }
                                   }}
                                   style={{ padding: '6px 12px', background: '#607D8B', color: 'white' }}
@@ -2756,6 +3078,20 @@ ${criteriaText}
                                     <div>
                                       <strong>面試時長：</strong>
                                       {formatDurationSeconds(session.duration_seconds)}
+                                    </div>
+                                    <div>
+                                      <strong>Token 使用量：</strong>
+                                      {(() => {
+                                        const ti = Number((session as any)?.tokens_input)
+                                        const to = Number((session as any)?.tokens_output)
+                                        const hasAny =
+                                          Number.isFinite(ti) || Number.isFinite(to)
+                                        if (!hasAny) return '—'
+                                        const inTok = Number.isFinite(ti) ? Math.max(0, Math.floor(ti)) : 0
+                                        const outTok = Number.isFinite(to) ? Math.max(0, Math.floor(to)) : 0
+                                        const total = inTok + outTok
+                                        return `輸入 ${inTok} / 輸出 ${outTok} / 總計 ${total}`
+                                      })()}
                                     </div>
                                     <div>
                                       <strong>錄影路徑：</strong>
@@ -2899,6 +3235,214 @@ ${criteriaText}
                                       ) : (
                                         <span>尚無面試對話紀錄</span>
                                       )}
+                                    </div>
+                                    <div>
+                                      <strong>使用者反饋：</strong>
+                                      {(() => {
+                                        const draft =
+                                          recruiterDraftByInterviewId[iv.id] || {
+                                            criteria_bias: {},
+                                            overall_decision_bias: 0,
+                                            explainability: 3,
+                                            reason_flags: [],
+                                            other_detail: '',
+                                            comment: '',
+                                          }
+                                        const status = recruiterFeedbackStatusByInterviewId[iv.id] || {}
+                                        const criteriaItems =
+                                          criteriaListByJobOpeningId[iv.job_opening_id] ||
+                                          (Array.isArray(session.ai_evaluations)
+                                            ? session.ai_evaluations.map((e: any) => ({
+                                                key: e?.key,
+                                                display_name:
+                                                  criteriaDisplayNames[iv.job_opening_id]?.[e?.key] ||
+                                                  criteriaNames[e?.key] ||
+                                                  e?.key,
+                                              }))
+                                            : [])
+
+                                        const biasOptions: Array<{ label: string; value: number }> = [
+                                          { label: '過大評價', value: 2 },
+                                          { label: '稍許過大評價', value: 1 },
+                                          { label: '正確', value: 0 },
+                                          { label: '稍許過小評價', value: -1 },
+                                          { label: '過小評價', value: -2 },
+                                        ]
+                                        const reasonOptions: Array<{ key: string; label: string }> = [
+                                          { key: 'insufficient_evidence', label: '證據不足 / 解釋不清' },
+                                          { key: 'logic_issue', label: '邏輯或前後一致性問題' },
+                                          { key: 'risk_missed', label: '忽略風險 / 紅旗' },
+                                          { key: 'followup_inappropriate', label: '追問不適切 / 過度追問' },
+                                          { key: 'other', label: '其他' },
+                                        ]
+
+                                        const setDraft = (next: typeof draft) => {
+                                          setRecruiterDraftByInterviewId((prev) => ({ ...prev, [iv.id]: next }))
+                                          setRecruiterDraftDirtyByInterviewId((prev) => ({ ...prev, [iv.id]: true }))
+                                        }
+
+                                        return (
+                                          <div style={{ marginTop: 6, padding: 10, border: '1px solid #e0e0e0', borderRadius: 6, background: '#fafafa' }}>
+                                            {status.error && (
+                                              <div style={{ color: '#d32f2f', fontSize: '0.9em', marginBottom: 6 }}>
+                                                {status.error}
+                                              </div>
+                                            )}
+                                            {status.savedAt && (
+                                              <div style={{ color: '#2e7d32', fontSize: '0.85em', marginBottom: 6 }}>
+                                                已提交（最後更新：{new Date(status.savedAt).toLocaleString('zh-TW')}）
+                                              </div>
+                                            )}
+
+                                            <div style={{ display: 'grid', gap: 10 }}>
+                                              <div>
+                                                <div style={{ fontWeight: 'bold', marginBottom: 6 }}>各項目準確度</div>
+                                                <div style={{ display: 'grid', gap: 8 }}>
+                                                  {(criteriaItems || []).map((c: any) => {
+                                                    const key = String(c?.key || '')
+                                                    if (!key) return null
+                                                    const name =
+                                                      c?.display_name ||
+                                                      criteriaDisplayNames[iv.job_opening_id]?.[key] ||
+                                                      criteriaNames[key] ||
+                                                      key
+                                                    const current = Number((draft.criteria_bias || {})[key] ?? 0)
+                                                    return (
+                                                      <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                                        <div style={{ minWidth: 140 }}>{name}</div>
+                                                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                                                          {biasOptions.map((opt) => (
+                                                            <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.9em' }}>
+                                                              <input
+                                                                type="radio"
+                                                                name={`bias-${iv.id}-${key}`}
+                                                                checked={current === opt.value}
+                                                                onChange={() =>
+                                                                  setDraft({
+                                                                    ...draft,
+                                                                    criteria_bias: { ...(draft.criteria_bias || {}), [key]: opt.value },
+                                                                  })
+                                                                }
+                                                              />
+                                                              {opt.label}
+                                                            </label>
+                                                          ))}
+                                                        </div>
+                                                      </div>
+                                                    )
+                                                  })}
+                                                  {(!criteriaItems || criteriaItems.length === 0) && (
+                                                    <div style={{ fontSize: '0.9em', color: '#666' }}>尚無可校正的評估項目</div>
+                                                  )}
+                                                </div>
+                                              </div>
+
+                                              <div>
+                                                <div style={{ fontWeight: 'bold', marginBottom: 6 }}>整體判定校正</div>
+                                                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                                                  {biasOptions.map((opt) => (
+                                                    <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.9em' }}>
+                                                      <input
+                                                        type="radio"
+                                                        name={`overall-bias-${iv.id}`}
+                                                        checked={Number(draft.overall_decision_bias) === opt.value}
+                                                        onChange={() => setDraft({ ...draft, overall_decision_bias: opt.value })}
+                                                      />
+                                                      {opt.label}
+                                                    </label>
+                                                  ))}
+                                                </div>
+                                              </div>
+
+                                              <div>
+                                                <div style={{ fontWeight: 'bold', marginBottom: 6 }}>證據/解釋是否足夠（1-5）</div>
+                                                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                                                  {[1, 2, 3, 4, 5].map((v) => (
+                                                    <label key={v} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.9em' }}>
+                                                      <input
+                                                        type="radio"
+                                                        name={`explainability-${iv.id}`}
+                                                        checked={Number(draft.explainability) === v}
+                                                        onChange={() => setDraft({ ...draft, explainability: v })}
+                                                      />
+                                                      {v}
+                                                    </label>
+                                                  ))}
+                                                </div>
+                                              </div>
+
+                                              <div>
+                                                <div style={{ fontWeight: 'bold', marginBottom: 6 }}>原因（可複選）</div>
+                                                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                                                  {reasonOptions.map((opt) => {
+                                                    const set = new Set<string>(Array.isArray(draft.reason_flags) ? draft.reason_flags : [])
+                                                    const checked = set.has(opt.key)
+                                                    return (
+                                                      <label key={opt.key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.9em' }}>
+                                                        <input
+                                                          type="checkbox"
+                                                          checked={checked}
+                                                          onChange={() => {
+                                                            if (set.has(opt.key)) set.delete(opt.key)
+                                                            else set.add(opt.key)
+                                                            const nextFlags = Array.from(set)
+                                                            const next = { ...draft, reason_flags: nextFlags }
+                                                            // 若取消「其他」，順便清掉文字
+                                                            if (!set.has('other')) (next as any).other_detail = ''
+                                                            setDraft(next)
+                                                          }}
+                                                        />
+                                                        {opt.label}
+                                                      </label>
+                                                    )
+                                                  })}
+                                                </div>
+                                                {(() => {
+                                                  const set = new Set<string>(Array.isArray(draft.reason_flags) ? draft.reason_flags : [])
+                                                  if (!set.has('other')) return null
+                                                  return (
+                                                    <div style={{ marginTop: 10 }}>
+                                                      <div style={{ fontWeight: 'bold', marginBottom: 6, fontSize: '0.92em' }}>其他（請補充）</div>
+                                                      <textarea
+                                                        value={draft.other_detail || ''}
+                                                        onChange={(e) => setDraft({ ...draft, other_detail: e.target.value })}
+                                                        placeholder="請輸入其他原因..."
+                                                        style={{ width: '100%', minHeight: 70, padding: 8, border: '1px solid #ccc', borderRadius: 6 }}
+                                                      />
+                                                    </div>
+                                                  )
+                                                })()}
+                                              </div>
+
+                                              <div>
+                                                <div style={{ fontWeight: 'bold', marginBottom: 6 }}>意見反饋（自由記述）</div>
+                                                <textarea
+                                                  value={draft.comment}
+                                                  onChange={(e) => setDraft({ ...draft, comment: e.target.value })}
+                                                  placeholder="例如：哪個項目常被高估/低估、希望 AI 補充的證據、常見誤判模式..."
+                                                  style={{ width: '100%', minHeight: 90, padding: 8, border: '1px solid #ccc', borderRadius: 6 }}
+                                                />
+                                              </div>
+
+                                              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                                                {status.loading && <div style={{ fontSize: '0.85em', color: '#666' }}>載入中...</div>}
+                                                <button
+                                                  disabled={!!status.saving}
+                                                  onClick={() => submitRecruiterFeedback(iv.id)}
+                                                  style={{
+                                                    padding: '6px 12px',
+                                                    background: status.saving ? '#BDBDBD' : '#1976D2',
+                                                    color: 'white',
+                                                    cursor: status.saving ? 'not-allowed' : 'pointer',
+                                                  }}
+                                                >
+                                                  {status.saving ? '送出中...' : '送出校正回饋'}
+                                                </button>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        )
+                                      })()}
                                     </div>
                                     <div>
                                       <strong>建立時間：</strong>

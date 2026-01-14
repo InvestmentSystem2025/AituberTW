@@ -406,27 +406,14 @@ export class InterviewScoringEngine {
     const logic = criteriaInfo?.scoring_logic || 'deduction'
     const maxScore = criteriaInfo?.max_score || 10
 
-    // 加分制/綜合制：累加所有回答的單題分數，視為每題「加減分總和」，再限制在 0 ~ maxScore 之間
-    if (logic === 'addition' || logic === 'composite') {
-      const totalDelta = this.answerScores.reduce((sum, score) => {
-        const v = typeof score.scores[criteriaKey] === 'number' ? score.scores[criteriaKey] : 0
-        return sum + v
-      }, 0)
-      return Math.max(0, Math.min(maxScore, totalDelta))
-    }
-
-    // 扣分制：以「滿分為基準」累積每題的扣分量（不再使用平均分）
-    // 每題的單題分數被視為：本題評分後的分數 = 滿分 + 本題扣的分數（負值），
-    // 因此扣分量 = (單題分數 - 滿分) <= 0
-    const n = this.answerScores.length
-    const sumSingleScores = this.answerScores.reduce((sum, score) => {
-      const v = typeof score.scores[criteriaKey] === 'number' ? score.scores[criteriaKey] : maxScore
+    // 注意：本專案中 AnswerScore.scores 代表「本題該項目的 delta（變量）」
+    // 因此前端 currentScores 與最終分數都應該以 base + Σ(delta) 方式計算
+    const base = (logic === 'addition' || logic === 'composite') ? 0 : maxScore
+    const totalDelta = this.answerScores.reduce((sum, score) => {
+      const v = typeof score.scores[criteriaKey] === 'number' ? score.scores[criteriaKey] : 0
       return sum + v
     }, 0)
-
-    // 最終分數 = 滿分 + 所有題目的扣分量總和 = 滿分 + Σ(單題分數 - 滿分)
-    const final = maxScore + (sumSingleScores - n * maxScore)
-    return Math.max(0, Math.min(maxScore, final))
+    return Math.max(0, Math.min(maxScore, base + totalDelta))
   }
 
   private isPassed(finalScores: ScoringCriteria): boolean {

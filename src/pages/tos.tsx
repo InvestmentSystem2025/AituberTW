@@ -163,7 +163,7 @@ export default function TosAndSignupPage() {
   return (
     <div style={{ maxWidth: 720, margin: '48px auto', padding: 24 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>使用規約</h1>
-      <div style={{ color: '#666', marginBottom: 12 }}>最新バージョン: {version || '未発行'}</div>
+      <div style={{ color: '#666', marginBottom: 12 }}>最新版本: {version || '未発行'}</div>
       {!nonceInfo && (
         <>
           <div style={{ whiteSpace: 'pre-wrap', border: '1px solid #ddd', padding: 16, borderRadius: 8, maxHeight: 360, overflow: 'auto' }}>
@@ -183,7 +183,7 @@ export default function TosAndSignupPage() {
 
       {nonceInfo && (
         <form onSubmit={onSignup} style={{ display: 'grid', gap: 12, marginTop: 16 }}>
-          <div style={{ fontWeight: 600 }}>サインアップ</div>
+          <div style={{ fontWeight: 600 }}>註冊</div>
           <label>
             Email
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required style={{ width: '100%', padding: 8, marginTop: 4 }} />

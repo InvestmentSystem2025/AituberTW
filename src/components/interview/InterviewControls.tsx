@@ -15,7 +15,8 @@ export const InterviewControls: React.FC<InterviewControlsProps> = ({
   const handleSettingsSave = (settings: InterviewSettingsData) => {
     // 保存設置到 localStorage
     if (typeof window !== 'undefined') {
-      localStorage.setItem('interview_enablePersonDetection', String(settings.enablePersonDetection))
+      // 人員檢測為必須功能，固定啟用
+      localStorage.setItem('interview_enablePersonDetection', 'true')
       localStorage.setItem('interview_enableRecording', String(settings.enableRecording))
       
       // 觸發自定義事件通知設定已更新
@@ -44,22 +45,10 @@ export const InterviewControls: React.FC<InterviewControlsProps> = ({
       {/* 控制按鈕 */}
       <div className="space-y-2">
         <button
-          onClick={interviewFlow.startInterviewManually}
-          className="w-full px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-medium transition-colors"
-        >
-          手動開始面試
-        </button>
-        <button
           onClick={() => setShowSettings(true)}
           className="w-full px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg font-medium transition-colors"
         >
           面試設置
-        </button>
-        <button
-          onClick={interviewFlow.resetInterview}
-          className="w-full px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-medium transition-colors"
-        >
-          重置面試
         </button>
       </div>
 

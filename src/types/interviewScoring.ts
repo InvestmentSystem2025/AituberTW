@@ -19,6 +19,14 @@ export interface PersonalitySummary {
   [key: string]: any
 }
 
+// 單一加/扣分事件（方便統計與可追溯）
+export interface ScoreReasonItem {
+  points: number
+  detail: string
+  // 預留其他欄位，方便日後擴充
+  [key: string]: any
+}
+
 // 單次回答的評分結果
 export interface AnswerScore {
   answerId: string
@@ -30,9 +38,19 @@ export interface AnswerScore {
   totalScore: number
   deductions: Record<string, string[]> // 支持動態評估項目
   additions: Record<string, string[]>  // 支持動態評估項目
+  // 新：結構化事件（優先用於統計；舊 UI/儲存可沿用 deductions/additions 字串）
+  deductionItems?: Record<string, ScoreReasonItem[]>
+  additionItems?: Record<string, ScoreReasonItem[]>
   aiFeedback: string
   additionsDetail?: string
   deductionsDetail?: string
+  /**
+   * 下一步動作（由 AI 在評分 JSON 中決定，前端用來控制題號是否推進）
+   * - followup: 需要針對同一題追問（currentQuestionIndex 不變）
+   * - next: 同一題已回答充分，可進到下一題（currentQuestionIndex + 1）
+   * - end: 面試結束
+   */
+  nextAction?: 'followup' | 'next' | 'end'
    // （選用）人格判斷結果，只會在「最後一題」的評分中出現
   personality?: PersonalitySummary
 }

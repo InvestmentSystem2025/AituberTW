@@ -16,62 +16,7 @@ import toastStore from '@/features/stores/toast'
 import { responseTimeTracker } from '@/utils/responseTimeTracker'
 import { speakCharacter } from '@/features/messages/speakCharacter'
 import { generateMessageId } from '@/utils/messageUtils'
-
-/**
- * 備用的預設面試問題列表
- * 注意：如果 interviewConfig 中有提供問題（從資料庫），則會優先使用資料庫的問題
- * 只有在沒有資料庫問題時才會使用此備用列表
- * 
- * 面試時的 prompt 模板是從 @/features/chat/interviewPromptTemplates.ts 的 
- * INTERVIEW_PROMPT_TEMPLATES.SYSTEM_PROMPT 使用的，不會使用此處定義的問題作為 prompt
- */
-const INTERVIEW_QUESTIONS = [
-  {
-    id: 'greeting',
-    question: '你好，我是今天負責你面試的美女AI面試官。歡迎參加我們的面試！首先請你做個自我介紹。',
-    category: 'greeting',
-  },
-  {
-    id: 'self_intro',
-    question: '很好，謝謝你的自我介紹。接下來請告訴我，你為什麼想要加入我們公司？',
-    category: 'motivation',
-  },
-  {
-    id: 'company_interest',
-    question: '你對我們公司的產品或服務有什麼了解嗎？',
-    category: 'company_knowledge',
-  },
-  {
-    id: 'experience',
-    question: '請分享一個你在過去工作中遇到的最大挑戰，以及你是如何解決的？',
-    category: 'experience',
-  },
-  {
-    id: 'skills',
-    question: '你認為自己最大的優勢是什麼？請具體說明。',
-    category: 'skills',
-  },
-  {
-    id: 'teamwork',
-    question: '請描述一次你與團隊合作的經驗，你在其中扮演什麼角色？',
-    category: 'teamwork',
-  },
-  {
-    id: 'future_goals',
-    question: '你對未來3-5年的職業規劃是什麼？',
-    category: 'career_goals',
-  },
-  {
-    id: 'questions',
-    question: '最後，你有什麼問題想要問我們公司的嗎？',
-    category: 'candidate_questions',
-  },
-  {
-    id: 'closing',
-    question: '謝謝你的回答！我們的面試到此結束。我們會在3-5個工作天內通知你結果。祝你今天愉快！',
-    category: 'closing',
-  },
-]
+import { PERSONALITY_QUESTION_LIST } from '@/features/chat/interviewPromptTemplates'
 
 interface ChatMessage {
   id: string
@@ -81,6 +26,13 @@ interface ChatMessage {
   aiFeedback?: string
   aiAdditionsDetail?: string
   aiDeductionsDetail?: string
+  // 本題各項目的 delta（AnswerScore.scores）
+  aiScoreDeltas?: Record<string, number>
+  // 本題加/扣分事件（結構化，方便統計）
+  aiScoreEvents?: {
+    deductions?: any
+    additions?: any
+  }
   // 每次 AI 回覆後的「當前累積分數快照」（依評分項目 key）
   aiCurrentScores?: Record<string, number>
   // （選用）人格判斷結果，只會在最後一則 AI 回覆上出現
@@ -114,6 +66,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   resultNotificationMethod = 'immediate',
   preferredLanguage = 'zh-TW',
 }) => {
+  const DEBUG_INTERVIEW = process.env.NEXT_PUBLIC_DEBUG_INTERVIEW === '1'
   const modelType = settingsStore((s) => s.modelType)
   const router = useRouter()
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -209,8 +162,33 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     })
   }
 
-  // 如果處理後的問題列表為空，則使用預設問題
-  const formattedQuestions = processedQuestions.length > 0 ? processedQuestions : INTERVIEW_QUESTIONS
+  // 題目以 DB 回傳為準（不再使用硬編碼 INTERVIEW_QUESTIONS fallback）
+  // 若 DB 沒有題目，則以空陣列進行（AI 仍可自行動態生成問題）
+  const formattedQuestions = processedQuestions
+
+  // 系統控題用的「完整題序列」：自我介紹 -> 人格題 -> DB 題庫
+  const INTRO_QUESTION =
+    '你好，我是今天的AI面試官，很高興見到你！首先請你做個簡短的自我介紹。'
+  const questionSequence: Array<{ id: string; question: string; category: string }> = [
+    { id: 'intro', question: INTRO_QUESTION, category: 'intro' },
+    ...PERSONALITY_QUESTION_LIST.map((q, idx) => ({
+      id: `personality-${idx + 1}`,
+      question: q,
+      category: 'personality',
+    })),
+    ...formattedQuestions,
+  ].filter((q) => typeof q.question === 'string' && q.question.trim().length > 0)
+
+  // 若 DB 題目為空，提示管理者/測試者（避免誤以為有使用預設題目）
+  useEffect(() => {
+    if (interviewConfig && Array.isArray(interviewConfig.questions) && interviewConfig.questions.length === 0) {
+      toastStore.getState().addToast({
+        message: '此職缺未設定題目（DB questions 為空），將由 AI 動態生成問題',
+        type: 'info',
+        tag: 'interview-no-db-questions',
+      })
+    }
+  }, [interviewConfig])
 
   // 獲取evaluation_criteria並轉換為評分系統需要的格式
   const evaluationCriteria = interviewConfig?.evaluation_criteria || []
@@ -257,9 +235,15 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   const [showResponseTimeAnalysis, setShowResponseTimeAnalysis] = useState(false)
   const [currentQuestionId, setCurrentQuestionId] = useState<string>('')
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0)
+  // 系統控題：追問階段不推進題號
+  const [isFollowUpPhase, setIsFollowUpPhase] = useState(false)
+  const [followUpCount, setFollowUpCount] = useState(0)
+  const MAX_FOLLOWUPS = 2
   
   // 面試開始時間記錄
   const interviewStartTimeRef = useRef<number>(Date.now())
+  const tokensInputRef = useRef<number>(0)
+  const tokensOutputRef = useRef<number>(0)
   
   // TTS 排隊管理器：用於處理分段 TTS
   const ttsQueueRef = useRef<{
@@ -529,6 +513,9 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         aiFeedback: msg.type === 'ai' ? (msg.aiFeedback || '') : '',
         additions_detail: msg.type === 'ai' ? (msg.aiAdditionsDetail || '') : '',
         deductions_detail: msg.type === 'ai' ? (msg.aiDeductionsDetail || '') : '',
+        // 本題 delta 與事件（方便後續統計/回放）
+        score_deltas: msg.type === 'ai' ? (msg.aiScoreDeltas || null) : null,
+        score_events: msg.type === 'ai' ? (msg.aiScoreEvents || null) : null,
         // 每次 AI 回覆後的「當前累積分數」，方便在結果頁或後端分析時還原當下的分數狀態
         current_scores: msg.type === 'ai' ? (msg.aiCurrentScores || null) : null,
         // 人格判斷結果（只會在最後一則 AI 回覆中非空）
@@ -549,6 +536,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           interview_transcript: transcript,
           ai_evaluations: aiEvaluations,
           duration_seconds: durationSeconds,
+          tokens_input: tokensInputRef.current,
+          tokens_output: tokensOutputRef.current,
           is_cancelled_by_user: options?.userCancelled === true,
         }),
       })
@@ -651,7 +640,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       aiModel,
       messages.length,
       currentQuestionIndex,
-      formattedQuestions[currentQuestionIndex]?.category
+      questionSequence[currentQuestionIndex]?.category
     )
     
     try {
@@ -668,12 +657,28 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       })
       
       // 準備問題列表供 AI 使用
+      // 仍提供 DB 題庫給 prompt 作為背景資訊，但「下一題」完全由前端控制
       const questionsList = formattedQuestions.map(q => q.question)
+      const currentQ = questionSequence[currentQuestionIndex]
+      const currentQuestionText = currentQ?.question || ''
+      const isLastQuestion = currentQuestionIndex >= questionSequence.length - 1
+      const nextQuestionText = (!isLastQuestion && questionSequence[currentQuestionIndex + 1]?.question)
+        ? String(questionSequence[currentQuestionIndex + 1]?.question || '')
+        : ''
       
       // 🔍 DEBUG: Client-side log（幫助偵錯）
-      console.log('📋 即將發送問題列表到 AI:', questionsList)
-      console.log('📊 當前對話歷史:', conversationMessages.map(m => `${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 50) : '...'}`))
-      console.log('📊 當前對話歷史長度:', conversationMessages.length)
+      if (DEBUG_INTERVIEW) {
+        console.log('📋 即將發送問題列表到 AI:', questionsList)
+        console.log('🎯 系統指定當前題目:', {
+          index: currentQuestionIndex,
+          text: currentQuestionText,
+          isFollowUpPhase,
+          followUpCount,
+          isLastQuestion
+        })
+        console.log('📊 當前對話歷史:', conversationMessages.map(m => `${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 50) : '...'}`))
+        console.log('📊 當前對話歷史長度:', conversationMessages.length)
+      }
       
       // 調用AI API獲取串流回應
       const stream = await getInterviewAIResponseStream(
@@ -682,7 +687,13 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         questionsList,
         evaluationCriteria,
         trackingId, // 傳遞追蹤 ID
-        interviewLanguage // 面試偏好語言（決定 AI 回覆語言）
+        interviewLanguage, // 面試偏好語言（決定 AI 回覆語言）
+        currentQuestionText,
+        nextQuestionText,
+        isFollowUpPhase,
+        followUpCount,
+        MAX_FOLLOWUPS,
+        isLastQuestion
       )
       
       // 創建一個新的 AI 消息用於實時更新
@@ -707,8 +718,32 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       
       // 讀取串流
       const reader = stream.getReader()
+      // bufferRaw 用於累積「顯示用」文字（但仍可能因為 chunk 拆分而殘留破碎標記）
       let buffer = ''
       let rawBuffer = '' // 用於累積原始內容（包含元數據）
+      let didHandleMetadata = false // 避免重複解析/重複累加 tokens/重複 console log
+
+      // 強化版：移除因為模型漏字元/串流拆分導致的破碎標記（例如：CONTENT_END]、[CONTENT_EN...）
+      const sanitizeInterviewVisibleText = (text: string): string => {
+        if (!text) return ''
+        let t = text
+        // 先移除完整 block（避免內容內殘留 JSON）
+        t = t.replace(/\[INTERVIEW_METADATA_START\][\s\S]*?\[INTERVIEW_METADATA_END\]/g, '')
+        t = t.replace(/\[SCORE_START\][\s\S]*?\[SCORE_END\]/g, '')
+        // 移除完整 emotion / content 標記
+        t = t.replace(/\[EMOTION_START\][\s\S]*?\[EMOTION_END\]/g, '')
+        t = t.replace(/\[CONTENT_START\]|\[CONTENT_END\]/g, '')
+        // 移除「破碎標記」的常見變體（缺 '[' 或缺 ']'）
+        t = t.replace(/\[?\s*CONTENT_START\s*\]?/g, '')
+        t = t.replace(/\[?\s*CONTENT_END\s*\]?/g, '')
+        t = t.replace(/\[?\s*EMOTION_START\s*\]?/g, '')
+        t = t.replace(/\[?\s*EMOTION_END\s*\]?/g, '')
+        t = t.replace(/\[?\s*SCORE_START\s*\]?/g, '')
+        t = t.replace(/\[?\s*SCORE_END\s*\]?/g, '')
+        t = t.replace(/\[?\s*INTERVIEW_METADATA_START\s*\]?/g, '')
+        t = t.replace(/\[?\s*INTERVIEW_METADATA_END\s*\]?/g, '')
+        return t
+      }
       
       try {
         while (true) {
@@ -723,7 +758,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           const metadataRegex = /\[INTERVIEW_METADATA_START\]([\s\S]*?)\[INTERVIEW_METADATA_END\]/
           const metadataMatch = rawBuffer.match(metadataRegex)
           
-          if (metadataMatch) {
+          if (metadataMatch && !didHandleMetadata) {
             // 解析元數據
             try {
               const metadata = JSON.parse(metadataMatch[1])
@@ -731,6 +766,26 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                 finalEmotion = metadata.emotion || 'neutral'
                 // 更新 TTS 隊列的情感標籤
                 ttsQueueRef.current.currentEmotion = finalEmotion
+
+                // token usage（若串流端有提供則累加到整場 session）
+                const t = metadata.tokens
+                if (t && typeof t === 'object') {
+                  const ti = Number((t as any).tokens_input)
+                  const to = Number((t as any).tokens_output)
+                  if (Number.isFinite(ti) && ti >= 0) tokensInputRef.current += Math.floor(ti)
+                  if (Number.isFinite(to) && to >= 0) tokensOutputRef.current += Math.floor(to)
+                }
+                // 為了方便檢驗：每題回答結束後印一次 token（本次 + 累計）
+                console.log('[Interview] 回答完成 token', {
+                  questionIndex: currentQuestionIndex + 1,
+                  questionId: metadata?.scoreResult?.questionId,
+                  tokens_this_answer: t || null,
+                  tokens_session_total: {
+                    tokens_input: tokensInputRef.current,
+                    tokens_output: tokensOutputRef.current,
+                    tokens_total: (tokensInputRef.current || 0) + (tokensOutputRef.current || 0),
+                  },
+                })
                 // 處理 scoreResult，將 timestamp 轉換回 Date 對象
                 if (metadata.scoreResult) {
                   const scoreResult = metadata.scoreResult
@@ -744,7 +799,9 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                 } else {
                   finalScoreResult = null
                 }
-                // 從 rawBuffer 中移除元數據標記（但 value 已經不包含元數據了）
+                // 從 rawBuffer 中移除元數據標記，避免後續 chunk 重複 match
+                rawBuffer = rawBuffer.replace(metadataRegex, '')
+                didHandleMetadata = true
               }
             } catch (e) {
               console.error('解析元數據失敗:', e)
@@ -760,13 +817,14 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             .replace(/\[EMOTION_START\]([\s\S]*?)\[EMOTION_END\]/g, '')
             .replace(/\[SCORE_START\]([\s\S]*?)\[SCORE_END\]/g, '')
           
-          // 累積已經清理過的內容
+          // 累積已經清理過的內容（仍需對「整段累積文字」做一次 sanitize，才能抓到跨 chunk 拼起來的破碎標記）
           buffer += displayChunk
+          const nextVisible = sanitizeInterviewVisibleText(buffer)
           
-          if (buffer !== streamingContent) {
-            // 計算新增的文本
-            const newText = buffer.substring(streamingContent.length)
-            streamingContent = buffer
+          if (nextVisible !== streamingContent) {
+            // 計算新增的文本（以 sanitize 後的可見文字為準）
+            const newText = nextVisible.substring(streamingContent.length)
+            streamingContent = nextVisible
             
             // 更新消息內容
             setMessages((prev) =>
@@ -796,13 +854,85 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         // 完成追蹤並記錄指標
         responseTimeTracker.completeTracking(trackingId, streamingContent)
         
+        // 記錄本回合 AI 決策（用於控制題號與追問狀態）
+        let decidedAction: 'followup' | 'next' | 'end' | null = null
+
         // 更新最終消息，包含評分信息
         if (finalScoreResult) {
+          const scoreResult = finalScoreResult
           // 先更新「當前累積分數」，並保留這次更新後的快照
           let updatedScoresSnapshot: Record<string, number> | undefined
           setCurrentScores((prev) => {
-            const next = applyScoreResultToCurrentScores(prev, finalScoreResult!)
+            const next = applyScoreResultToCurrentScores(prev, scoreResult)
             updatedScoresSnapshot = next
+
+            // 🔍 Console log：顯示「套用本題 delta 後的當前分數」+「本題 delta」+「加/扣分事件」
+            // 這段只會在「每題回答完成」時觸發一次（避免重複三次的問題）
+            try {
+              const fmt = (v: number) => {
+                const n = Number(v) || 0
+                return Number.isFinite(n) ? n.toFixed(2) : '0.00'
+              }
+              const fmtDelta = (v: number) => {
+                const n = Number(v) || 0
+                if (!Number.isFinite(n) || n === 0) return '0.00'
+                return `${n > 0 ? '+' : ''}${n.toFixed(2)}`
+              }
+
+              const criteriaList = Array.isArray(evaluationCriteria) ? evaluationCriteria : []
+              const orderedKeys = criteriaList.length > 0
+                ? criteriaList.map((c: any) => c.key).filter((k: any) => typeof k === 'string')
+                : Array.from(new Set([
+                    ...Object.keys(prev || {}),
+                    ...Object.keys(scoreResult?.scores || {}),
+                    ...Object.keys(next || {}),
+                  ]))
+
+              console.group(`📊 本題評分：${scoreResult.questionId || ''}`.trim())
+              console.log('題目：', scoreResult.questionText)
+              console.log('本題 delta（scores）：', scoreResult.scores)
+
+              orderedKeys.forEach((key: string) => {
+                const c = criteriaList.find((x: any) => x && x.key === key)
+                const displayName = (c && (c.display_name || c.key)) ? String(c.display_name || c.key) : key
+                const max = (c && typeof c.max_score === 'number') ? c.max_score : 10
+                const logic = (c && typeof c.scoring_logic === 'string') ? c.scoring_logic : 'deduction'
+                const base = (logic === 'addition' || logic === 'composite') ? 0 : max
+                const prevScore = (prev && typeof (prev as any)[key] === 'number') ? Number((prev as any)[key]) : base
+                const delta = scoreResult?.scores && typeof (scoreResult.scores as any)[key] === 'number'
+                  ? Number((scoreResult.scores as any)[key])
+                  : 0
+                const nextScore = (next && typeof (next as any)[key] === 'number') ? Number((next as any)[key]) : base
+
+                console.log(`${displayName} (${key})：${fmt(prevScore)}  ${fmtDelta(delta)}  =>  ${fmt(nextScore)}`)
+
+                const dItems = (scoreResult as any)?.deductionItems?.[key]
+                const aItems = (scoreResult as any)?.additionItems?.[key]
+                if (Array.isArray(dItems) && dItems.length > 0) {
+                  console.log(`  扣分事件：`, dItems.map((it: any) => ({
+                    points: Number(it?.points) || 0,
+                    detail: String(it?.detail || ''),
+                  })))
+                }
+                if (Array.isArray(aItems) && aItems.length > 0) {
+                  console.log(`  加分事件：`, aItems.map((it: any) => ({
+                    points: Number(it?.points) || 0,
+                    detail: String(it?.detail || ''),
+                  })))
+                }
+                // fallback：若沒有事件結構，仍顯示舊字串原因
+                if ((!Array.isArray(dItems) || dItems.length === 0) && scoreResult?.deductions?.[key]?.length) {
+                  console.log('  扣分原因：', scoreResult.deductions[key])
+                }
+                if ((!Array.isArray(aItems) || aItems.length === 0) && scoreResult?.additions?.[key]?.length) {
+                  console.log('  加分原因：', scoreResult.additions[key])
+                }
+              })
+
+              console.groupEnd()
+            } catch (e) {
+              console.warn('評分 console log 失敗（可忽略）:', e)
+            }
             return next
           })
 
@@ -816,6 +946,11 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                     aiFeedback: finalScoreResult?.aiFeedback,
                     aiAdditionsDetail: finalScoreResult?.additionsDetail,
                     aiDeductionsDetail: finalScoreResult?.deductionsDetail,
+                    aiScoreDeltas: (finalScoreResult?.scores || undefined) as any,
+                    aiScoreEvents: {
+                      deductions: (finalScoreResult as any)?.deductionItems || null,
+                      additions: (finalScoreResult as any)?.additionItems || null,
+                    },
                     aiCurrentScores: updatedScoresSnapshot,
                     personality: finalScoreResult?.personality,
                   }
@@ -826,12 +961,41 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           // 處理評分結果（供結果頁與統計使用）
           setAnswerScores(prev => [...prev, finalScoreResult!])
           scoringEngine.addScoredAnswer(finalScoreResult)
-          setCurrentQuestionIndex(prev => prev + 1)
+
+          // 依 nextAction 控制題號推進（避免 AI 自己亂出題）
+          const rawAction = (finalScoreResult.nextAction || 'next') as 'followup' | 'next' | 'end'
+          // 避免無限追問：達到上限後強制進下一題
+          const action: 'followup' | 'next' | 'end' =
+            (rawAction === 'followup' && followUpCount >= MAX_FOLLOWUPS) ? 'next' : rawAction
+          decidedAction = action
+
+          if (action === 'followup') {
+            setIsFollowUpPhase(true)
+            setFollowUpCount((c) => Math.min(MAX_FOLLOWUPS, c + 1))
+          } else if (action === 'next') {
+            setIsFollowUpPhase(false)
+            setFollowUpCount(0)
+
+            const nextIdx = currentQuestionIndex + 1
+            const nextQ = questionSequence[nextIdx]
+            if (nextQ && typeof nextQ.question === 'string' && nextQ.question.trim().length > 0) {
+              // 題庫有下一題：推進題號（題號仍用於追蹤/記錄）
+              setCurrentQuestionIndex(nextIdx)
+              // 不再由系統插入下一題，改為要求 AI 在 CONTENT 內逐字輸出 nextQuestionText
+            } else {
+              // 題庫已無下一題：不要用題號/題庫狀態自動結束面試
+              // 面試是否結束一律由 AI 回覆內容（endKeywords）判斷
+            }
+          } else {
+            // end
+            setIsFollowUpPhase(false)
+            setFollowUpCount(0)
+          }
         }
         
         // 檢查是否為面試結束的回應
         const endKeywords = ['面試到此結束', '面試結束', '感謝你的參與', '我們的面試', '後續流程']
-        const isInterviewEnding = endKeywords.some(keyword => streamingContent.includes(keyword))
+        const isInterviewEnding = endKeywords.some((keyword) => streamingContent.includes(keyword))
         
         if (isInterviewEnding) {
           // 標記本場面試已由 AI 正常結束
@@ -859,6 +1023,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             // 此處不自動導向結果頁，方便開發時在 F12 中檢查請求與回應
           }, 6000) // 給更多時間：3秒顯示 + 3秒處理錄製與儲存
         } else {
+          // 非 end：保持可輸入（next 題目已由 AI 在 CONTENT 內問出）
           setIsWaitingForAnswer(true)
         }
       } catch (streamError) {
@@ -874,7 +1039,23 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     } finally {
       setIsAIResponding(false)
     }
-  }, [isAIResponding, messages, addAIMessage, onInterviewComplete, scoringEngine, currentQuestionIndex, recording, interviewId, saveInterviewSession, formattedQuestions, stopCamera])
+  }, [
+    isAIResponding,
+    messages,
+    addAIMessage,
+    onInterviewComplete,
+    scoringEngine,
+    currentQuestionIndex,
+    recording,
+    interviewId,
+    saveInterviewSession,
+    formattedQuestions,
+    questionSequence,
+    isFollowUpPhase,
+    followUpCount,
+    MAX_FOLLOWUPS,
+    stopCamera,
+  ])
 
   // 處理用戶回答
   const handleUserAnswer = useCallback((answer: string) => {
@@ -913,6 +1094,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   // 開始面試
   const startInterview = useCallback(async () => {
     interviewStartTimeRef.current = Date.now()
+    tokensInputRef.current = 0
+    tokensOutputRef.current = 0
     
     // 如果啟用錄製，開始錄製
     if (enableRecording) {
@@ -924,200 +1107,31 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     // 如果有預先生成的問候語，直接使用
     if (initialGreeting) {
       setCurrentQuestionIndex(0)
-      setCurrentQuestionId(formattedQuestions[0]?.id || 'custom-greeting')
+      setCurrentQuestionId(questionSequence[0]?.id || 'intro')
+      setIsFollowUpPhase(false)
+      setFollowUpCount(0)
+      setIsWaitingForAnswer(true)
+      // 若問候語沒有引導自我介紹，保底補上一句第一題（避免使用者不知道要回答什麼）
+      const g = sanitizeGreeting(initialGreeting)
+      if (!g.includes('自我介紹')) {
+        addAIMessage(INTRO_QUESTION)
+      }
+      return
+    }
+
+    // 沒有 initialGreeting：由系統直接送出第一題（避免模型自行連續提問/題號不同步）
+    if (messages.length === 0) {
+      setCurrentQuestionIndex(0)
+      setCurrentQuestionId(questionSequence[0]?.id || 'intro')
+      setIsFollowUpPhase(false)
+      setFollowUpCount(0)
+      addAIMessage(INTRO_QUESTION)
       setIsWaitingForAnswer(true)
       return
     }
 
-    // 如果沒有 initialGreeting，觸發 AI 產生第一句話（打招呼和自我介紹）
-    // 此時 messages 應該是空的，所以 AI 會根據 prompt 產生打招呼
-    console.log('🚀 開始面試：initialGreeting =', initialGreeting, 'messages.length =', messages.length)
-    
-    if (messages.length === 0 && !initialGreeting) {
-      console.log('✅ 觸發 AI 產生第一句話（打招呼）')
-      setIsWaitingForAnswer(false) // 先不允許用戶輸入，等 AI 回應
-      setIsAIResponding(true)
-      
-      try {
-        const questionsList = formattedQuestions.length > 0 
-          ? formattedQuestions.map(q => q.question)
-          : []
-        
-        console.log('📋 問題列表 (將傳給 AI):', questionsList)
-        console.log('📊 對話歷史長度:', 0)
-        console.log('📊 evaluationCriteria 數量:', evaluationCriteria.length)
-        
-        // 調用 AI 產生第一句話（空對話歷史，AI 應該會產生打招呼）
-        const stream = await getInterviewAIResponseStream(
-          [], // 空的對話歷史，觸發打招呼
-          0,  // questionIndex = 0（還未開始問問題）
-          questionsList,
-          evaluationCriteria,
-          undefined,
-          interviewLanguage // 面試偏好語言（決定 AI 回覆語言）
-        )
-        
-        // 創建一個新的 AI 消息用於實時更新
-        const streamingMessageId = `ai-streaming-${Date.now()}`
-        let streamingContent = ''
-        let finalScoreResult: AnswerScore | null = null
-        
-        // 初始化 TTS 隊列（新的回應）
-        ttsQueueRef.current.sessionId = generateMessageId()
-        ttsQueueRef.current.sentenceBuffer = ''
-        ttsQueueRef.current.currentEmotion = 'neutral'
-        
-        // 添加初始空消息
-        const initialMessage: ChatMessage = {
-          id: streamingMessageId,
-          type: 'ai',
-          content: '',
-          timestamp: new Date(),
-        }
-        setMessages((prev) => [...prev, initialMessage])
-        
-        // 讀取串流
-        const reader = stream.getReader()
-        // buffer：純文字（已移除標籤與元數據），用於實際顯示
-        let buffer = ''
-        // rawBuffer：原始串流內容（包含元數據），只用來偵測與解析 [INTERVIEW_METADATA_*] 區塊
-        let rawBuffer = ''
-        
-        try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            
-            // ReadableStream<string> 返回的 value 已經是字符串
-            // 先累積到 rawBuffer，用於解析元數據
-            rawBuffer += value
-            
-            // 檢查是否包含元數據標記
-            const metadataRegex = /\[INTERVIEW_METADATA_START\]([\s\S]*?)\[INTERVIEW_METADATA_END\]/
-            const metadataMatch = rawBuffer.match(metadataRegex)
-            
-            if (metadataMatch) {
-              // 解析元數據
-              try {
-                const metadata = JSON.parse(metadataMatch[1])
-                if (metadata.type === 'metadata') {
-                  // 處理 scoreResult，將 timestamp 轉換回 Date 對象
-                  if (metadata.scoreResult) {
-                    const scoreResult = metadata.scoreResult
-                    // 如果 timestamp 是字符串，轉換為 Date
-                    if (scoreResult.timestamp && typeof scoreResult.timestamp === 'string') {
-                      scoreResult.timestamp = new Date(scoreResult.timestamp)
-                    } else if (!scoreResult.timestamp || !(scoreResult.timestamp instanceof Date)) {
-                      scoreResult.timestamp = new Date()
-                    }
-                    finalScoreResult = scoreResult
-                  } else {
-                    finalScoreResult = null
-                  }
-                  // 移除元數據標記
-                  rawBuffer = rawBuffer.replace(metadataRegex, '')
-                }
-              } catch (e) {
-                console.error('解析元數據失敗:', e)
-              }
-            }
-            
-            // value 已經經過 processTextChunk 處理，應該只包含 CONTENT 標籤內的內容
-            // 但為了安全起見，我們還是移除任何可能遺漏的標籤和元數據標記
-            let displayChunk = value
-              .replace(/\[INTERVIEW_METADATA_START\]([\s\S]*?)\[INTERVIEW_METADATA_END\]/g, '')
-              .replace(/\[CONTENT_START\]/g, '')
-              .replace(/\[CONTENT_END\]/g, '')
-              .replace(/\[EMOTION_START\]([\s\S]*?)\[EMOTION_END\]/g, '')
-              .replace(/\[SCORE_START\]([\s\S]*?)\[SCORE_END\]/g, '')
-            
-            // 累積已經清理過的內容
-            buffer += displayChunk
-            
-            if (buffer !== streamingContent) {
-              // 計算新增的文本
-              const newText = buffer.substring(streamingContent.length)
-              streamingContent = buffer
-              
-              // 更新消息內容
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === streamingMessageId
-                    ? { ...msg, content: streamingContent }
-                    : msg
-                )
-              )
-              scrollToBottom()
-              
-              // 處理 TTS 分段播放：當有新文本時，檢查是否有標點符號
-              // 注意：這裡需要從元數據中獲取 emotion，如果還沒有則使用 neutral
-              if (newText.length > 0) {
-                processTTSQueue(newText, 'neutral') // 初始問候語使用 neutral
-              }
-            }
-          }
-          
-          console.log('✅ AI 回應:', streamingContent.substring(0, 100) + '...')
-          
-          // 串流結束後，處理剩餘的 TTS 文本
-          flushTTSQueue()
-          
-          if (streamingContent.trim()) {
-            // 更新最終消息，包含評分信息
-            if (finalScoreResult) {
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === streamingMessageId
-                    ? {
-                        ...msg,
-                        content: streamingContent,
-                        aiFeedback: finalScoreResult?.aiFeedback,
-                        aiAdditionsDetail: finalScoreResult?.additionsDetail,
-                        aiDeductionsDetail: finalScoreResult?.deductionsDetail,
-                      }
-                    : msg
-                )
-              )
-            }
-            setIsWaitingForAnswer(true)
-          } else {
-            // 如果沒有回應，使用預設問候語
-            console.warn('⚠️ AI 沒有返回回應，使用預設問候語')
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === streamingMessageId
-                  ? { ...msg, content: '你好，我是今天的AI面試官，很高興見到你！首先請你做個簡短的自我介紹。' }
-                  : msg
-              )
-            )
-            setIsWaitingForAnswer(true)
-          }
-        } catch (streamError) {
-          console.error('讀取串流錯誤:', streamError)
-          // 如果失敗，使用預設問候語
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === streamingMessageId
-                ? { ...msg, content: '你好，我是今天的AI面試官，很高興見到你！首先請你做個簡短的自我介紹。' }
-                : msg
-            )
-          )
-          setIsWaitingForAnswer(true)
-        } finally {
-          reader.releaseLock()
-        }
-      } catch (error) {
-        console.error('❌ AI回應錯誤:', error)
-        // 如果失敗，使用預設問候語
-        addAIMessage('你好，我是今天的AI面試官，很高興見到你！首先請你做個簡短的自我介紹。')
-        setIsWaitingForAnswer(true)
-      } finally {
-        setIsAIResponding(false)
-      }
-    } else {
-      console.log('⚠️ 跳過 AI 打招呼：initialGreeting =', initialGreeting, 'messages.length =', messages.length)
-    }
-  }, [initialGreeting, formattedQuestions, addAIMessage, enableRecording, recording, messages.length, evaluationCriteria])
+    console.log('⚠️ 跳過系統開場：messages.length =', messages.length)
+  }, [initialGreeting, addAIMessage, enableRecording, recording, messages.length, questionSequence, sanitizeGreeting])
 
   // 語音識別功能
   const {
@@ -1260,12 +1274,6 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           className="flex-1 overflow-y-auto p-4 space-y-4"
         >
           {messages.map((message, index) => {
-            // 查找對應的評分結果
-            const scoreResult = answerScores.find(score => 
-              score.questionText === message.content || 
-              (message.type === 'user' && answerScores[index - 1])
-            )
-            
             return (
               <div key={message.id}>
                 <div
@@ -1289,32 +1297,6 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                     </div>
                   </div>
                 </div>
-                
-                  {/* 顯示評分結果 */}
-                {scoreResult && message.type === 'ai' && (
-                  <div className="mt-2 ml-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                    <div className="text-sm font-medium text-yellow-800 mb-2">📊 評分結果</div>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      {Object.entries(scoreResult.scores).map(([key, score]) => {
-                        // 查找評估項目的顯示名稱
-                        const criteria = evaluationCriteria.find((c: any) => c.key === key)
-                        const displayName = criteria?.display_name || key
-                        const maxScore = criteria?.max_score || 10
-                        
-                        return (
-                          <div key={key} className="flex justify-between">
-                            <span>{displayName}:</span>
-                            <span className="font-medium">{score.toFixed(1)}/{maxScore}</span>
-                          </div>
-                        )
-                      })}
-                      <div className="flex justify-between col-span-2 border-t pt-1">
-                        <span className="font-medium">總分:</span>
-                        <span className="font-bold text-blue-600">{scoreResult.totalScore.toFixed(1)}/10</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             )
           })}

@@ -1,36 +1,29 @@
 import { Message } from '@/features/messages/messages'
-import { NextRequest } from 'next/server'
 import {
   VercelAIService,
   isVercelCloudAIService,
   isVercelLocalAIService,
 } from '@/features/constants/settings'
 import { modifyMessages } from '../services/utils'
-import {
-  aiServiceConfig,
-  streamAiText,
-  generateAiText,
-} from '../services/vercelAi'
+import { aiServiceConfig, streamAiText, generateAiText } from '../services/vercelAi'
 import { googleSearchGroundingModels } from '@/features/constants/aiModels'
 
-export const config = {
-  runtime: 'edge',
+export type VercelAiRequestBody = {
+  messages: Message[]
+  apiKey?: string
+  aiService: VercelAIService | string
+  model?: string
+  localLlmUrl?: string
+  azureEndpoint?: string
+  stream?: boolean
+  useSearchGrounding?: boolean
+  webSearchMode?: string
+  dynamicRetrievalThreshold?: number
+  temperature?: number
+  maxTokens?: number
 }
 
-export default async function handler(req: NextRequest) {
-  if (req.method !== 'POST') {
-    return new Response(
-      JSON.stringify({
-        error: 'Method Not Allowed',
-        errorCode: 'METHOD_NOT_ALLOWED',
-      }),
-      {
-        status: 405,
-        headers: { 'Content-Type': 'application/json' },
-      }
-    )
-  }
-
+export async function handleVercelAiJson(body: any): Promise<Response> {
   const {
     messages,
     apiKey,
@@ -44,85 +37,57 @@ export default async function handler(req: NextRequest) {
     dynamicRetrievalThreshold,
     temperature = 1.0,
     maxTokens = 4096,
-  } = await req.json()
+  } = (body || {}) as VercelAiRequestBody
 
   // APIキーの取得と検証
   let aiApiKey = apiKey
-  if (isVercelCloudAIService(aiService)) {
+  if (isVercelCloudAIService(aiService as any)) {
     if (!aiApiKey) {
-      // 環境変数から[サービス名]_KEY または [サービス名]_API_KEY の形式でAPIキーを取得
-      const servicePrefix = aiService.toUpperCase()
-      aiApiKey =
-        process.env[`${servicePrefix}_KEY`] ||
-        process.env[`${servicePrefix}_API_KEY`] ||
-        ''
+      const servicePrefix = String(aiService).toUpperCase()
+      aiApiKey = process.env[`${servicePrefix}_KEY`] || process.env[`${servicePrefix}_API_KEY`] || ''
     }
     if (!aiApiKey) {
-      return new Response(
-        JSON.stringify({ error: 'Empty API Key', errorCode: 'EmptyAPIKey' }),
-        {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        }
-      )
+      return new Response(JSON.stringify({ error: 'Empty API Key', errorCode: 'EmptyAPIKey' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
     }
   }
 
   // ローカルLLMのURL検証
-  if (isVercelLocalAIService(aiService) && aiService !== 'custom-api') {
+  if (isVercelLocalAIService(aiService as any) && aiService !== 'custom-api') {
     if (!localLlmUrl) {
       return new Response(
-        JSON.stringify({
-          error: 'Empty Local LLM URL',
-          errorCode: 'EmptyLocalLLMURL',
-        }),
-        {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' },
-        }
+        JSON.stringify({ error: 'Empty Local LLM URL', errorCode: 'EmptyLocalLLMURL' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
       )
     }
   }
 
   // Azureのエンドポイントとデプロイメント名の処理
-  let modifiedAzureEndpoint = (
-    azureEndpoint ||
-    process.env.AZURE_ENDPOINT ||
+  const modifiedAzureEndpoint = (azureEndpoint || process.env.AZURE_ENDPOINT || '').replace(
+    /^https:\/\/|\.openai\.azure\.com.*$/g,
     ''
-  ).replace(/^https:\/\/|\.openai\.azure\.com.*$/g, '')
-  let modifiedAzureDeployment =
-    (azureEndpoint || process.env.AZURE_ENDPOINT || '').match(
-      /\/deployments\/([^\/]+)/
-    )?.[1] || ''
-  let modifiedModel = aiService === 'azure' ? modifiedAzureDeployment : model
+  )
+  const modifiedAzureDeployment =
+    (azureEndpoint || process.env.AZURE_ENDPOINT || '').match(/\/deployments\/([^\/]+)/)?.[1] || ''
+  const modifiedModel = aiService === 'azure' ? modifiedAzureDeployment : model
 
   // モデル名のバリデーション
-  if (isVercelCloudAIService(aiService) && !modifiedModel) {
+  if (isVercelCloudAIService(aiService as any) && !modifiedModel) {
     return new Response(
-      JSON.stringify({
-        error: 'Invalid AI service or model',
-        errorCode: 'AIInvalidProperty',
-      }),
-      {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      }
+      JSON.stringify({ error: 'Invalid AI service or model', errorCode: 'AIInvalidProperty' }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
     )
   }
 
   // AIサービスのインスタンス作成
   const getServiceInstance = aiServiceConfig[aiService as VercelAIService]
   if (!getServiceInstance) {
-    return new Response(
-      JSON.stringify({
-        error: 'Invalid AI service',
-        errorCode: 'InvalidAIService',
-      }),
-      {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      }
-    )
+    return new Response(JSON.stringify({ error: 'Invalid AI service', errorCode: 'InvalidAIService' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 
   try {
@@ -130,15 +95,15 @@ export default async function handler(req: NextRequest) {
     const serviceParams =
       aiService === 'azure'
         ? { resourceName: modifiedAzureEndpoint, apiKey: aiApiKey }
-        : isVercelLocalAIService(aiService)
+        : isVercelLocalAIService(aiService as any)
           ? { baseURL: localLlmUrl }
           : { apiKey: aiApiKey }
 
     // モデルインスタンスの作成
-    const modelInstance = getServiceInstance(serviceParams)
+    const modelInstance = getServiceInstance(serviceParams as any)
 
     // メッセージの修正
-    const modifiedMessages = modifyMessages(aiService, model, messages)
+    const modifiedMessages = modifyMessages(aiService as any, model as any, messages)
 
     // Google検索接地オプションの設定
     const isUseSearchGrounding =
@@ -158,27 +123,26 @@ export default async function handler(req: NextRequest) {
         useSearchGrounding: true,
         ...(dynamicRetrievalThreshold !== undefined &&
           modifiedModel &&
-          googleSearchGroundingModels.includes(
-            modifiedModel as (typeof googleSearchGroundingModels)[number]
-          ) && {
+          googleSearchGroundingModels.includes(modifiedModel as any) && {
             dynamicRetrievalConfig: {
               dynamicThreshold: dynamicRetrievalThreshold,
             },
           }),
       }
     } else if (isUseOpenAIWebSearch) {
-      // OpenAI web-search ツールの設定
       options = {
-        tools: [{ 
-          type: "web_search" as any,
-          user_location: {
-            type: "approximate",
-            country: "TW",
-            city: "Taipei",
-            region: "Taipei"
-          }
-        }],
-        include: ["web_search_call.action.sources"] as any,
+        tools: [
+          {
+            type: 'web_search' as any,
+            user_location: {
+              type: 'approximate',
+              country: 'TW',
+              city: 'Taipei',
+              region: 'Taipei',
+            },
+          },
+        ],
+        include: ['web_search_call.action.sources'] as any,
       }
     }
 
@@ -309,13 +273,10 @@ export default async function handler(req: NextRequest) {
       }
 
       const data = await resp.json()
-      return new Response(
-        JSON.stringify({ text: data.message?.content || '' }),
-        {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }
-      )
+      return new Response(JSON.stringify({ text: data.message?.content || '' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
     }
 
     // ========== LMStudio 用特別処理 ==========
@@ -430,8 +391,7 @@ export default async function handler(req: NextRequest) {
             index: 0,
             message: data.choices?.[0]?.message || {
               role: 'assistant',
-              content:
-                data.choices?.[0]?.message?.content || data.choices?.[0]?.text || '',
+              content: data.choices?.[0]?.message?.content || data.choices?.[0]?.text || '',
             },
             finish_reason: data.choices?.[0]?.finish_reason || 'stop',
           },
@@ -444,7 +404,7 @@ export default async function handler(req: NextRequest) {
       })
     }
 
-    // ========== 通常の処理 ==========
+    // ========== 通常の處理 ==========
     if (stream) {
       return await streamAiText({
         aiService,
@@ -471,16 +431,11 @@ export default async function handler(req: NextRequest) {
     }
   } catch (error) {
     console.error('Error in AI API call:', error)
-
-    return new Response(
-      JSON.stringify({
-        error: 'Unexpected Error',
-        errorCode: 'AIAPIError',
-      }),
-      {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      }
-    )
+    return new Response(JSON.stringify({ error: 'Unexpected Error', errorCode: 'AIAPIError' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    })
   }
 }
+
+

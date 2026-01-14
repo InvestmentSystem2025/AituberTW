@@ -17,7 +17,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { data, error } = await supa
     .from('interviews')
     .select(
-      'id, job_opening_id, start_time, end_time, status, profiles_id, candidate_email, created_at, review_type, interview_sessions(id, interview_transcript, ai_evaluations, duration_seconds, video_path, interview_result, total_score, result_reason, review_type, created_at)'
+      'id, job_opening_id, start_time, end_time, status, profiles_id, candidate_email, created_at, review_type, interview_sessions(id, interview_transcript, ai_evaluations, tokens_input, tokens_output, already_feedback, duration_seconds, video_path, interview_result, total_score, result_reason, review_type, created_at)'
     )
     .eq('company_id', company_id)
     .order('start_time', { ascending: false })

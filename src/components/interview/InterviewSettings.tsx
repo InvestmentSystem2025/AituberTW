@@ -24,11 +24,11 @@ export const InterviewSettings: React.FC<InterviewSettingsProps> = ({
   // 從 localStorage 讀取初始設定
   const [settings, setSettings] = useState<InterviewSettingsData>(() => {
     if (typeof window !== 'undefined') {
-      const enablePersonDetection = localStorage.getItem('interview_enablePersonDetection')
       const enableRecording = localStorage.getItem('interview_enableRecording')
       
       return {
-        enablePersonDetection: enablePersonDetection === 'true' || enablePersonDetection === null,
+        // 人員檢測為必須功能，固定啟用
+        enablePersonDetection: true,
         enableRecording: enableRecording === 'true',
       }
     }
@@ -64,31 +64,6 @@ export const InterviewSettings: React.FC<InterviewSettingsProps> = ({
 
           {/* 功能開關 */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-gray-700">
-                啟用人員檢測
-              </label>
-              <button
-                onClick={() =>
-                  setSettings((prev) => ({
-                    ...prev,
-                    enablePersonDetection: !prev.enablePersonDetection,
-                  }))
-                }
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  settings.enablePersonDetection ? 'bg-blue-500' : 'bg-gray-200'
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    settings.enablePersonDetection
-                      ? 'translate-x-6'
-                      : 'translate-x-1'
-                  }`}
-                />
-              </button>
-            </div>
-
             <div className="flex items-center justify-between">
               <div>
                 <label className="text-sm font-medium text-gray-700">

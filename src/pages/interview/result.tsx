@@ -155,6 +155,7 @@ export default function InterviewResultPage() {
       answers={[]}
       interviewResult={interviewResult}
       personalitySummary={personalitySummary}
+      interviewId={interviewId}
       onRestart={() => router.push('/interview')}
       onExit={() => router.push('/me?tab=interviews')}
     />

@@ -16,8 +16,8 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
   const [isInitialized, setIsInitialized] = useState(false)
   const [isDetecting, setIsDetecting] = useState(false)
   const [detectionStatus, setDetectionStatus] = useState<string>('初始化中...')
-  const [showStartPrompt, setShowStartPrompt] = useState(false)
   const [detectionStartTime, setDetectionStartTime] = useState<number | null>(null)
+  const [showStartPrompt, setShowStartPrompt] = useState(false)
 
   const faceDetectorRef = useRef<any>(null)
   const animationFrameIdRef = useRef<number | null>(null)
@@ -121,11 +121,12 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
         // 檢查是否已經檢測超過3秒
         const detectionDuration = currentTime - (detectionStartTime || currentTime)
         
+        // 檢測到人臉穩定 3 秒後顯示「開始面試」提示（保留畫面中央按鈕）
         if (detectionDuration >= 3000 && !showStartPrompt) {
           setShowStartPrompt(true)
           setDetectionStatus('已偵測到面試者，如您準備好請按下開始面試')
           setIsDetecting(false) // 停止檢測循環
-          // 不調用 onPersonDetected，等待手動開始
+          // 不調用 onPersonDetected，等待使用者按下開始面試
         }
 
         // 繪製檢測框
@@ -140,11 +141,7 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
           // 顯示檢測狀態
           ctx.fillStyle = '#00FF00'
           ctx.font = '20px Arial'
-          if (showStartPrompt) {
-            ctx.fillText('準備開始面試', 10, 30)
-          } else {
-            ctx.fillText('檢測中...', 10, 30)
-          }
+          ctx.fillText(showStartPrompt ? '準備開始面試' : '檢測中...', 10, 30)
         }
       } else {
         // 未檢測到人臉，重置計時
@@ -203,15 +200,15 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
     }
   }, [isDetecting, detectionLoop])
 
-  // 手動開始面試
+  // 手動開始面試（畫面中央按鈕）
   const handleStartInterview = useCallback(() => {
     setShowStartPrompt(false)
     setDetectionStartTime(null)
     setDetectionStatus('面試即將開始...')
-    
+
     // 先通知檢測到人員，觸發面試流程
     onPersonDetected(true, 1.0)
-    
+
     // 然後觸發面試開始的回調
     if (onStartInterview) {
       onStartInterview()
@@ -225,7 +222,7 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
         {detectionStatus}
       </div>
 
-      {/* 螢幕中央提示語 */}
+      {/* 螢幕中央提示語（保留） */}
       {showStartPrompt && (
         <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
           <div className="bg-black/80 text-white px-8 py-6 rounded-lg text-center max-w-md mx-4 pointer-events-auto">
@@ -253,30 +250,6 @@ export const PersonDetection: React.FC<PersonDetectionProps> = ({
           ref={canvasRef}
           className="absolute top-0 left-0 w-full h-full pointer-events-none"
         />
-      </div>
-
-      {/* 檢測控制按鈕 */}
-      <div className="absolute bottom-4 right-4 z-10 flex gap-2">
-        <button
-          onClick={() => setIsDetecting(!isDetecting)}
-          className={`px-4 py-2 rounded-lg text-white font-medium ${
-            isDetecting
-              ? 'bg-red-500 hover:bg-red-600'
-              : 'bg-green-500 hover:bg-green-600'
-          }`}
-        >
-          {isDetecting ? '停止檢測' : '開始檢測'}
-        </button>
-        
-        {/* 開始面試按鈕 - 只在顯示提示時出現 */}
-        {showStartPrompt && (
-          <button
-            onClick={handleStartInterview}
-            className="px-6 py-2 rounded-lg text-white font-medium bg-blue-500 hover:bg-blue-600"
-          >
-            開始面試
-          </button>
-        )}
       </div>
     </div>
   )

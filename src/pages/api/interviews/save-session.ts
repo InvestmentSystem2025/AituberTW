@@ -11,6 +11,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     interview_transcript, 
     ai_evaluations, 
     duration_seconds,
+    tokens_input,
+    tokens_output,
     video_path,
     is_cancelled_by_user,
   } = req.body || {}
@@ -77,6 +79,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (interview_transcript) sessionData.interview_transcript = interview_transcript
   if (ai_evaluations) sessionData.ai_evaluations = ai_evaluations
+
+  // token usage（可選；若前端/串流解析拿不到就不傳）
+  const ti = typeof tokens_input === 'string' ? Number(tokens_input) : tokens_input
+  const to = typeof tokens_output === 'string' ? Number(tokens_output) : tokens_output
+  if (Number.isFinite(ti) && ti >= 0) sessionData.tokens_input = Math.floor(ti)
+  if (Number.isFinite(to) && to >= 0) sessionData.tokens_output = Math.floor(to)
+
   if (video_path) sessionData.video_path = video_path
 
   // 若使用者提早結束，直接在 session 上標記結果與理由
