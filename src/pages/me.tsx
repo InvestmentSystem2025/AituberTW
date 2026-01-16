@@ -1,14 +1,54 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/router'
 import { supabase } from '@/lib/supabaseClient'
+import { GuidedOverlay } from '@/components/tutorial/GuidedOverlay'
 
 type TosResp = { accepted: boolean; version: string | null; accepted_at?: string }
+
+type RecruiterTutorialState = {
+  active: boolean
+  step: number
+  companyId?: string | null
+  startedAt?: string
+}
+
+const TUTORIAL_KEY = 'recruiter_tutorial_v1'
+
+function loadTutorialState(): RecruiterTutorialState | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(TUTORIAL_KEY)
+    if (!raw) return null
+    const obj = JSON.parse(raw)
+    if (!obj || typeof obj !== 'object') return null
+    if (typeof obj.step !== 'number') return null
+    return {
+      active: !!obj.active,
+      step: obj.step,
+      companyId: obj.companyId ?? null,
+      startedAt: typeof obj.startedAt === 'string' ? obj.startedAt : undefined,
+    }
+  } catch {
+    return null
+  }
+}
+
+function saveTutorialState(next: RecruiterTutorialState) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(TUTORIAL_KEY, JSON.stringify(next))
+}
+
+function clearTutorialState() {
+  if (typeof window === 'undefined') return
+  window.localStorage.removeItem(TUTORIAL_KEY)
+}
 
 export default function MePage() {
   const router = useRouter()
   const [email, setEmail] = useState('')
   const [profileId, setProfileId] = useState<string>('')
   const [userRole, setUserRole] = useState<'jobSeeker' | 'recruiter' | null>(null)
+  const [alreadyTeach, setAlreadyTeach] = useState<boolean | null>(null)
   const [preferredLanguage, setPreferredLanguage] = useState<'zh-TW' | 'en-US' | 'ja-JP'>('zh-TW')
   const [savingPreferredLanguage, setSavingPreferredLanguage] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -23,6 +63,7 @@ export default function MePage() {
   const [quotaInfo, setQuotaInfo] = useState<{ remaining: number; used_count: number; free_quota: number } | null>(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [tutorial, setTutorial] = useState<RecruiterTutorialState>({ active: false, step: 0, companyId: null })
   const [form, setForm] = useState({
     company_name: '',
     company_phone_number: '',
@@ -32,6 +73,7 @@ export default function MePage() {
   })
   const [editing, setEditing] = useState(false)
   const [editForm, setEditForm] = useState<any>({ id: '', company_name: '', company_phone_number: '', company_address: '', company_profile: '', ideal_candidate_profile: '' })
+  const tutorialHydratedStepRef = useRef<number | null>(null)
 
   const handleLogout = async () => {
     if (!confirm('確定要登出嗎？')) return
@@ -94,17 +136,25 @@ export default function MePage() {
   }, [activeTab, interviews])
 
   useEffect(() => {
-    const init = async () => {
-      const { data: session } = await supabase.auth.getSession()
-      const token = session.session?.access_token
-      setEmail(session.session?.user?.email || '')
+    let unsub: { unsubscribe: () => void } | null = null
+    let cancelled = false
+
+    const init = async (sessionOverride?: any) => {
+      if (cancelled) return
+      // 先讀 localStorage（可在 profile 尚未載入前就恢復教學狀態）
+      const saved = loadTutorialState()
+      if (saved?.active) setTutorial(saved)
+
+      const sess = sessionOverride ?? (await supabase.auth.getSession()).data.session
+      const token = sess?.access_token
+      setEmail(sess?.user?.email || '')
       
       // 獲取 profile ID 和 role
-      if (token && session.session?.user?.id) {
+      if (token && sess?.user?.id) {
         const { data: profile } = await supabase
           .from('profiles')
-          .select('id, role, preferred_language')
-          .eq('auth_id', session.session.user.id)
+          .select('id, role, preferred_language, already_teach')
+          .eq('auth_id', sess.user.id)
           .single()
         
         if (profile?.id) {
@@ -119,6 +169,11 @@ export default function MePage() {
           setPreferredLanguage(
             profile.preferred_language as 'zh-TW' | 'en-US' | 'ja-JP'
           )
+        }
+        if (typeof profile?.already_teach === 'boolean') {
+          setAlreadyTeach(profile.already_teach)
+        } else {
+          setAlreadyTeach(false)
         }
       }
       
@@ -169,8 +224,137 @@ export default function MePage() {
         }
       }
     }
+
+    // 先跑一次（有些情況下 session 還未同步，會在 auth state change 再補跑）
     init()
+
+    // MFA 完成跳轉回來時，session 可能晚一步才可用：訂閱 auth state 變化後重跑 init
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      // session 一旦到位就重跑，避免必須刷新才看到 recruiter 教學提示
+      if (session?.access_token) init(session)
+    })
+    unsub = data.subscription
+
+    return () => {
+      cancelled = true
+      try {
+        unsub?.unsubscribe()
+      } catch {
+        // ignore
+      }
+    }
   }, [router.isReady])
+
+  // recruiter 且未看過教學：如果不在教學流程中，就先顯示「準備開始」提示
+  useEffect(() => {
+    if (userRole !== 'recruiter') return
+    if (alreadyTeach !== false) return
+    const saved = loadTutorialState()
+    if (saved?.active) return
+    // 用 step=0 表示「準備開始」狀態（仍可刷新延續）
+    const next: RecruiterTutorialState = { active: true, step: 0, companyId: null, startedAt: new Date().toISOString() }
+    setTutorial(next)
+    saveTutorialState(next)
+  }, [userRole, alreadyTeach])
+
+  const closeTutorial = () => {
+    setTutorial({ active: false, step: 0, companyId: null })
+    clearTutorialState()
+  }
+
+  const advanceTutorial = (nextStep: number, patch?: Partial<RecruiterTutorialState>) => {
+    setTutorial((prev) => {
+      const next: RecruiterTutorialState = { ...prev, ...patch, active: true, step: nextStep }
+      saveTutorialState(next)
+      return next
+    })
+  }
+
+  const startTutorial = async () => {
+    if (!profileId) {
+      // 理論上不會發生；保險起見
+      advanceTutorial(1)
+      return
+    }
+    try {
+      const { error } = await supabase.from('profiles').update({ already_teach: true }).eq('id', profileId)
+      if (error) {
+        // 不阻擋教學啟動
+        console.warn('failed to update already_teach:', error.message)
+      } else {
+        setAlreadyTeach(true)
+      }
+    } catch {
+      // ignore
+    }
+    advanceTutorial(1)
+  }
+
+  const restartTutorial = () => {
+    const next: RecruiterTutorialState = { active: true, step: 0, companyId: null, startedAt: new Date().toISOString() }
+    setTutorial(next)
+    saveTutorialState(next)
+  }
+
+  const isTutorialActive = tutorial.active && tutorial.step > 0
+  const isTutorialPrompt = tutorial.active && tutorial.step === 0
+
+  const shouldPrefillCompanyForm = userRole === 'recruiter' && isTutorialActive && tutorial.step === 2
+  const prefillCompanyForm = () => {
+    setForm({
+      company_name: '範例：AITuber Inc.',
+      company_phone_number: '02-1234-5678',
+      company_address: '台北市中山區範例路 100 號',
+      company_profile: '我們是一家專注於 AI 面試與招募流程自動化的公司，致力於提升面試效率與品質。',
+      ideal_candidate_profile: '具備良好溝通能力、學習力與團隊合作精神，願意在快速迭代的環境中成長。',
+    })
+  }
+
+  // 教學狀態復原：重整/重啟後，依 step 把 UI 帶回「該 step 的標準起始狀態」
+  useEffect(() => {
+    if (userRole !== 'recruiter') return
+    if (!tutorial.active) return
+    if (tutorial.step < 1 || tutorial.step > 4) return
+
+    // 避免每次 render 都硬覆寫 UI；只在 step 第一次進入/從 storage 恢復時做一次
+    if (tutorialHydratedStepRef.current === tutorial.step) return
+    tutorialHydratedStepRef.current = tutorial.step
+
+    const empty = {
+      company_name: '',
+      company_phone_number: '',
+      company_address: '',
+      company_profile: '',
+      ideal_candidate_profile: '',
+    }
+
+    if (tutorial.step === 1) {
+      // step1：重點是「公司 tab」，保持在個人頁也可以；確保建立表單不會意外打開
+      setShowCreateForm(false)
+      setForm(empty)
+      return
+    }
+
+    // step2~4：都需要在公司 tab 才是正確起始狀態
+    setActiveTab('company')
+
+    if (tutorial.step === 2) {
+      setShowCreateForm(false)
+      setForm(empty)
+      return
+    }
+
+    if (tutorial.step === 3) {
+      setShowCreateForm(true)
+      prefillCompanyForm()
+      return
+    }
+
+    if (tutorial.step === 4) {
+      setShowCreateForm(false)
+      setForm(empty)
+    }
+  }, [tutorial.active, tutorial.step, userRole, prefillCompanyForm])
 
   const loadCompanies = async (token?: string) => {
     const r = await fetch('/api/company/list', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
@@ -322,9 +506,15 @@ export default function MePage() {
         }
         return
       }
+      const okJson = await r.json().catch(() => ({}))
+      const createdCompanyId = okJson?.company_id as string | undefined
       setShowCreateForm(false)
       setForm({ company_name: '', company_phone_number: '', company_address: '', company_profile: '', ideal_candidate_profile: '' })
       await loadCompanies(accessToken)
+      if (createdCompanyId && isTutorialActive && tutorial.step === 3) {
+        // 等公司清單載入/DOM render 後再進入 step4，避免目標連結尚未出現就被遮罩卡住
+        advanceTutorial(4, { companyId: createdCompanyId })
+      }
     } catch (err) {
       alert('建立失敗')
     } finally {
@@ -334,6 +524,105 @@ export default function MePage() {
 
   return (
     <div style={{ maxWidth: 980, margin: '36px auto', padding: 24 }}>
+      {/* 教學開始提示（step=0） */}
+      {userRole === 'recruiter' && isTutorialPrompt && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: 16,
+          }}
+          onClick={closeTutorial}
+        >
+          <div
+            style={{
+              width: 'min(620px, 92vw)',
+              background: '#fff',
+              borderRadius: 12,
+              padding: 20,
+              boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+              textAlign: 'center',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 10 }}>提示</div>
+            <div style={{ fontSize: 15, color: '#111827', lineHeight: 1.6 }}>
+              接下來將進行使用教學，準備好請按開始
+            </div>
+            <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                onClick={startTutorial}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #111827',
+                  background: '#111827',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                開始
+              </button>
+              <button
+                onClick={closeTutorial}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #d1d5db',
+                  background: '#fff',
+                  cursor: 'pointer',
+                }}
+              >
+                稍後再說
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 教學 overlay（step1~4） */}
+      {userRole === 'recruiter' && isTutorialActive && tutorial.step >= 1 && tutorial.step <= 4 && (
+        <GuidedOverlay
+          open
+          onClose={closeTutorial}
+          targetId={
+            tutorial.step === 1
+              ? 'me_company_tab'
+              : tutorial.step === 2
+                ? 'me_create_company_btn'
+                : tutorial.step === 3
+                  ? 'me_create_company_form'
+                  : tutorial.step === 4
+                    ? 'me_company_manage_link'
+                    : null
+          }
+          title="使用教學"
+          message={
+            tutorial.step === 1 ? (
+              <div>點擊公司標籤</div>
+            ) : tutorial.step === 2 ? (
+              <div>點擊建立公司</div>
+            ) : tutorial.step === 3 ? (
+              <div>完成輸入後點擊建立</div>
+            ) : (
+              <div>點擊公司管理</div>
+            )
+          }
+          actions={
+            // step1/2/3/4 都是事件驅動，不提供下一步
+            []
+          }
+        />
+      )}
+
       {centerNotice && (
         <div
           role="dialog"
@@ -419,7 +708,18 @@ export default function MePage() {
             </button>
           )}
           {userRole === 'recruiter' && (
-            <button onClick={() => setActiveTab('company')} style={{ padding: '8px 12px', borderBottom: activeTab === 'company' ? '2px solid #111' : '2px solid transparent' }}>公司</button>
+            <button
+              data-tutorial-id="me_company_tab"
+              onClick={() => {
+                setActiveTab('company')
+                if (isTutorialActive && tutorial.step === 1) {
+                  advanceTutorial(2)
+                }
+              }}
+              style={{ padding: '8px 12px', borderBottom: activeTab === 'company' ? '2px solid #111' : '2px solid transparent' }}
+            >
+              公司
+            </button>
           )}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
@@ -563,6 +863,23 @@ export default function MePage() {
               </div>
             </div>
           )}
+
+          {userRole === 'recruiter' && (
+            <div style={{ marginTop: 16 }}>
+              <button
+                onClick={restartTutorial}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: '1px solid #d1d5db',
+                  background: '#fff',
+                  cursor: 'pointer',
+                }}
+              >
+                重新開始使用教學
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -570,10 +887,27 @@ export default function MePage() {
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h2 style={{ fontSize: 18, fontWeight: 600 }}>公司</h2>
-            <button onClick={() => setShowCreateForm((v) => !v)} style={{ padding: '6px 10px' }}>{showCreateForm ? '關閉' : '建立公司'}</button>
+            <button
+              data-tutorial-id="me_create_company_btn"
+              onClick={() => {
+                setShowCreateForm((v) => !v)
+                if (isTutorialActive && tutorial.step === 2) {
+                  // 教學狀態：先預填範例，方便使用者建立
+                  prefillCompanyForm()
+                  advanceTutorial(3)
+                }
+              }}
+              style={{ padding: '6px 10px' }}
+            >
+              {showCreateForm ? '關閉' : '建立公司'}
+            </button>
           </div>
           {showCreateForm && (
-            <form onSubmit={onCreateCompany} style={{ marginTop: 12, padding: 16, border: '2px solid #000', borderRadius: 8, display: 'grid', gap: 10, background: '#e6f2ff' }}>
+            <form
+              data-tutorial-id="me_create_company_form"
+              onSubmit={onCreateCompany}
+              style={{ marginTop: 12, padding: 16, border: '2px solid #000', borderRadius: 8, display: 'grid', gap: 10, background: '#e6f2ff' }}
+            >
               <div style={{ display: 'grid', gap: 6 }}>
                 <label>
                   公司名稱（必填）
@@ -643,7 +977,24 @@ export default function MePage() {
                   <td style={{ borderBottom: '2px solid #000', padding: 8 }}>{c.company_address || '-'}</td>
                   <td style={{ borderBottom: '2px solid #000', padding: 8 }}>{c.company_phone_number || '-'}</td>
                   <td style={{ borderBottom: '2px solid #000', padding: 8 }}>
-                    <a href={`/company/${c.id}`} style={{ color: '#2563eb', marginRight: 8 }}>公司管理</a>
+                    <a
+                      data-tutorial-id={
+                        isTutorialActive && tutorial.step === 4 && tutorial.companyId && c.id === tutorial.companyId
+                          ? 'me_company_manage_link'
+                          : undefined
+                      }
+                      href={`/company/${c.id}`}
+                      style={{ color: '#2563eb', marginRight: 8 }}
+                      onClick={() => {
+                        if (isTutorialActive && tutorial.step === 4 && tutorial.companyId && c.id === tutorial.companyId) {
+                          // 下一段教學從 company 頁開始
+                          const next: RecruiterTutorialState = { active: true, step: 5, companyId: c.id, startedAt: tutorial.startedAt }
+                          saveTutorialState(next)
+                        }
+                      }}
+                    >
+                      公司管理
+                    </a>
                     <button onClick={() => startEdit(c)} style={{ marginRight: 6 }}>編輯</button>
                     <button onClick={() => onDeleteCompany(c.id)} style={{ color: '#b00000' }}>刪除</button>
                   </td>

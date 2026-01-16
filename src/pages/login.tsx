@@ -28,8 +28,9 @@ export default function LoginPage() {
 
         // MFA 未完成則強制導去設定頁（首次登入 gate）
         const mfaResp = await fetch('/api/me/mfa', { headers: { Authorization: `Bearer ${token}` } })
-        const mfaJson = await mfaResp.json()
-        if (mfaResp.ok && mfaJson && mfaJson.mfa_enabled === false) {
+        const mfaJson = await mfaResp.json().catch(() => ({} as any))
+        // 保守策略：只要不是「明確已完成 MFA」，就先去 /mfa/setup，避免落到 /me 再被 gate 轉跳
+        if (!mfaResp.ok || !mfaJson || mfaJson.mfa_enabled !== true) {
           window.location.href = '/mfa/setup'
           return
         }

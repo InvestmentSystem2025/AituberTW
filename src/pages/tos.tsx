@@ -89,7 +89,16 @@ export default function TosAndSignupPage() {
           const j = await claimResp.json().catch(() => ({}))
           throw new Error(j?.error || 'CLAIM_FAILED')
         }
-        window.location.href = '/me'
+        // 同意完成後：除非「明確已完成 MFA」，否則一律先去 /mfa/setup，避免先跳 /me 再被 gate 轉跳
+        try {
+          const mfaResp = await fetch('/api/me/mfa', { headers: { Authorization: `Bearer ${claimToken}` } })
+          const mfaJson = await mfaResp.json().catch(() => ({}))
+          const mfaEnabled = !!(mfaResp.ok && mfaJson && (mfaJson as any).mfa_enabled === true)
+          window.location.href = mfaEnabled ? '/me' : '/mfa/setup'
+        } catch {
+          // 保守：若判斷失敗，仍先去 /mfa/setup（避免先跳 /me）
+          window.location.href = '/mfa/setup'
+        }
         return
       }
 
@@ -143,7 +152,8 @@ export default function TosAndSignupPage() {
         const j = await claimResp.json().catch(() => ({}))
         throw new Error(j?.error || 'CLAIM_FAILED')
       }
-      window.location.href = '/me'
+      // 註冊完成後先導向 MFA 設定頁（/me 仍保留 gate 作為保險）
+      window.location.href = '/mfa/setup'
     } catch (err: any) {
       const code = String(err?.message || '')
       if (code === 'TOS_EXPIRED') {

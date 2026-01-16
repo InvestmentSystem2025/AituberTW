@@ -73,6 +73,8 @@ CREATE TABLE public.profiles (
   auth_id UUID UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT,
   role TEXT NOT NULL CHECK (role IN ('jobSeeker','recruiter')),
+  -- recruiter 新手教學：是否已看過使用教學
+  already_teach BOOLEAN NOT NULL DEFAULT false,
   -- Authenticator (TOTP) MFA：首次登入後必須完成設定才可進站（jobSeeker 也需完成才可開始面試/取得免費額度）
   mfa_totp_enabled_at TIMESTAMPTZ,
   -- TOTP secret（AES-256-GCM 加密後的密文），不可存明碼
@@ -89,6 +91,25 @@ CREATE TABLE public.profiles (
 -- 若已存在舊版 profiles 表，補上 preferred_language 欄位與限制條件
 DO $$
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'profiles'
+      AND column_name = 'already_teach'
+  ) THEN
+    ALTER TABLE public.profiles
+      ADD COLUMN already_teach BOOLEAN;
+
+    UPDATE public.profiles
+    SET already_teach = false
+    WHERE already_teach IS NULL;
+
+    ALTER TABLE public.profiles
+      ALTER COLUMN already_teach SET DEFAULT false,
+      ALTER COLUMN already_teach SET NOT NULL;
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1
     FROM information_schema.columns

@@ -3,6 +3,45 @@ import { useRouter } from 'next/router'
 import { supabase } from '@/lib/supabaseClient'
 import settingsStore from '@/features/stores/settings'
 import type { AIService } from '@/features/constants/settings'
+import { GuidedOverlay } from '@/components/tutorial/GuidedOverlay'
+
+type RecruiterTutorialState = {
+  active: boolean
+  step: number
+  companyId?: string | null
+  startedAt?: string
+}
+
+const TUTORIAL_KEY = 'recruiter_tutorial_v1'
+
+function loadTutorialState(): RecruiterTutorialState | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(TUTORIAL_KEY)
+    if (!raw) return null
+    const obj = JSON.parse(raw)
+    if (!obj || typeof obj !== 'object') return null
+    if (typeof obj.step !== 'number') return null
+    return {
+      active: !!obj.active,
+      step: obj.step,
+      companyId: obj.companyId ?? null,
+      startedAt: typeof obj.startedAt === 'string' ? obj.startedAt : undefined,
+    }
+  } catch {
+    return null
+  }
+}
+
+function saveTutorialState(next: RecruiterTutorialState) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(TUTORIAL_KEY, JSON.stringify(next))
+}
+
+function clearTutorialState() {
+  if (typeof window === 'undefined') return
+  window.localStorage.removeItem(TUTORIAL_KEY)
+}
 
 type Member = { profile_id: string; company_role: 'admin' | 'recruiter' | 'viewer'; email?: string }
 type AIInterviewer = { id: string; name: string; model_name: string; model_config?: any }
@@ -37,6 +76,8 @@ export default function CompanyAdminPage() {
   const companyId = String(router.query.id || '')
   const [token, setToken] = useState('')
   const [tab, setTab] = useState<'members' | 'ai' | 'jobs' | 'qbank' | 'joq' | 'interviews'>('members')
+  const [tutorial, setTutorial] = useState<RecruiterTutorialState>({ active: false, step: 0, companyId: null })
+  const tutorialHydratedStepRef = useRef<number | null>(null)
 
   // company info
   const [companyName, setCompanyName] = useState<string>('')
@@ -100,6 +141,7 @@ export default function CompanyAdminPage() {
     'communication': '溝通能力',
     'personal_attributes': '個人特質'
   }
+  const criteriaKeys = Object.keys(criteriaNames)
 
   const [newJob, setNewJob] = useState({ 
     job_title: '', 
@@ -109,7 +151,8 @@ export default function CompanyAdminPage() {
     evalPolicy: {
       overall_threshold: '',
       criteria_minimums: {} as Record<string, string>,
-      active_criteria: [] as string[]
+      // UI 改為「輸入框預設打開」：全部 criteria 都顯示可直接輸入；空值代表不啟用
+      active_criteria: Object.keys(criteriaNames) as string[]
     },
     customCriteria: [
       // 預設五項：統一改為綜合制（composite），避免扣分制一路扣到 0 分
@@ -128,7 +171,8 @@ export default function CompanyAdminPage() {
     evalPolicy: {
       overall_threshold: '',
       criteria_minimums: {} as Record<string, string>,
-      active_criteria: [] as string[]
+      // UI 改為「輸入框預設打開」
+      active_criteria: Object.keys(criteriaNames) as string[]
     },
     customCriteria: [] as Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction' | 'composite'; addition_rules: string; deduction_rules: string; id?: string }>
   })
@@ -152,6 +196,15 @@ export default function CompanyAdminPage() {
   const [editQB, setEditQB] = useState({ name: '', source: 'USER' as 'USER' | 'AI', questions: [] as string[] })
   const [editJOQ, setEditJOQ] = useState({ job_opening_id: '', question_bank_id: '', questions: [] as string[] })
   const [editIV, setEditIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'AI' as 'AI' | 'HUMAN' | 'MIXED' })
+
+  // Debug switch (works in dev/prod): localStorage.setItem('debugInterviewCollapse','1')
+  const shouldDebugInterviewCollapse = () => {
+    try {
+      return typeof window !== 'undefined' && window.localStorage?.getItem('debugInterviewCollapse') === '1'
+    } catch {
+      return false
+    }
+  }
 
   // helper: 將資料庫時間字串轉為 <input type="datetime-local"> 需要的本地時間格式（避免被轉成 UTC 提前 8 小時）
   const toLocalDatetimeInput = (value?: string | null): string => {
@@ -372,6 +425,7 @@ export default function CompanyAdminPage() {
         evaluation_policy
       }) 
     })
+    const createOk = r.ok
     
     if (r.status === 401 || r.status === 403) {
       await handleTokenRefresh()
@@ -414,7 +468,8 @@ export default function CompanyAdminPage() {
               key: customCriteria.key,
               display_name: customCriteria.display_name,
               weight: customCriteria.weight,
-              max_score: customCriteria.max_score,
+              // 自訂評估項目 max score 鎖死為 10
+              max_score: 10,
               scoring_logic: customCriteria.scoring_logic || 'deduction',
               // 綜合制：同時帶入加分與扣分規則
               addition_rules: (customCriteria.scoring_logic === 'addition' || customCriteria.scoring_logic === 'composite') ? additionRulesArray : null,
@@ -433,7 +488,8 @@ export default function CompanyAdminPage() {
               key: customCriteria.key,
               display_name: customCriteria.display_name,
               weight: customCriteria.weight,
-              max_score: customCriteria.max_score,
+              // 自訂評估項目 max score 鎖死為 10
+              max_score: 10,
               scoring_logic: customCriteria.scoring_logic || 'deduction',
               // 綜合制：同時帶入加分與扣分規則
               addition_rules: (customCriteria.scoring_logic === 'addition' || customCriteria.scoring_logic === 'composite') ? additionRulesArray : null,
@@ -467,7 +523,7 @@ export default function CompanyAdminPage() {
       evalPolicy: {
         overall_threshold: '',
         criteria_minimums: {},
-        active_criteria: []
+        active_criteria: Object.keys(criteriaNames)
       },
       customCriteria: [
         { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '答非所問-1.5分\n回答不完整或缺少關鍵資訊-1分', addition_rules: '切題且至少回答問題核心+0.5分\n提供具體例子/步驟/數據+1分' },
@@ -478,6 +534,10 @@ export default function CompanyAdminPage() {
       ]
     })
     await loadJobs(token)
+    // 教學 step6：建立完成一個職種後進到 step7（共用題庫）
+    if (isTutorialActive && tutorial.step === 6 && createOk && result?.job_opening_id) {
+      advanceTutorial(7)
+    }
   }
   const addQB = async (e: React.FormEvent) => {
     e.preventDefault(); 
@@ -556,7 +616,12 @@ export default function CompanyAdminPage() {
       await handleTokenRefresh()
       return
     }
-    
+
+    // 教學 step9：成功建立一個題庫後進到 step10（面試管理）
+    if (isTutorialActive && tutorial.step === 9 && r.ok) {
+      advanceTutorial(10)
+    }
+
     setNewJOQ({ job_opening_id: '', question_bank_id: '', questions: [], showForm: false })
     await loadJOQ(token)
   }
@@ -870,7 +935,8 @@ ${criteriaText}
           key: criteria.key,
           display_name: criteria.display_name,
           weight: criteria.weight,
-          max_score: criteria.max_score,
+          // 自訂評估項目 max score 鎖死為 10
+          max_score: 10,
           scoring_logic: criteria.scoring_logic,
           // 綜合制：同時帶入加分與扣分規則
           addition_rules: (criteria.scoring_logic === 'addition' || criteria.scoring_logic === 'composite') ? additionRulesArray : null,
@@ -1076,6 +1142,10 @@ ${criteriaText}
         })
       }
     }
+    // UI 改為「輸入框預設打開」：若既有資料未設定 per_criteria_minimums，仍預設顯示全部項目可直接輸入
+    if (!evalPolicy.active_criteria || evalPolicy.active_criteria.length === 0) {
+      evalPolicy.active_criteria = Object.keys(criteriaNames)
+    }
 
     // 載入 evaluation_criteria
     let customCriteria: Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction' | 'composite'; addition_rules: string; deduction_rules: string; id?: string }> = []
@@ -1096,7 +1166,8 @@ ${criteriaText}
             key: c.key,
             display_name: c.display_name,
             weight: c.weight,
-            max_score: c.max_score,
+            // 自訂評估項目 max score 鎖死為 10（即使資料庫不是 10，也統一視為 10）
+            max_score: 10,
             scoring_logic: c.scoring_logic || 'deduction',
             addition_rules: Array.isArray(c.addition_rules) ? c.addition_rules.join('\n') : (typeof c.addition_rules === 'string' ? c.addition_rules : ''),
             deduction_rules: Array.isArray(c.deduction_rules) ? c.deduction_rules.join('\n') : (typeof c.deduction_rules === 'string' ? c.deduction_rules : '')
@@ -1407,6 +1478,68 @@ ${criteriaText}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedIV, alreadyFeedbackByInterviewId, recruiterDraftPromptedByInterviewId])
 
+  // 「點展開中的 <li> 以外」自動收合：用 document capture，避免被 stopPropagation 或容器範圍影響
+  useEffect(() => {
+    if (tab !== 'interviews') return
+    if (!expandedIV) return
+
+    const onPointerDownCapture = (event: Event) => {
+      const target = event.target as HTMLElement | null
+      if (!target || !(target instanceof HTMLElement)) return
+
+      // 點擊「展開/收合詳情」按鈕時，交給按鈕自己的切換邏輯（避免重複提示/互相打架）
+      if (target.closest('[data-interview-toggle]')) {
+        if (shouldDebugInterviewCollapse()) {
+          // eslint-disable-next-line no-console
+          console.log('[company/interviews] skip: clicked toggle', { expandedIV })
+        }
+        return
+      }
+
+      // 以 <li data-interview-id="..."> 作為一個面試 session 的界線
+      const clickedLi = target.closest('li[data-interview-id]') as HTMLElement | null
+      const clickedInterviewId = clickedLi?.dataset?.interviewId ?? null
+
+      if (shouldDebugInterviewCollapse()) {
+        // eslint-disable-next-line no-console
+        console.log('[company/interviews] pointerdown(capture)', {
+          expandedIV,
+          clickedInterviewId,
+          sameLi: clickedInterviewId === expandedIV,
+          targetTag: target.tagName,
+          targetText: (target as any)?.textContent?.slice?.(0, 80),
+        })
+      }
+
+      // 點擊仍在展開中的那個 <li> 內 => 不收合
+      if (clickedInterviewId === expandedIV) return
+
+      const didNudge = maybeNudgeRecruiterFeedbackBeforeLeave(expandedIV, () => {
+        setExpandedIV(null)
+        setRecruiterFeedbackNudge({ open: false, interviewId: null })
+      })
+
+      if (shouldDebugInterviewCollapse()) {
+        // eslint-disable-next-line no-console
+        console.log('[company/interviews] collapse attempt', { expandedIV, didNudge })
+      }
+
+      if (didNudge) {
+        event.preventDefault?.()
+        event.stopPropagation?.()
+        return
+      }
+
+      setExpandedIV(null)
+      setRecruiterFeedbackNudge({ open: false, interviewId: null })
+    }
+
+    document.addEventListener('pointerdown', onPointerDownCapture, true)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDownCapture, true)
+    }
+  }, [tab, expandedIV])
+
   const requestTabChange = (nextTab: typeof tab) => {
     if (nextTab === tab) return
     if (expandedIV) {
@@ -1415,6 +1548,89 @@ ${criteriaText}
     }
     setTab(nextTab)
   }
+
+  // ================
+  // Recruiter 教學（step5~9）
+  // ================
+  const closeTutorial = () => {
+    setTutorial({ active: false, step: 0, companyId: null })
+    clearTutorialState()
+  }
+
+  const advanceTutorial = (nextStep: number, patch?: Partial<RecruiterTutorialState>) => {
+    setTutorial((prev) => {
+      const next: RecruiterTutorialState = { ...prev, ...patch, active: true, step: nextStep }
+      saveTutorialState(next)
+      return next
+    })
+  }
+
+  const isTutorialActive = tutorial.active && tutorial.step >= 5 && tutorial.step <= 10 && tutorial.companyId === companyId
+
+  useEffect(() => {
+    const saved = loadTutorialState()
+    // 只在對應 companyId 才啟動教學；若帶錯公司，直接清掉避免卡住
+    if (saved?.active && typeof saved.step === 'number' && saved.step >= 5) {
+      if (saved.companyId && String(saved.companyId) === companyId) {
+        setTutorial(saved)
+      } else if (saved.companyId && companyId) {
+        clearTutorialState()
+        setTutorial({ active: false, step: 0, companyId: null })
+      }
+    }
+  }, [companyId])
+
+  // 自動切 tab（依 step）
+  useEffect(() => {
+    if (!isTutorialActive) return
+    const desired: typeof tab =
+      tutorial.step === 5 ? 'members'
+      : tutorial.step === 6 ? 'jobs'
+      : tutorial.step === 7 ? 'qbank'
+      : tutorial.step === 8 ? 'joq'
+      : tutorial.step === 9 ? 'joq'
+      : 'interviews'
+    if (tab !== desired) requestTabChange(desired)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTutorialActive, tutorial.step])
+
+  // 教學狀態復原：重整/重啟後，依 step 把 UI 帶回「該 step 的標準起始狀態」
+  useEffect(() => {
+    if (!isTutorialActive) return
+    if (tutorialHydratedStepRef.current === tutorial.step) return
+    tutorialHydratedStepRef.current = tutorial.step
+
+    // 讓每個 step 回到乾淨起始狀態，避免停在某個已展開的 form 擋住流程
+    if (tutorial.step === 5) {
+      setNewQB((p) => ({ ...p, showForm: false, questions: [], name: '', source: 'USER' }))
+      setNewJOQ({ job_opening_id: '', question_bank_id: '', questions: [], showForm: false })
+      return
+    }
+    if (tutorial.step === 6) {
+      setNewQB((p) => ({ ...p, showForm: false, questions: [], name: '', source: 'USER' }))
+      setNewJOQ({ job_opening_id: '', question_bank_id: '', questions: [], showForm: false })
+      return
+    }
+    if (tutorial.step === 7) {
+      // 共用題庫介紹：起始狀態不需要展開新增表單
+      setNewQB((p) => ({ ...p, showForm: false, questions: [], name: '', source: 'USER' }))
+      setNewJOQ({ job_opening_id: '', question_bank_id: '', questions: [], showForm: false })
+      return
+    }
+    if (tutorial.step === 8) {
+      // 職種個別題庫介紹：要聚焦「+ 新增職種個別題庫」按鈕，所以確保表單是收合狀態
+      setNewJOQ({ job_opening_id: '', question_bank_id: '', questions: [], showForm: false })
+      return
+    }
+    if (tutorial.step === 9) {
+      // step9：聚焦輸入 form（確保表單是展開狀態）
+      setNewJOQ((prev) => ({ ...prev, showForm: true, questions: prev.questions?.length ? prev.questions : [''] }))
+      return
+    }
+    if (tutorial.step === 10) {
+      return
+    }
+  }, [isTutorialActive, tutorial.step])
 
   const formatInterviewStatus = (status?: Interview['status']) => {
     if (status === 'waitToStart') return '等待開始'
@@ -1457,12 +1673,71 @@ ${criteriaText}
     return reason
   }
 
-  const tabBtn = (k: typeof tab, label: string) => (
-    <button onClick={() => requestTabChange(k)} style={{ padding: '8px 12px', borderBottom: tab === k ? '2px solid #111' : '2px solid transparent' }}>{label}</button>
+  const tabBtn = (k: typeof tab, label: string, tutorialId?: string) => (
+    <button
+      data-tutorial-id={tutorialId}
+      onClick={() => requestTabChange(k)}
+      style={{ padding: '8px 12px', borderBottom: tab === k ? '2px solid #111' : '2px solid transparent' }}
+    >
+      {label}
+    </button>
   )
 
   return (
     <div style={{ maxWidth: 1100, margin: '36px auto', padding: 24 }}>
+      {isTutorialActive && (
+        <GuidedOverlay
+          open
+          onClose={closeTutorial}
+          targetId={
+            tutorial.step === 5
+              ? 'company_members_form'
+              : tutorial.step === 6
+                ? 'company_jobs_form'
+                : tutorial.step === 9
+                  ? 'company_joq_form'
+                  : null
+          }
+          targetIds={
+            tutorial.step === 7
+              ? ['company_qbank_tab']
+              : tutorial.step === 8
+                ? ['company_joq_tab', 'company_joq_add_btn']
+                : undefined
+          }
+          title="使用教學"
+          message={
+            tutorial.step === 5 ? (
+              <div>成員頁面可以新增公司招募人員以及單獨的閱覽權限人員(需先註冊)</div>
+            ) : tutorial.step === 6 ? (
+              <div>
+                在這邊新增要招募的職種，可設定平均及格線、單項及格線，新增評估項目以及評分規則。
+                <br />
+                請先建立一個職種以進行之後的使用說明。
+              </div>
+            ) : tutorial.step === 7 ? (
+              <div>共用題庫是每一個職種都會詢問面試者的問題，比如公司相關的問題。</div>
+            ) : tutorial.step === 8 ? (
+              <div>職種個別題庫是每個要招募的職種所對應的題庫，並可以選擇該職種是否使用共用題庫。<br/>請按下新增職種個別題庫</div>
+            ) : tutorial.step === 9 ? (
+              <div>選擇您要建立題庫的職種，再輸入您的問題，並建立一個題庫。</div>
+            ) : (
+              <div>
+                面試管理頁面用來管理面試日程以及檢視結果，評價方式若是人類評價，可在面試者完成面試後進行決定。使用說明到此為止。
+              </div>
+            )
+          }
+          actions={
+            tutorial.step === 5
+              ? [{ label: '下一步', variant: 'primary', onClick: () => advanceTutorial(6) }]
+              : tutorial.step === 7
+                ? [{ label: '下一步', variant: 'primary', onClick: () => advanceTutorial(8) }]
+                : tutorial.step === 10
+                  ? [{ label: '完成', variant: 'primary', onClick: closeTutorial }]
+                  : []
+          }
+        />
+      )}
       {recruiterFeedbackNudge.open && recruiterFeedbackNudge.interviewId && (
         <div
           role="dialog"
@@ -1473,6 +1748,7 @@ ${criteriaText}
             inset: 0,
             background: 'rgba(0,0,0,0.45)',
             display: 'flex',
+            top:'5px',
             alignItems: 'center',
             justifyContent: 'center',
             padding: 16,
@@ -1554,8 +1830,8 @@ ${criteriaText}
         {tabBtn('members', '成員')}
         {tabBtn('ai', 'AI面試官')}
         {tabBtn('jobs', '職種')}
-          {tabBtn('qbank', '共用題庫')}
-        {tabBtn('joq', '職種個別題庫')}
+          {tabBtn('qbank', '共用題庫', 'company_qbank_tab')}
+        {tabBtn('joq', '職種個別題庫', 'company_joq_tab')}
         {tabBtn('interviews', '面試管理')}
         </div>
         <button onClick={handleTokenRefresh} style={{ padding: '8px 16px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>
@@ -1565,7 +1841,11 @@ ${criteriaText}
 
       {tab === 'members' && (
         <div>
-          <form onSubmit={addMember} style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
+          <form
+            data-tutorial-id="company_members_form"
+            onSubmit={addMember}
+            style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}
+          >
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontWeight: 'bold' }}>成員 Email：</label>
               <input 
@@ -1693,7 +1973,11 @@ ${criteriaText}
 
       {tab === 'jobs' && (
         <div>
-          <form onSubmit={addJob} style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
+          <form
+            data-tutorial-id="company_jobs_form"
+            onSubmit={addJob}
+            style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}
+          >
             <input placeholder="職種名稱" value={newJob.job_title} onChange={(e) => setNewJob({ ...newJob, job_title: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
 
             <select value={newJob.result_notification_method} onChange={(e) => setNewJob({ ...newJob, result_notification_method: e.target.value as 'immediate' | 'later' })} style={{ padding: 8, border: '2px solid #000' }}>
@@ -1762,23 +2046,33 @@ ${criteriaText}
                         >
                           {criteriaNames[key]}
                         </button>
-                        {isActive && (
-                          <input
-                            type="number"
-                            min="0"
-                            max="100"
-                            placeholder={`例如：60`}
-                            value={newJob.evalPolicy.criteria_minimums[key] || ''}
-                            onChange={(e) => setNewJob({
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          placeholder={`例如：60（留空代表不啟用）`}
+                          value={newJob.evalPolicy.criteria_minimums[key] || ''}
+                          onChange={(e) => {
+                            const nextValue = e.target.value
+                            setNewJob({
                               ...newJob,
                               evalPolicy: {
                                 ...newJob.evalPolicy,
-                                criteria_minimums: { ...newJob.evalPolicy.criteria_minimums, [key]: e.target.value }
+                                // 直接輸入時自動視為啟用該項
+                                active_criteria: newJob.evalPolicy.active_criteria.includes(key)
+                                  ? newJob.evalPolicy.active_criteria
+                                  : [...newJob.evalPolicy.active_criteria, key],
+                                criteria_minimums: { ...newJob.evalPolicy.criteria_minimums, [key]: nextValue }
                               }
-                            })}
-                            style={{ padding: 6, border: '1px solid #ccc', borderRadius: 4 }}
-                          />
-                        )}
+                            })
+                          }}
+                          style={{
+                            padding: 6,
+                            border: '1px solid #ccc',
+                            borderRadius: 4,
+                            opacity: isActive ? 1 : 0.7
+                          }}
+                        />
                       </div>
                     )
                   })}
@@ -1858,12 +2152,8 @@ ${criteriaText}
                                 <input
                                   type="number"
                                   min="1"
-                                  value={criteria.max_score}
-                                  onChange={(e) => {
-                                    const updated = [...newJob.customCriteria]
-                                    updated[idx] = { ...criteria, max_score: parseInt(e.target.value) || 10 }
-                                    setNewJob({ ...newJob, customCriteria: updated })
-                                  }}
+                                  value={10}
+                                  disabled
                                   style={{ padding: 4, border: '1px solid #ccc', borderRadius: 2, width: '80px' }}
                                 />
                               </td>
@@ -2107,23 +2397,32 @@ ${criteriaText}
                                 >
                                   {criteriaNames[key]}
                                 </button>
-                                {isActive && (
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    max="100"
-                                    placeholder={`例如：60`}
-                                    value={editJob.evalPolicy.criteria_minimums[key] || ''}
-                                    onChange={(e) => setEditJob({
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  placeholder={`例如：60（留空代表不啟用）`}
+                                  value={editJob.evalPolicy.criteria_minimums[key] || ''}
+                                  onChange={(e) => {
+                                    const nextValue = e.target.value
+                                    setEditJob({
                                       ...editJob,
                                       evalPolicy: {
                                         ...editJob.evalPolicy,
-                                        criteria_minimums: { ...editJob.evalPolicy.criteria_minimums, [key]: e.target.value }
+                                        active_criteria: editJob.evalPolicy.active_criteria.includes(key)
+                                          ? editJob.evalPolicy.active_criteria
+                                          : [...editJob.evalPolicy.active_criteria, key],
+                                        criteria_minimums: { ...editJob.evalPolicy.criteria_minimums, [key]: nextValue }
                                       }
-                                    })}
-                                    style={{ padding: 6, border: '1px solid #ccc', borderRadius: 4 }}
-                                  />
-                                )}
+                                    })
+                                  }}
+                                  style={{
+                                    padding: 6,
+                                    border: '1px solid #ccc',
+                                    borderRadius: 4,
+                                    opacity: isActive ? 1 : 0.7
+                                  }}
+                                />
                               </div>
                             )
                           })}
@@ -2222,12 +2521,8 @@ ${criteriaText}
                                       <input
                                         type="number"
                                         min="1"
-                                        value={criteria.max_score}
-                                        onChange={(e) => {
-                                          const updated = [...editJob.customCriteria]
-                                          updated[idx] = { ...criteria, max_score: parseInt(e.target.value) || 10 }
-                                          setEditJob({ ...editJob, customCriteria: updated })
-                                        }}
+                                        value={10}
+                                        disabled
                                         style={{ padding: 4, border: '1px solid #ccc', borderRadius: 2, width: '80px' }}
                                       />
                                     </td>
@@ -2577,13 +2872,23 @@ ${criteriaText}
             <>
           {!newJOQ.showForm ? (
             <button 
-              onClick={() => setNewJOQ({ ...newJOQ, showForm: true, questions: [''] })} 
+              data-tutorial-id="company_joq_add_btn"
+              onClick={() => {
+                setNewJOQ({ ...newJOQ, showForm: true, questions: [''] })
+                if (isTutorialActive && tutorial.step === 8) {
+                  advanceTutorial(9)
+                }
+              }}
               style={{ padding: '10px 16px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', marginBottom: 12 }}
             >
               + 新增職種個別題庫
             </button>
           ) : (
-          <form onSubmit={addJOQ} style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
+          <form
+            data-tutorial-id="company_joq_form"
+            onSubmit={addJOQ}
+            style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}
+          >
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontWeight: 'bold' }}>選擇職種：</label>
               <select 
@@ -2853,11 +3158,17 @@ ${criteriaText}
             </div>
             <button type="submit" style={{ padding: '8px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4 }}>新增面試</button>
           </form>
-          <ul style={{ marginTop: 12 }}>
+          <ul 
+            style={{ marginTop: 12 }}
+          >
             {ivs.map((iv) => {
             const job = jobs.find(j => j.id === iv.job_opening_id)
             return (
-              <li key={iv.id} style={{ padding: 12, border: '2px solid #000', background: editingIV === iv.id ? '#fff9e6' : '#e6f2ff', borderRadius: 6, marginBottom: 8 }}>
+              <li 
+                key={iv.id} 
+                data-interview-id={iv.id}
+                style={{ padding: 12, border: '2px solid #000', background: editingIV === iv.id ? '#fff9e6' : '#e6f2ff', borderRadius: 6, marginBottom: 8 }}
+              >
                   {editingIV === iv.id ? (
                     <div style={{ display: 'grid', gap: 12 }}>
                       <div>
@@ -2964,6 +3275,7 @@ ${criteriaText}
                                   編輯
                                 </button>
                                 <button
+                                  data-interview-toggle
                                   onClick={() => {
                                     if (expandedIV === iv.id) {
                                       // 收合前：若尚未提交過回饋，提醒一次（非展開當下跳）
@@ -3049,6 +3361,11 @@ ${criteriaText}
 
                             {expandedIV === iv.id && (
                               <div
+                                data-interview-detail
+                                onClick={(e) => {
+                                  // 阻止事件冒泡，避免點擊詳情區域時觸發收合
+                                  e.stopPropagation()
+                                }}
                                 style={{
                                   marginTop: 12,
                                   padding: 12,
@@ -3164,6 +3481,80 @@ ${criteriaText}
                                                     <span>{t.aiFeedback}</span>
                                                   </div>
                                                 )}
+
+                                                {(() => {
+                                                  const scoreEvents = t.score_events
+                                                  if (!scoreEvents || typeof scoreEvents !== 'object') return null
+
+                                                  const additions = scoreEvents.additions
+                                                  const deductions = scoreEvents.deductions
+                                                  const hasAdditions = additions && typeof additions === 'object' && Object.keys(additions).length > 0
+                                                  const hasDeductions = deductions && typeof deductions === 'object' && Object.keys(deductions).length > 0
+
+                                                  if (!hasAdditions && !hasDeductions) return null
+
+                                                  return (
+                                                    <div style={{ marginBottom: 2, marginTop: 4 }}>
+                                                      {(hasAdditions || hasDeductions) && (
+                                                        <div style={{ fontWeight: 'bold', marginBottom: 4 }}>評分事件：</div>
+                                                      )}
+                                                      
+                                                      {hasAdditions && (
+                                                        <div style={{ marginBottom: 6 }}>
+                                                          <div style={{ fontWeight: 'bold', fontSize: '0.85em', marginBottom: 4, color: '#2e7d32' }}>加分項目：</div>
+                                                          <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.85em' }}>
+                                                            {Object.entries(additions).map(([key, items]) => {
+                                                              if (!Array.isArray(items) || items.length === 0) return null
+                                                              const criteriaName = criteriaDisplayNames[iv.job_opening_id]?.[key] || criteriaNames[key] || key
+                                                              return (
+                                                                <li key={key} style={{ marginBottom: 4 }}>
+                                                                  <div style={{ fontWeight: 'bold' }}>{criteriaName}：</div>
+                                                                  <ul style={{ margin: '2px 0 0 16px', padding: 0 }}>
+                                                                    {items.map((item: any, idx: number) => (
+                                                                      <li key={idx} style={{ marginBottom: 2 }}>
+                                                                        {item.detail || '（無說明）'}
+                                                                        {typeof item.points === 'number' && (
+                                                                          <span style={{ color: '#2e7d32', fontWeight: 'bold' }}> (+{item.points}分)</span>
+                                                                        )}
+                                                                      </li>
+                                                                    ))}
+                                                                  </ul>
+                                                                </li>
+                                                              )
+                                                            })}
+                                                          </ul>
+                                                        </div>
+                                                      )}
+
+                                                      {hasDeductions && (
+                                                        <div>
+                                                          <div style={{ fontWeight: 'bold', fontSize: '0.85em', marginBottom: 4, color: '#d32f2f' }}>扣分項目：</div>
+                                                          <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.85em' }}>
+                                                            {Object.entries(deductions).map(([key, items]) => {
+                                                              if (!Array.isArray(items) || items.length === 0) return null
+                                                              const criteriaName = criteriaDisplayNames[iv.job_opening_id]?.[key] || criteriaNames[key] || key
+                                                              return (
+                                                                <li key={key} style={{ marginBottom: 4 }}>
+                                                                  <div style={{ fontWeight: 'bold' }}>{criteriaName}：</div>
+                                                                  <ul style={{ margin: '2px 0 0 16px', padding: 0 }}>
+                                                                    {items.map((item: any, idx: number) => (
+                                                                      <li key={idx} style={{ marginBottom: 2 }}>
+                                                                        {item.detail || '（無說明）'}
+                                                                        {typeof item.points === 'number' && (
+                                                                          <span style={{ color: '#d32f2f', fontWeight: 'bold' }}> ({item.points}分)</span>
+                                                                        )}
+                                                                      </li>
+                                                                    ))}
+                                                                  </ul>
+                                                                </li>
+                                                              )
+                                                            })}
+                                                          </ul>
+                                                        </div>
+                                                      )}
+                                                    </div>
+                                                  )
+                                                })()}
 
                                                 {hasCurrentScores && (
                                                   <div style={{ marginBottom: 2 }}>

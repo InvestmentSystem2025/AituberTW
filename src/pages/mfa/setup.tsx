@@ -6,6 +6,10 @@ type EnrollResp =
   | { ok: true; otpauth_url?: string; secret_base32?: string; already_enabled?: boolean; expires_in_seconds?: number }
   | { ok: false; error: string; message?: string }
 
+const isEnrollOk = (x: unknown): x is Extract<EnrollResp, { ok: true }> => {
+  return !!x && typeof x === 'object' && (x as any).ok === true
+}
+
 export default function MfaSetupPage() {
   const [loading, setLoading] = useState(true)
   const [otpauthUrl, setOtpauthUrl] = useState<string>('')
@@ -34,13 +38,31 @@ export default function MfaSetupPage() {
           return
         }
 
-        const r = await fetch('/api/mfa/totp/enroll', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        const j = (await r.json()) as EnrollResp
-        if (!r.ok || !j.ok) {
-          setMessage((j as any)?.message || (j as any)?.error || '載入 MFA 設定失敗')
+        // 首次登入時 profiles 可能晚一步才建立，enroll 會回 PROFILE_NOT_FOUND
+        // 這裡做短暫重試，避免使用者卡住。
+        const maxAttempts = 10
+        const sleepMs = 400
+        let lastErr: any = null
+        let j: EnrollResp | null = null
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          const r = await fetch('/api/mfa/totp/enroll', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          j = (await r.json().catch(() => null)) as EnrollResp | null
+          if (r.ok && isEnrollOk(j)) {
+            lastErr = null
+            break
+          }
+          const errCode = (j as any)?.error
+          lastErr = errCode || (!r.ok ? `HTTP_${r.status}` : 'UNKNOWN')
+          if (errCode !== 'PROFILE_NOT_FOUND') break
+          if (attempt < maxAttempts) {
+            await new Promise((resolve) => setTimeout(resolve, sleepMs))
+          }
+        }
+        if (!isEnrollOk(j)) {
+          setMessage((j as any)?.message || (j as any)?.error || lastErr || '載入 MFA 設定失敗')
           return
         }
         if (j.already_enabled) {

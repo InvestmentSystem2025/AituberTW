@@ -970,7 +970,7 @@ const AdminFeedbackTab = () => {
                           </div>
 
                           {recruiterCriteriaBias && Object.keys(recruiterCriteriaBias).length > 0 && (
-                            <div>
+                            <div className="mb-3">
                               <div className="text-xs text-gray-500 mb-2">criteria_bias</div>
                               <div className="flex flex-wrap gap-2">
                                 {Object.entries(recruiterCriteriaBias).map(([k, v]) => (
@@ -984,6 +984,42 @@ const AdminFeedbackTab = () => {
                               </div>
                             </div>
                           )}
+
+                          {(() => {
+                            const reasonFlags = Array.isArray(payload?.reason_flags) ? payload.reason_flags : []
+                            const reasonFlagLabels: Record<string, string> = {
+                              'insufficient_evidence': '證據不足 / 解釋不清',
+                              'logic_issue': '邏輯或前後一致性問題',
+                              'risk_missed': '忽略風險 / 紅旗',
+                              'followup_inappropriate': '追問不適切 / 過度追問',
+                              'other': '其他',
+                            }
+                            const otherDetail = String(payload?.other_detail || '').trim()
+
+                            if (reasonFlags.length === 0) return null
+
+                            return (
+                              <div className="mb-3">
+                                <div className="text-xs text-gray-500 mb-2">問題原因（reason_flags）</div>
+                                <div className="flex flex-wrap gap-2">
+                                  {reasonFlags.map((flag: string) => (
+                                    <span
+                                      key={flag}
+                                      className="text-xs px-2 py-1 rounded-full bg-blue-100 border border-blue-300 text-blue-800"
+                                    >
+                                      {reasonFlagLabels[flag] || flag}
+                                    </span>
+                                  ))}
+                                </div>
+                                {otherDetail && (
+                                  <div className="mt-2 text-xs text-gray-700">
+                                    <span className="text-gray-500">其他說明：</span>
+                                    {otherDetail}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })()}
                         </>
                       )}
                     </div>
@@ -1027,6 +1063,189 @@ const AdminFeedbackTab = () => {
                         </table>
                       </div>
                     )}
+                  </div>
+
+                  <div className="bg-white border rounded-lg p-3">
+                    <div className="text-xs font-semibold text-gray-700 mb-2">面試詳細內容：</div>
+                    {(() => {
+                      const transcript = Array.isArray(session?.interview_transcript)
+                        ? session.interview_transcript
+                        : []
+                      
+                      if (transcript.length === 0) {
+                        return <div className="text-sm text-gray-400">尚無面試對話紀錄</div>
+                      }
+
+                      return (
+                        <div className="max-h-[260px] overflow-y-auto mt-2 p-2 border border-gray-200 bg-gray-50 rounded">
+                          {transcript.map((t: any, idx: number) => {
+                            const additionsDetail = String(t.additions_detail || '').trim()
+                            const deductionsDetail = String(t.deductions_detail || '').trim()
+                            const hasCurrentScores =
+                              t.current_scores &&
+                              typeof t.current_scores === 'object' &&
+                              Object.keys(t.current_scores).length > 0
+                            const hasPersonality = t.personality && typeof t.personality === 'object'
+
+                            return (
+                              <div
+                                key={idx}
+                                className={`mb-3 text-sm p-2 rounded border ${
+                                  t.role === 'ai' ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'
+                                }`}
+                              >
+                                <div className="mb-1">
+                                  <span className="font-semibold">
+                                    {t.role === 'ai' ? 'AI' : '候選人'}：
+                                  </span>
+                                  <span>{t.content}</span>
+                                </div>
+
+                                {t.aiFeedback && String(t.aiFeedback).trim() && (
+                                  <div className="mb-1">
+                                    <span className="font-semibold">AI 評語：</span>
+                                    <span>{t.aiFeedback}</span>
+                                  </div>
+                                )}
+
+                                {(() => {
+                                  const scoreEvents = t.score_events
+                                  if (!scoreEvents || typeof scoreEvents !== 'object') return null
+
+                                  const additions = scoreEvents.additions
+                                  const deductions = scoreEvents.deductions
+                                  const hasAdditions = additions && typeof additions === 'object' && Object.keys(additions).length > 0
+                                  const hasDeductions = deductions && typeof deductions === 'object' && Object.keys(deductions).length > 0
+
+                                  if (!hasAdditions && !hasDeductions) return null
+
+                                  return (
+                                    <div className="mb-1 mt-2">
+                                      {(hasAdditions || hasDeductions) && (
+                                        <div className="font-semibold mb-2">評分事件：</div>
+                                      )}
+                                      
+                                      {hasAdditions && (
+                                        <div className="mb-3">
+                                          <div className="font-semibold text-xs mb-1 text-green-700">加分項目：</div>
+                                          <ul className="ml-5 text-xs list-disc">
+                                            {Object.entries(additions).map(([key, items]) => {
+                                              if (!Array.isArray(items) || items.length === 0) return null
+                                              const criteriaName = formatEvalKey(key)
+                                              return (
+                                                <li key={key} className="mb-2">
+                                                  <div className="font-semibold">{criteriaName}：</div>
+                                                  <ul className="ml-4 mt-1 list-disc">
+                                                    {items.map((item: any, itemIdx: number) => (
+                                                      <li key={itemIdx} className="mb-1">
+                                                        {item.detail || '（無說明）'}
+                                                        {typeof item.points === 'number' && (
+                                                          <span className="text-green-700 font-semibold"> (+{item.points}分)</span>
+                                                        )}
+                                                      </li>
+                                                    ))}
+                                                  </ul>
+                                                </li>
+                                              )
+                                            })}
+                                          </ul>
+                                        </div>
+                                      )}
+
+                                      {hasDeductions && (
+                                        <div>
+                                          <div className="font-semibold text-xs mb-1 text-red-700">扣分項目：</div>
+                                          <ul className="ml-5 text-xs list-disc">
+                                            {Object.entries(deductions).map(([key, items]) => {
+                                              if (!Array.isArray(items) || items.length === 0) return null
+                                              const criteriaName = formatEvalKey(key)
+                                              return (
+                                                <li key={key} className="mb-2">
+                                                  <div className="font-semibold">{criteriaName}：</div>
+                                                  <ul className="ml-4 mt-1 list-disc">
+                                                    {items.map((item: any, itemIdx: number) => (
+                                                      <li key={itemIdx} className="mb-1">
+                                                        {item.detail || '（無說明）'}
+                                                        {typeof item.points === 'number' && (
+                                                          <span className="text-red-700 font-semibold"> ({item.points}分)</span>
+                                                        )}
+                                                      </li>
+                                                    ))}
+                                                  </ul>
+                                                </li>
+                                              )
+                                            })}
+                                          </ul>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
+                                })()}
+
+                                {hasCurrentScores && (
+                                  <div className="mb-1">
+                                    <span className="font-semibold">當前分數：</span>
+                                    <ul className="ml-4 mt-1 text-xs list-disc">
+                                      {Object.entries(t.current_scores).map(([key, value]) => (
+                                        <li key={key}>
+                                          {formatEvalKey(key)}：{String(value)}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+
+                                {additionsDetail && (
+                                  <div className="mb-1">
+                                    <span className="font-semibold">加分說明：</span>
+                                    <span>{additionsDetail}</span>
+                                  </div>
+                                )}
+
+                                {deductionsDetail && (
+                                  <div className="mb-1">
+                                    <span className="font-semibold">扣分說明：</span>
+                                    <span>{deductionsDetail}</span>
+                                  </div>
+                                )}
+
+                                {hasPersonality && (
+                                  <div className="mt-2">
+                                    <span className="font-semibold">人格分析：</span>
+                                    <div className="ml-3 text-xs">
+                                      {t.personality.summaryText && (
+                                        <div>總結：{t.personality.summaryText}</div>
+                                      )}
+                                      {t.personality.extraversion && (
+                                        <div>外向傾向：{t.personality.extraversion}</div>
+                                      )}
+                                      {t.personality.conscientiousness && (
+                                        <div>盡責程度：{t.personality.conscientiousness}</div>
+                                      )}
+                                      {t.personality.detail_attentiveness && (
+                                        <div>細心程度：{t.personality.detail_attentiveness}</div>
+                                      )}
+                                      {t.personality.proactivity && (
+                                        <div>主動性：{t.personality.proactivity}</div>
+                                      )}
+                                      {t.personality.learning_mindset && (
+                                        <div>學習與成長心態：{t.personality.learning_mindset}</div>
+                                      )}
+                                      {t.personality.stress_resilience && (
+                                        <div>抗壓與情緒穩定：{t.personality.stress_resilience}</div>
+                                      )}
+                                      {t.personality.collaboration && (
+                                        <div>合作與溝通方式：{t.personality.collaboration}</div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )
+                    })()}
                   </div>
 
                   <details className="bg-white border rounded-lg p-3">

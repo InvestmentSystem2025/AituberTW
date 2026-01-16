@@ -40,7 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       company(company_name),
       profiles(email, role),
       interviews(job_opening_id, start_time, status, candidate_email, profiles_id),
-      interview_sessions(interview_result, total_score, review_type, duration_seconds, video_path, result_reason, ai_evaluations, tokens_input, tokens_output)
+      interview_sessions(interview_result, total_score, review_type, duration_seconds, video_path, result_reason, ai_evaluations, tokens_input, tokens_output, interview_transcript)
     `
     )
     .eq('id', id)

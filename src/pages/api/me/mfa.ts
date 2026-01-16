@@ -16,7 +16,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     .eq('auth_id', authUserId)
     .maybeSingle()
 
-  if (error || !profile) return res.status(500).json({ error: 'PROFILE_NOT_FOUND' })
+  // 首次登入/剛驗證完 email 的瞬間，profiles 可能尚未同步建立。
+  // 這裡不要回 500（會讓前端誤以為可進 /me），而是保守視為「尚未完成 MFA」。
+  if (error || !profile) {
+    return res.status(200).json({ mfa_enabled: false })
+  }
 
   return res.status(200).json({
     mfa_enabled: !!profile.mfa_totp_enabled_at,

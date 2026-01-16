@@ -83,11 +83,16 @@ const ConfirmEmailPage = () => {
 
         // 如果 Supabase 回傳 session，代表已完成登入
         if (result.data?.session) {
-          setMessage('電子郵件已驗證，系統將自動帶您前往個人頁面。')
-          setCtaLabel('前往個人頁')
-          setCtaHref('/me')
+          const postLoginRedirect = normalizedType === 'signup' ? '/mfa/setup' : '/me'
+          setMessage(
+            normalizedType === 'signup'
+              ? '電子郵件已驗證，系統將自動帶您前往 MFA 設定。'
+              : '電子郵件已驗證，系統將自動帶您前往個人頁面。'
+          )
+          setCtaLabel(normalizedType === 'signup' ? '前往 MFA 設定' : '前往個人頁')
+          setCtaHref(postLoginRedirect)
           setStatus('success')
-          setTimeout(() => router.replace('/me'), 1800)
+          setTimeout(() => router.replace(postLoginRedirect), 1800)
         } else {
           setMessage('電子郵件已驗證，請登入帳號以繼續。')
           setStatus('success')
