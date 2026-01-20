@@ -7,6 +7,7 @@ type Resp =
 
 const MSG_MFA_REQUIRED = '開始面試前需要完成 Authenticator 認證。'
 const MSG_QUOTA_EXCEEDED = '免費使用次數已用完，請升級方案以繼續使用。'
+const MSG_INTERVIEW_NOT_STARTABLE = '此面試已無法開始（可能已完成/取消/超時）。'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -31,6 +32,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
     if (msg.includes('FREE_QUOTA_EXCEEDED')) {
       return res.status(403).json({ ok: false, error: 'FREE_QUOTA_EXCEEDED', message: MSG_QUOTA_EXCEEDED })
+    }
+    if (msg.includes('INTERVIEW_NOT_STARTABLE')) {
+      return res.status(403).json({ ok: false, error: 'INTERVIEW_NOT_STARTABLE', message: MSG_INTERVIEW_NOT_STARTABLE })
     }
     if (msg.includes('FORBIDDEN')) return res.status(403).json({ ok: false, error: 'FORBIDDEN' })
     if (msg.includes('PROFILE_NOT_FOUND')) return res.status(400).json({ ok: false, error: 'PROFILE_NOT_FOUND' })

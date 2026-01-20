@@ -61,6 +61,11 @@ export default function MePage() {
   const [accessToken, setAccessToken] = useState<string>('')
   const [centerNotice, setCenterNotice] = useState<string>('')
   const [quotaInfo, setQuotaInfo] = useState<{ remaining: number; used_count: number; free_quota: number } | null>(null)
+  const [startInterviewModal, setStartInterviewModal] = useState<{
+    open: boolean
+    interviewId: string | null
+  }>({ open: false, interviewId: null })
+  const [startingInterview, setStartingInterview] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [creating, setCreating] = useState(false)
   const [tutorial, setTutorial] = useState<RecruiterTutorialState>({ active: false, step: 0, companyId: null })
@@ -435,10 +440,62 @@ export default function MePage() {
         return
       }
 
-      markInterviewAsRead(interviewId)
-      window.location.href = `/interview?interview_id=${interviewId}`
+      setStartInterviewModal({ open: true, interviewId })
     }
     run()
+  }
+
+  const handleConfirmStartInterview = async () => {
+    const interviewId = startInterviewModal.interviewId
+    if (!interviewId || !accessToken || startingInterview) return
+    setStartingInterview(true)
+    try {
+      const startResp = await fetch('/api/interviews/start-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ interviews_id: interviewId }),
+      })
+      if (!startResp.ok) {
+        const err = await startResp.json().catch(() => ({}))
+        if (err?.error === 'MFA_REQUIRED') {
+          window.location.href = '/mfa/setup'
+          return
+        }
+        if (err?.error === 'FREE_QUOTA_EXCEEDED') {
+          setCenterNotice('免費使用次數已用完，若需要再次使用請參考月費方案。')
+          return
+        }
+        if (err?.error === 'INTERVIEW_NOT_STARTABLE') {
+          setCenterNotice('此面試已無法開始（可能已完成/取消/超時）。')
+          return
+        }
+        setCenterNotice(err?.message || '開始面試失敗，請稍後再試。')
+        return
+      }
+
+      // 同步剩餘次數（若後端有回傳 usage）
+      try {
+        const body = await startResp.json().catch(() => ({}))
+        const usage = body?.usage
+        if (usage && typeof usage.used_count === 'number' && typeof usage.free_quota === 'number') {
+          const remaining = Math.max(0, usage.free_quota - usage.used_count)
+          setQuotaInfo({ remaining, used_count: usage.used_count, free_quota: usage.free_quota })
+        }
+      } catch {
+        // ignore
+      }
+
+      setStartInterviewModal({ open: false, interviewId: null })
+      markInterviewAsRead(interviewId)
+      window.location.href = `/interview?interview_id=${interviewId}`
+    } finally {
+      setStartingInterview(false)
+    }
+  }
+
+  const handleCancelStartInterview = () => {
+    if (startingInterview) return
+    setStartInterviewModal({ open: false, interviewId: null })
   }
 
   const startEdit = (c: any) => {
@@ -1101,6 +1158,8 @@ export default function MePage() {
                       <div style={{ fontSize: 14, color: '#666', marginBottom: 4 }}>
                         狀態：{
                           iv.status === 'waitToStart' ? '等待開始' :
+                          iv.status === 'inProgress' ? '進行中' :
+                          iv.status === 'expired' ? '超時未繼續面試' :
                           iv.status === 'completed' ? '已完成' :
                           iv.status === 'lateButComplete' ? '延遲但完成' :
                           iv.status === 'noShow' ? '未出席' :
@@ -1110,6 +1169,30 @@ export default function MePage() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                      {iv.status === 'inProgress' && (
+                        <button
+                          onClick={() => {
+                            markInterviewAsRead(iv.id)
+                            window.location.href = `/interview?interview_id=${iv.id}`
+                          }}
+                          style={{
+                            padding: '8px 16px',
+                            background: '#1976D2',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: 4,
+                            cursor: 'pointer',
+                            fontWeight: 500
+                          }}
+                        >
+                          繼續面試
+                        </button>
+                      )}
+                      {iv.status === 'expired' && (
+                        <div style={{ fontSize: 14, color: '#d32f2f', padding: '8px 16px' }}>
+                          超時未繼續面試
+                        </div>
+                      )}
                       {canStart && iv.status === 'waitToStart' && (
                         <button
                           onClick={() => handleStartInterview(iv.id)}
@@ -1137,6 +1220,78 @@ export default function MePage() {
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {startInterviewModal.open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: 16,
+          }}
+          onClick={handleCancelStartInterview}
+        >
+          <div
+            style={{
+              width: 'min(620px, 92vw)',
+              background: '#fff',
+              borderRadius: 12,
+              padding: 20,
+              boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+              textAlign: 'center',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 10 }}>確認開始面試？</div>
+            <div style={{ fontSize: 15, color: '#111827', lineHeight: 1.7 }}>
+              開始面試將消耗 1 次免費使用次數（剩餘 {typeof quotaInfo?.remaining === 'number' ? quotaInfo.remaining : '—'} 次）
+              <br />
+              請確認在網路穩定的環境下再進行。
+            </div>
+            <div style={{ marginTop: 18, display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                onClick={handleCancelStartInterview}
+                disabled={startingInterview}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #111827',
+                  background: '#fff',
+                  cursor: startingInterview ? 'not-allowed' : 'pointer',
+                  fontWeight: 700,
+                  minWidth: 120,
+                  opacity: startingInterview ? 0.6 : 1,
+                }}
+              >
+                取消
+              </button>
+              <button
+                onClick={handleConfirmStartInterview}
+                disabled={startingInterview}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #111827',
+                  background: '#111827',
+                  color: '#fff',
+                  cursor: startingInterview ? 'not-allowed' : 'pointer',
+                  fontWeight: 800,
+                  minWidth: 120,
+                  opacity: startingInterview ? 0.8 : 1,
+                }}
+              >
+                {startingInterview ? '開始中…' : '確認開始'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

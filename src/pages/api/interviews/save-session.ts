@@ -9,12 +9,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { 
     interviews_id, 
     interview_transcript, 
+    progress_state,
     ai_evaluations, 
     duration_seconds,
     tokens_input,
     tokens_output,
     video_path,
     is_cancelled_by_user,
+    is_final,
   } = req.body || {}
   
   if (!interviews_id) return res.status(400).json({ error: 'MISSING_INTERVIEWS_ID' })
@@ -50,6 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const isCancelledByUser = !!is_cancelled_by_user
+  const isFinal = isCancelledByUser ? true : (is_final !== false)
 
   // 重要：save-session 不負責扣點；必須先呼叫 /api/interviews/start-session 建立 placeholder session。
   // 否則攻擊者可直接 upsert 繞過 quota。
@@ -69,6 +72,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     duration_seconds: duration_seconds || 0,
   }
 
+  // 以「最後一次互動」作為可續接/超時計算依據
+  // DB 端也會加 trigger 自動更新，但這裡顯式寫入可避免既有環境尚未套用 trigger 時 updated_at 不變。
+  sessionData.updated_at = new Date().toISOString()
+
   // 根據面試設定決定 review_type，預設為 AI
   const baseReviewType = (interview as any).review_type as 'AI' | 'HUMAN' | 'MIXED' | null
   if (baseReviewType && ['AI', 'HUMAN', 'MIXED'].includes(baseReviewType)) {
@@ -78,6 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (interview_transcript) sessionData.interview_transcript = interview_transcript
+  if (progress_state) sessionData.progress_state = progress_state
   if (ai_evaluations) sessionData.ai_evaluations = ai_evaluations
 
   // token usage（可選；若前端/串流解析拿不到就不傳）
@@ -88,8 +96,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (video_path) sessionData.video_path = video_path
 
-  // 若使用者提早結束，直接在 session 上標記結果與理由
-  if (isCancelledByUser) {
+  // 若使用者提早結束（或結算），在 session 上標記結果與理由
+  if (isFinal && isCancelledByUser) {
     sessionData.interview_result = 'cancelByUser'
     sessionData.result_reason = 'cancelled_by_user'
   }
@@ -107,10 +115,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'SAVE_SESSION_FAILED', details: error.message })
   }
 
-  // 如果提供了ai_evaluations，且不是「使用者提早結束」，才調用評價函數計算總分
+  // 進度保存（非結算）：只回傳 session，不更新 interviews 狀態、不計分
+  if (!isFinal) {
+    return res.status(200).json({ ok: true, session })
+  }
+
+  // 結算：如果提供了ai_evaluations，且不是「使用者提早結束」，才調用評價函數計算總分
   if (!isCancelledByUser && ai_evaluations && Array.isArray(ai_evaluations) && ai_evaluations.length > 0) {
     try {
-      const { data: evalResult, error: evalError } = await supa.rpc('evaluate_interview_total', {
+      const { error: evalError } = await supa.rpc('evaluate_interview_total', {
         p_interviews_id: interviews_id
       })
       
@@ -129,6 +142,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .update({ status: isCancelledByUser ? 'cancelled' : 'completed' })
     .eq('id', interviews_id)
 
-  return res.status(200).json({ ok: true, session })
+  // 重要：evaluate_interview_total 會更新 interview_sessions.total_score / interview_result / result_reason
+  // 所以結算後需要重新抓一次，避免 response 回傳的是「更新前」的 session 內容。
+  const { data: freshSession, error: freshErr } = await supa
+    .from('interview_sessions')
+    .select('*')
+    .eq('interviews_id', interviews_id)
+    .maybeSingle()
+
+  if (freshErr) {
+    // 不致命：至少回傳已更新的 session（但可能缺少 total_score 等）
+    console.error('Fetch fresh session error:', freshErr)
+    return res.status(200).json({ ok: true, session })
+  }
+
+  return res.status(200).json({ ok: true, session: freshSession || session })
 }
 

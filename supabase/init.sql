@@ -62,7 +62,7 @@ ON CONFLICT (id) DO NOTHING;
 
 -- ENUM 型別
 CREATE TYPE public.result_notification_method_type AS ENUM ('immediate','later');
-CREATE TYPE public.interview_status_type           AS ENUM ('waitToStart','completed','lateButComplete','noShow','cancelled');
+CREATE TYPE public.interview_status_type           AS ENUM ('waitToStart','inProgress','completed','lateButComplete','noShow','cancelled','expired');
 CREATE TYPE public.review_type_type                AS ENUM ('AI','HUMAN','MIXED');
 CREATE TYPE public.interview_result_type           AS ENUM ('hired','rejected','onHold','cancelByUser');
 CREATE TYPE public.question_source_type            AS ENUM ('AI','USER');
@@ -363,6 +363,7 @@ CREATE TABLE public.interview_sessions (
   company_id UUID NOT NULL REFERENCES public.company(id) ON DELETE CASCADE,
   interviews_id UUID NOT NULL REFERENCES public.interviews(id) ON DELETE CASCADE,
   interview_transcript JSONB,
+  progress_state JSONB,
   ai_evaluations JSONB,
   tokens_input INT,
   tokens_output INT,
@@ -374,6 +375,7 @@ CREATE TABLE public.interview_sessions (
   result_reason TEXT,
   review_type public.review_type_type NOT NULL DEFAULT 'AI',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (interviews_id),
   CONSTRAINT interview_sessions_total_score_chk CHECK (
     total_score IS NULL OR (total_score >= 0 AND total_score <= 100)
@@ -439,6 +441,13 @@ BEFORE UPDATE ON public.interview_session_feedback
 FOR EACH ROW
 EXECUTE FUNCTION public.fn_set_updated_at();
 
+-- interview_sessions.updated_at 自動更新（最後互動時間用）
+DROP TRIGGER IF EXISTS trg_interview_sessions_set_updated_at ON public.interview_sessions;
+CREATE TRIGGER trg_interview_sessions_set_updated_at
+BEFORE UPDATE ON public.interview_sessions
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_set_updated_at();
+
 -- Functions & Triggers
 
 -- interviews.candidate_email を常に小文字化
@@ -469,10 +478,10 @@ BEGIN
   INSERT INTO public.evaluation_criteria
     (company_id, job_opening_id, key, display_name, weight, max_score, scoring_logic, deduction_rules, addition_rules, sort_order)
   VALUES
-    (NEW.company_id, NEW.id, 'content_integrity',   '內容完整性',   0.20, 10, 'deduction', '["答非所問-2分", "回答不完整-1分"]'::jsonb, NULL, 1),
-    (NEW.company_id, NEW.id, 'logical_clarity',     '邏輯清晰度',   0.20, 10, 'deduction', '["條理不清-2分", "邏輯錯誤-1分"]'::jsonb, NULL, 2),
+    (NEW.company_id, NEW.id, 'content_integrity',   '內容完整性',   0.20, 10, 'composite', '["答非所問-2分", "回答不完整-1分"]'::jsonb, '["切題且至少回答問題核心+0.5分", "提供具體例子/步驟/數據+1分"]'::jsonb, 1),
+    (NEW.company_id, NEW.id, 'logical_clarity',     '邏輯清晰度',   0.20, 10, 'composite', '["條理不清-2分", "邏輯錯誤-1分"]'::jsonb, '["回答有結構（先結論後理由）+1分", "前後一致、因果清楚+1.5分"]'::jsonb, 2),
     (NEW.company_id, NEW.id, 'professional_depth',  '專業深度',     0.20, 10, 'composite',  '["專業知識明顯錯誤-2分", "無法舉出實務案例-1分", "只背誦定義缺乏深入思考-1分"]'::jsonb, '["正確回答專業問題+2.5分", "展現深度理解+1分"]'::jsonb, 3),
-    (NEW.company_id, NEW.id, 'communication',       '溝通表達',     0.20, 10, 'deduction', '["表達不清晰-1分", "表達不流暢-1分"]'::jsonb, NULL, 4),
+    (NEW.company_id, NEW.id, 'communication',       '溝通表達',     0.20, 10, 'composite', '["表達不清晰-1分", "表達不流暢-1分"]'::jsonb, '["表達清楚、重點明確+0.5分", "主動釐清前提/確認需求/條列化表達+1分"]'::jsonb, 4),
     (NEW.company_id, NEW.id, 'personal_attributes', '個人特質',     0.20, 10, 'composite',  '["缺乏企圖心與主動性-2分", "對學習成長明顯消極-1分", "團隊合作態度不佳-2分", "抗壓與面對挫折態度消極-1分"]'::jsonb, '["向上心求知慾+2.5分", "持續學習+2.5分", "活潑外向+2.5分", "堅強抗壓+2.5分"]'::jsonb, 5);
   RETURN NEW;
 END;
@@ -1264,6 +1273,16 @@ BEGIN
     RAISE EXCEPTION 'INTERVIEW_NOT_FOUND';
   END IF;
 
+  -- Gate: 已完成/取消/未出席/超時 的面試不可再開始
+  IF v_interview.status IN (
+    'completed'::public.interview_status_type,
+    'cancelled'::public.interview_status_type,
+    'noShow'::public.interview_status_type,
+    'expired'::public.interview_status_type
+  ) THEN
+    RAISE EXCEPTION 'INTERVIEW_NOT_STARTABLE';
+  END IF;
+
   -- Authorization: jobSeeker 只能開始自己的面試（profiles_id 或 candidate_email 匹配）
   IF v_profile.role = 'jobSeeker' THEN
     v_email := lower(coalesce(v_profile.email, ''));
@@ -1290,6 +1309,18 @@ BEGIN
   LIMIT 1;
 
   IF FOUND THEN
+    -- 若 interview 仍停在 waitToStart，代表前端先前未成功寫狀態；補寫成 inProgress
+    IF v_interview.status = 'waitToStart'::public.interview_status_type THEN
+      UPDATE public.interviews
+      SET status = 'inProgress'::public.interview_status_type,
+          claimed_at = now()
+      WHERE id = p_interviews_id;
+    ELSIF v_interview.status = 'inProgress'::public.interview_status_type AND v_interview.claimed_at IS NULL THEN
+      UPDATE public.interviews
+      SET claimed_at = now()
+      WHERE id = p_interviews_id;
+    END IF;
+
     -- 若 usage 不存在，補建（保險）
     IF v_profile.role = 'jobSeeker' THEN
       INSERT INTO public.job_seeker_usage(profile_id, used_count, free_quota, updated_at)
@@ -1353,6 +1384,13 @@ BEGIN
     v_did_increment := true;
     SELECT * INTO v_usage FROM public.job_seeker_usage WHERE profile_id = v_profile.id LIMIT 1;
   END IF;
+
+  -- 面試開始：寫入 inProgress + claimed_at（避免 /me 需要等下一次更新才顯示「繼續面試」）
+  UPDATE public.interviews
+  SET status = 'inProgress'::public.interview_status_type,
+      claimed_at = COALESCE(claimed_at, now())
+  WHERE id = p_interviews_id
+    AND status = 'waitToStart'::public.interview_status_type;
 
   RETURN jsonb_build_object(
     'ok', true,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/router'
 import { useTranslation } from 'react-i18next'
 import { Form } from '@/components/form'
@@ -62,6 +62,10 @@ const Interview = () => {
 
   // 面試流程管理
   const interviewFlow = useInterviewFlow()
+  const interviewFlowRef = useRef(interviewFlow)
+  useEffect(() => {
+    interviewFlowRef.current = interviewFlow
+  }, [interviewFlow])
   
   // 履歷資料狀態
   const [resumeData, setResumeData] = useState<{
@@ -77,6 +81,7 @@ const Interview = () => {
   // Interview配置狀態
   const [interviewConfig, setInterviewConfig] = useState<InterviewConfig | null>(null)
   const [loadingConfig, setLoadingConfig] = useState(false)
+  const [restoredSession, setRestoredSession] = useState<any | null>(null)
 
   // 使用者偏好面試語言（來自 profiles.preferred_language）
   const [preferredInterviewLanguage, setPreferredInterviewLanguage] = useState<'zh-TW' | 'en-US' | 'ja-JP'>('zh-TW')
@@ -168,7 +173,31 @@ const Interview = () => {
             window.location.href = '/me?tab=interviews'
             return
           }
+          if (err?.error === 'INTERVIEW_NOT_STARTABLE') {
+            window.location.href = '/me?tab=interviews'
+            return
+          }
           return
+        }
+
+        // 1.6) 重連/續接：讀取 session，若有進度則直接切到 interviewing
+        try {
+          const sessResp = await fetch(`/api/interviews/get-session?interview_id=${encodeURIComponent(interview_id)}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          if (sessResp.ok) {
+            const sj = await sessResp.json().catch(() => ({}))
+            const s = sj?.session || null
+            setRestoredSession(s)
+            const hasResumeData =
+              !!s?.progress_state ||
+              (Array.isArray(s?.interview_transcript) && s.interview_transcript.length > 0)
+            if (hasResumeData) {
+              interviewFlowRef.current.startInterviewManually()
+            }
+          }
+        } catch {
+          // ignore
         }
 
         setInterviewConfig(data)
@@ -368,6 +397,7 @@ const Interview = () => {
             initialGreeting={resumeData.aiGreeting || undefined}
             interviewConfig={interviewConfig}
             interviewId={typeof interview_id === 'string' ? interview_id : undefined}
+            restoredSession={restoredSession}
             resultNotificationMethod={
               (interviewConfig?.interview?.job_opening?.result_notification_method as 'immediate' | 'later' | undefined) || 'immediate'
             }

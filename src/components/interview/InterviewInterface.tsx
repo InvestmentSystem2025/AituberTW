@@ -55,6 +55,10 @@ interface InterviewInterfaceProps {
   resultNotificationMethod?: 'immediate' | 'later'
    // 使用者偏好面試語言（來自 profiles.preferred_language，例如 zh-TW / en-US / ja-JP）
   preferredLanguage?: string
+  restoredSession?: {
+    interview_transcript?: any
+    progress_state?: any
+  } | null
 }
 
 export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
@@ -65,6 +69,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   interviewId,
   resultNotificationMethod = 'immediate',
   preferredLanguage = 'zh-TW',
+  restoredSession = null,
 }) => {
   const DEBUG_INTERVIEW = process.env.NEXT_PUBLIC_DEBUG_INTERVIEW === '1'
   const modelType = settingsStore((s) => s.modelType)
@@ -75,12 +80,24 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   const [isWaitingForAnswer, setIsWaitingForAnswer] = useState(false)
   const [isAIResponding, setIsAIResponding] = useState(false)
   const [interviewCompletionStatus, setInterviewCompletionStatus] = useState<'incomplete' | 'complete'>('incomplete')
+  const [finalizing, setFinalizing] = useState(false)
+  const [finalSaveCompleted, setFinalSaveCompleted] = useState(false)
+  const [showEarlyEndModal, setShowEarlyEndModal] = useState(false)
+  const [finalSaveError, setFinalSaveError] = useState<string | null>(null)
+  const finalSaveInFlightRef = useRef(false)
   const [interviewLanguage, setInterviewLanguage] = useState(preferredLanguage) // 面試專用語言設定
   const [showLocalVideo, setShowLocalVideo] = useState(true)
   const videoRef = useRef<HTMLVideoElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const isInitializedRef = useRef(false)
   const greetingShownRef = useRef(false)
+  const hasRestoredRef = useRef(false)
+  const resumePendingAiRef = useRef<{ for_message_id: string; answer: string; at?: string } | null>(null)
+  const resumeTriggeredRef = useRef(false)
+  // 避免同一題被重複送出（例如：按鈕/Enter/語音在同一個 event loop 內連續觸發）
+  const turnLockRef = useRef(false)
+  // 面試結束時，用於把「最後一輪」的完整 transcript（含 aiFeedback）交給 final save，避免 state 尚未 flush 造成錯位
+  const finalTranscriptSnapshotRef = useRef<ChatMessage[] | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null) // 保存攝像機 stream 引用
   
   // 針對首句問候語做內容淨化，避免模型產生不友善/不合語境的句子
@@ -99,6 +116,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   
   // 初始化時顯示預先生成的問候語
   useEffect(() => {
+    if (hasRestoredRef.current) return
     if (initialGreeting && messages.length === 0 && !greetingShownRef.current) {
       const greetingMessage: ChatMessage = {
         id: `ai-${Date.now()}`,
@@ -115,6 +133,34 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   useEffect(() => {
     messagesRef.current = messages
   }, [messages])
+
+  const parseTranscriptToMessages = useCallback((raw: any): ChatMessage[] => {
+    if (!Array.isArray(raw)) return []
+    const out: ChatMessage[] = []
+    for (const t of raw) {
+      const type = t?.role === 'ai' || t?.role === 'user' ? t.role : (t?.type === 'ai' || t?.type === 'user' ? t.type : null)
+      const content = typeof t?.content === 'string' ? t.content : ''
+      if (!type || !content) continue
+      const ts = typeof t?.timestamp === 'string' ? new Date(t.timestamp) : new Date()
+      out.push({
+        id: typeof t?.id === 'string' ? t.id : `${type}-${out.length}-${ts.getTime()}`,
+        type,
+        content,
+        timestamp: Number.isFinite(ts.getTime()) ? ts : new Date(),
+        aiFeedback: typeof t?.aiFeedback === 'string' ? t.aiFeedback : (typeof t?.aiFeedback === 'string' ? t.aiFeedback : undefined),
+        aiAdditionsDetail: typeof t?.additions_detail === 'string' ? t.additions_detail : (typeof t?.aiAdditionsDetail === 'string' ? t.aiAdditionsDetail : undefined),
+        aiDeductionsDetail: typeof t?.deductions_detail === 'string' ? t.deductions_detail : (typeof t?.aiDeductionsDetail === 'string' ? t.aiDeductionsDetail : undefined),
+        aiScoreDeltas: t?.score_deltas && typeof t.score_deltas === 'object' ? t.score_deltas : (t?.aiScoreDeltas && typeof t.aiScoreDeltas === 'object' ? t.aiScoreDeltas : undefined),
+        aiScoreEvents: t?.score_events && typeof t.score_events === 'object' ? t.score_events : (t?.aiScoreEvents && typeof t.aiScoreEvents === 'object' ? t.aiScoreEvents : undefined),
+        aiCurrentScores: t?.current_scores && typeof t.current_scores === 'object' ? t.current_scores : (t?.aiCurrentScores && typeof t.aiCurrentScores === 'object' ? t.aiCurrentScores : undefined),
+        personality: t?.personality ?? undefined,
+      })
+    }
+    return out
+  }, [])
+
+  // 若 session 有進度，初始化時先還原（避免誤走「從頭開始」流程）
+  // 注意：此 effect 需要用到 scoringEngine，因此必須放在 scoringEngine 宣告之後（否則 TS 會報「宣告前使用」）。
 
   // 從配置中獲取問題，如果沒有則使用默認問題
   const interviewQuestions = interviewConfig?.questions || []
@@ -215,6 +261,79 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     return new InterviewScoringEngine(DEFAULT_SCORING_CRITERIA)
   })
 
+  // 若 session 有進度，初始化時先還原（避免誤走「從頭開始」流程）
+  useEffect(() => {
+    if (hasRestoredRef.current) return
+    if (!restoredSession) return
+    const rawProgress = restoredSession.progress_state
+    const rawTranscript = restoredSession.interview_transcript
+    const hasAny =
+      !!rawProgress ||
+      (Array.isArray(rawTranscript) && rawTranscript.length > 0)
+    if (!hasAny) return
+
+    hasRestoredRef.current = true
+    greetingShownRef.current = true
+
+    // 1) 還原對話
+    const restoredMessages = parseTranscriptToMessages(rawTranscript)
+    if (restoredMessages.length > 0) {
+      setMessages(restoredMessages)
+      // 將滾動推到底（等 DOM render）
+      setTimeout(() => {
+        try {
+          if (chatContainerRef.current) chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight
+        } catch {}
+      }, 50)
+    }
+
+    // 2) 還原進度（精準續接）
+    if (rawProgress && typeof rawProgress === 'object') {
+      const v = (rawProgress as any).v
+      if (v === 1) {
+        const p = rawProgress as any
+        if (typeof p.currentQuestionIndex === 'number') setCurrentQuestionIndex(p.currentQuestionIndex)
+        if (typeof p.currentQuestionId === 'string') setCurrentQuestionId(p.currentQuestionId)
+        if (typeof p.isFollowUpPhase === 'boolean') setIsFollowUpPhase(p.isFollowUpPhase)
+        if (typeof p.followUpCount === 'number') setFollowUpCount(p.followUpCount)
+        if (p.currentScores && typeof p.currentScores === 'object') setCurrentScores(p.currentScores)
+        if (Array.isArray(p.answerScores)) {
+          const restoredScores: AnswerScore[] = p.answerScores.map((s: any) => ({
+            ...(s || {}),
+            timestamp: s?.timestamp ? new Date(s.timestamp) : new Date(),
+          }))
+          setAnswerScores(restoredScores)
+          try {
+            scoringEngine.clearScores()
+            restoredScores.forEach((s) => scoringEngine.addScoredAnswer(s))
+          } catch {}
+        }
+        if (typeof p.interviewLanguage === 'string') setInterviewLanguage(p.interviewLanguage)
+        if (typeof p.tokens_input === 'number') tokensInputRef.current = p.tokens_input
+        if (typeof p.tokens_output === 'number') tokensOutputRef.current = p.tokens_output
+        if (typeof p.duration_seconds === 'number') {
+          // 以「已過秒數」回推開始時間，確保續接後 duration 不會重置
+          interviewStartTimeRef.current = Date.now() - Math.max(0, Math.floor(p.duration_seconds)) * 1000
+        }
+
+        // 依最後一則訊息推斷是否輪到面試者回答
+        const last = restoredMessages[restoredMessages.length - 1]
+        if (last?.type === 'ai') setIsWaitingForAnswer(true)
+        else setIsWaitingForAnswer(false)
+
+        // 若儲存點落在「使用者已回答、AI 尚未回覆」的中間狀態，重連後自動續跑一次 AI 回覆
+        const pending = p?.pending_ai
+        if (pending && typeof pending === 'object' && typeof pending.answer === 'string' && typeof pending.for_message_id === 'string') {
+          resumePendingAiRef.current = {
+            for_message_id: pending.for_message_id,
+            answer: pending.answer,
+            at: typeof pending.at === 'string' ? pending.at : undefined,
+          }
+        }
+      }
+    }
+  }, [restoredSession, parseTranscriptToMessages, scoringEngine])
+
   // 各評分項目的「當前累積分數」，會隨著每題答案的加減分往上/往下調整
   const [currentScores, setCurrentScores] = useState<Record<string, number>>(() => {
     const initial: Record<string, number> = {}
@@ -231,6 +350,17 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   })
 
   const [answerScores, setAnswerScores] = useState<AnswerScore[]>([])
+
+  // 用 ref 保存「最新」分數狀態，避免在 AI 回覆結束當下（state 尚未 flush）保存到 DB 的 progress_state 缺資料
+  const currentScoresRef = useRef<Record<string, number>>(currentScores)
+  const answerScoresRef = useRef<AnswerScore[]>(answerScores)
+  useEffect(() => {
+    currentScoresRef.current = currentScores
+  }, [currentScores])
+  useEffect(() => {
+    answerScoresRef.current = answerScores
+  }, [answerScores])
+
   const [showScoringSettings, setShowScoringSettings] = useState(false)
   const [showResponseTimeAnalysis, setShowResponseTimeAnalysis] = useState(false)
   const [currentQuestionId, setCurrentQuestionId] = useState<string>('')
@@ -389,6 +519,13 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   
   // 使用 ref 來避免閉包問題
   const handleUserAnswerRef = useRef<(answer: string) => void>()
+  type SaveInterviewProgressFn = (params: {
+    messages: ChatMessage[]
+    pending_ai?: { for_message_id: string; answer: string; at: string } | null
+    progress_state?: any
+  }) => void | Promise<void>
+  // 讓 processAIResponse 能安全呼叫（避免因宣告順序造成 TDZ / "宣告前使用"）
+  const saveInterviewProgressRef = useRef<SaveInterviewProgressFn | null>(null)
 
   // 停止並釋放攝像機資源（需要在 processAIResponse 之前定義）
   const stopCamera = useCallback(() => {
@@ -453,7 +590,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   // 保存面試session到資料庫
   const saveInterviewSession = useCallback(async (
     finalResult: InterviewResult,
-    options?: { userCancelled?: boolean }
+    options?: { userCancelled?: boolean; transcriptMessages?: ChatMessage[] }
   ): Promise<'hired' | 'rejected' | 'pending' | 'cancelByUser' | undefined> => {
     if (!interviewId) return
 
@@ -505,8 +642,9 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         }
       })
 
-      // 準備transcript（使用 messagesRef，確保拿到的是最新的完整對話，而不是舊閉包中的內容）
-      const transcript = (messagesRef.current || []).map(msg => ({
+      // 準備 transcript（優先使用呼叫端提供的快照，避免 state 尚未 flush 造成 aiFeedback 錯位）
+      const transcriptSource = (options?.transcriptMessages || messagesRef.current || []) as ChatMessage[]
+      const transcript = (transcriptSource || []).map(msg => ({
         role: msg.type,
         content: msg.content,
         timestamp: msg.timestamp.toISOString(),
@@ -620,11 +758,14 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     }
     setMessages((prev) => [...prev, newMessage])
     scrollToBottom()
+    return newMessage
   }, [scrollToBottom])
 
   // 處理AI面試官的回應
   const processAIResponse = useCallback(async (userAnswer: string) => {
     if (isAIResponding) return
+    if (turnLockRef.current) return
+    turnLockRef.current = true
     
     setIsAIResponding(true)
     setIsWaitingForAnswer(false)
@@ -650,11 +791,15 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         content: msg.content
       }))
       
-      // 添加用戶的最新回答
-      conversationMessages.push({
-        role: 'user',
-        content: userAnswer
-      })
+      // 添加用戶的最新回答（避免在「續接」情況下重複附加同一句）
+      const lastMsg = messages[messages.length - 1]
+      const shouldAppendUserAnswer = !(lastMsg?.type === 'user' && lastMsg.content === userAnswer)
+      if (shouldAppendUserAnswer) {
+        conversationMessages.push({
+          role: 'user',
+          content: userAnswer
+        })
+      }
       
       // 準備問題列表供 AI 使用
       // 仍提供 DB 題庫給 prompt 作為背景資訊，但「下一題」完全由前端控制
@@ -722,6 +867,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       let buffer = ''
       let rawBuffer = '' // 用於累積原始內容（包含元數據）
       let didHandleMetadata = false // 避免重複解析/重複累加 tokens/重複 console log
+      let didHandleScoreBlock = false // fallback：模型直接輸出 [SCORE_START] 區塊時仍要能解析
 
       // 強化版：移除因為模型漏字元/串流拆分導致的破碎標記（例如：CONTENT_END]、[CONTENT_EN...）
       const sanitizeInterviewVisibleText = (text: string): string => {
@@ -807,6 +953,50 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
               console.error('解析元數據失敗:', e)
             }
           }
+
+          // fallback：若後端/模型沒有輸出 INTERVIEW_METADATA，而是直接輸出 [SCORE_START]...[SCORE_END]
+          if (!didHandleScoreBlock) {
+            const scoreRegex = /\[SCORE_START\]([\s\S]*?)\[SCORE_END\]/
+            const scoreMatch = rawBuffer.match(scoreRegex)
+            if (scoreMatch) {
+              try {
+                let jsonString = (scoreMatch[1] || '').trim()
+                // 嘗試修復常見 JSON 問題：只取第一個 { 到最後一個 }
+                const startIdx = jsonString.indexOf('{')
+                const endIdx = jsonString.lastIndexOf('}')
+                if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+                  jsonString = jsonString.slice(startIdx, endIdx + 1)
+                }
+                const parsed = JSON.parse(jsonString)
+
+                // 將 SCORE JSON 轉為 AnswerScore（最小集合；事件用 deductionItems/additionItems）
+                const qid = String(parsed?.questionId || `Q${currentQuestionIndex + 1}`)
+                finalScoreResult = {
+                  answerId: qid,
+                  questionId: qid,
+                  questionText: String(parsed?.questionText || ''),
+                  answerText: String(parsed?.answerText || userAnswer || ''),
+                  timestamp: new Date(),
+                  scores: (parsed?.scores && typeof parsed.scores === 'object') ? parsed.scores : {},
+                  totalScore: Number(parsed?.totalScore) || 0,
+                  deductions: {},
+                  additions: {},
+                  deductionItems: (parsed?.deductions && typeof parsed.deductions === 'object') ? parsed.deductions : undefined,
+                  additionItems: (parsed?.additions && typeof parsed.additions === 'object') ? parsed.additions : undefined,
+                  aiFeedback: String(parsed?.aiFeedback || ''),
+                  additionsDetail: typeof parsed?.additionsDetail === 'string' ? parsed.additionsDetail : (typeof parsed?.additions_detail === 'string' ? parsed.additions_detail : undefined),
+                  deductionsDetail: typeof parsed?.deductionsDetail === 'string' ? parsed.deductionsDetail : (typeof parsed?.deductions_detail === 'string' ? parsed.deductions_detail : undefined),
+                  nextAction: (parsed?.nextAction === 'followup' || parsed?.nextAction === 'next' || parsed?.nextAction === 'end') ? parsed.nextAction : undefined,
+                  personality: parsed?.personality ?? undefined,
+                } as any
+
+                rawBuffer = rawBuffer.replace(scoreRegex, '')
+                didHandleScoreBlock = true
+              } catch (e) {
+                if (DEBUG_INTERVIEW) console.warn('[Interview] parse SCORE_START failed', e)
+              }
+            }
+          }
           
           // value 已經經過 processTextChunk 處理，應該只包含 CONTENT 標籤內的內容
           // 但為了安全起見，我們還是移除任何可能遺漏的標籤和元數據標記
@@ -860,81 +1050,84 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         // 更新最終消息，包含評分信息
         if (finalScoreResult) {
           const scoreResult = finalScoreResult
-          // 先更新「當前累積分數」，並保留這次更新後的快照
-          let updatedScoresSnapshot: Record<string, number> | undefined
-          setCurrentScores((prev) => {
-            const next = applyScoreResultToCurrentScores(prev, scoreResult)
-            updatedScoresSnapshot = next
+          // 重要：這裡必須「同步」算出更新後的分數快照，再去 setState + save。
+          // 否則 React state 尚未 flush 時就 save，DB 會寫到舊的 currentScores（你目前看到的錯誤就是這個）。
+          const prevScoresSnapshot = currentScoresRef.current || {}
+          const updatedScoresSnapshot = applyScoreResultToCurrentScores(prevScoresSnapshot, scoreResult)
+          currentScoresRef.current = updatedScoresSnapshot
+          setCurrentScores(updatedScoresSnapshot)
 
-            // 🔍 Console log：顯示「套用本題 delta 後的當前分數」+「本題 delta」+「加/扣分事件」
-            // 這段只會在「每題回答完成」時觸發一次（避免重複三次的問題）
-            try {
-              const fmt = (v: number) => {
-                const n = Number(v) || 0
-                return Number.isFinite(n) ? n.toFixed(2) : '0.00'
-              }
-              const fmtDelta = (v: number) => {
-                const n = Number(v) || 0
-                if (!Number.isFinite(n) || n === 0) return '0.00'
-                return `${n > 0 ? '+' : ''}${n.toFixed(2)}`
-              }
-
-              const criteriaList = Array.isArray(evaluationCriteria) ? evaluationCriteria : []
-              const orderedKeys = criteriaList.length > 0
-                ? criteriaList.map((c: any) => c.key).filter((k: any) => typeof k === 'string')
-                : Array.from(new Set([
-                    ...Object.keys(prev || {}),
-                    ...Object.keys(scoreResult?.scores || {}),
-                    ...Object.keys(next || {}),
-                  ]))
-
-              console.group(`📊 本題評分：${scoreResult.questionId || ''}`.trim())
-              console.log('題目：', scoreResult.questionText)
-              console.log('本題 delta（scores）：', scoreResult.scores)
-
-              orderedKeys.forEach((key: string) => {
-                const c = criteriaList.find((x: any) => x && x.key === key)
-                const displayName = (c && (c.display_name || c.key)) ? String(c.display_name || c.key) : key
-                const max = (c && typeof c.max_score === 'number') ? c.max_score : 10
-                const logic = (c && typeof c.scoring_logic === 'string') ? c.scoring_logic : 'deduction'
-                const base = (logic === 'addition' || logic === 'composite') ? 0 : max
-                const prevScore = (prev && typeof (prev as any)[key] === 'number') ? Number((prev as any)[key]) : base
-                const delta = scoreResult?.scores && typeof (scoreResult.scores as any)[key] === 'number'
-                  ? Number((scoreResult.scores as any)[key])
-                  : 0
-                const nextScore = (next && typeof (next as any)[key] === 'number') ? Number((next as any)[key]) : base
-
-                console.log(`${displayName} (${key})：${fmt(prevScore)}  ${fmtDelta(delta)}  =>  ${fmt(nextScore)}`)
-
-                const dItems = (scoreResult as any)?.deductionItems?.[key]
-                const aItems = (scoreResult as any)?.additionItems?.[key]
-                if (Array.isArray(dItems) && dItems.length > 0) {
-                  console.log(`  扣分事件：`, dItems.map((it: any) => ({
-                    points: Number(it?.points) || 0,
-                    detail: String(it?.detail || ''),
-                  })))
-                }
-                if (Array.isArray(aItems) && aItems.length > 0) {
-                  console.log(`  加分事件：`, aItems.map((it: any) => ({
-                    points: Number(it?.points) || 0,
-                    detail: String(it?.detail || ''),
-                  })))
-                }
-                // fallback：若沒有事件結構，仍顯示舊字串原因
-                if ((!Array.isArray(dItems) || dItems.length === 0) && scoreResult?.deductions?.[key]?.length) {
-                  console.log('  扣分原因：', scoreResult.deductions[key])
-                }
-                if ((!Array.isArray(aItems) || aItems.length === 0) && scoreResult?.additions?.[key]?.length) {
-                  console.log('  加分原因：', scoreResult.additions[key])
-                }
-              })
-
-              console.groupEnd()
-            } catch (e) {
-              console.warn('評分 console log 失敗（可忽略）:', e)
+          // 🔍 Console log：顯示「套用本題 delta 後的當前分數」+「本題 delta」+「加/扣分事件」
+          // 這段只會在「每題回答完成」時觸發一次（避免重複三次的問題）
+          try {
+            const fmt = (v: number) => {
+              const n = Number(v) || 0
+              return Number.isFinite(n) ? n.toFixed(2) : '0.00'
             }
-            return next
-          })
+            const fmtDelta = (v: number) => {
+              const n = Number(v) || 0
+              if (!Number.isFinite(n) || n === 0) return '0.00'
+              return `${n > 0 ? '+' : ''}${n.toFixed(2)}`
+            }
+
+            const criteriaList = Array.isArray(evaluationCriteria) ? evaluationCriteria : []
+            const orderedKeys = criteriaList.length > 0
+              ? criteriaList.map((c: any) => c.key).filter((k: any) => typeof k === 'string')
+              : Array.from(new Set([
+                  ...Object.keys(prevScoresSnapshot || {}),
+                  ...Object.keys(scoreResult?.scores || {}),
+                  ...Object.keys(updatedScoresSnapshot || {}),
+                ]))
+
+            console.group(`📊 本題評分：${scoreResult.questionId || ''}`.trim())
+            console.log('題目：', scoreResult.questionText)
+            console.log('本題 delta（scores）：', scoreResult.scores)
+
+            orderedKeys.forEach((key: string) => {
+              const c = criteriaList.find((x: any) => x && x.key === key)
+              const displayName = (c && (c.display_name || c.key)) ? String(c.display_name || c.key) : key
+              const max = (c && typeof c.max_score === 'number') ? c.max_score : 10
+              const logic = (c && typeof c.scoring_logic === 'string') ? c.scoring_logic : 'deduction'
+              const base = (logic === 'addition' || logic === 'composite') ? 0 : max
+              const prevScore = (prevScoresSnapshot && typeof (prevScoresSnapshot as any)[key] === 'number')
+                ? Number((prevScoresSnapshot as any)[key])
+                : base
+              const delta = scoreResult?.scores && typeof (scoreResult.scores as any)[key] === 'number'
+                ? Number((scoreResult.scores as any)[key])
+                : 0
+              const nextScore = (updatedScoresSnapshot && typeof (updatedScoresSnapshot as any)[key] === 'number')
+                ? Number((updatedScoresSnapshot as any)[key])
+                : base
+
+              console.log(`${displayName} (${key})：${fmt(prevScore)}  ${fmtDelta(delta)}  =>  ${fmt(nextScore)}`)
+
+              const dItems = (scoreResult as any)?.deductionItems?.[key]
+              const aItems = (scoreResult as any)?.additionItems?.[key]
+              if (Array.isArray(dItems) && dItems.length > 0) {
+                console.log(`  扣分事件：`, dItems.map((it: any) => ({
+                  points: Number(it?.points) || 0,
+                  detail: String(it?.detail || ''),
+                })))
+              }
+              if (Array.isArray(aItems) && aItems.length > 0) {
+                console.log(`  加分事件：`, aItems.map((it: any) => ({
+                  points: Number(it?.points) || 0,
+                  detail: String(it?.detail || ''),
+                })))
+              }
+              // fallback：若沒有事件結構，仍顯示舊字串原因
+              if ((!Array.isArray(dItems) || dItems.length === 0) && scoreResult?.deductions?.[key]?.length) {
+                console.log('  扣分原因：', scoreResult.deductions[key])
+              }
+              if ((!Array.isArray(aItems) || aItems.length === 0) && scoreResult?.additions?.[key]?.length) {
+                console.log('  加分原因：', scoreResult.additions[key])
+              }
+            })
+
+            console.groupEnd()
+          } catch (e) {
+            console.warn('評分 console log 失敗（可忽略）:', e)
+          }
 
           // 將本題評分結果、人格判斷與當前累積分數寫入訊息與評分紀錄
           setMessages((prev) =>
@@ -959,7 +1152,17 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           )
           
           // 處理評分結果（供結果頁與統計使用）
-          setAnswerScores(prev => [...prev, finalScoreResult!])
+          const prevAnswerScores = answerScoresRef.current || []
+          const lastAnswer = prevAnswerScores[prevAnswerScores.length - 1]
+          // 去重：若同一題被意外解析/寫入兩次，改成覆蓋最後一筆而不是再 append
+          const nextAnswerScoresSnapshot: AnswerScore[] =
+            lastAnswer &&
+            lastAnswer.questionId === finalScoreResult!.questionId &&
+            lastAnswer.answerText === finalScoreResult!.answerText
+              ? [...prevAnswerScores.slice(0, -1), finalScoreResult!]
+              : [...prevAnswerScores, finalScoreResult!]
+          answerScoresRef.current = nextAnswerScoresSnapshot
+          setAnswerScores(nextAnswerScoresSnapshot)
           scoringEngine.addScoredAnswer(finalScoreResult)
 
           // 依 nextAction 控制題號推進（避免 AI 自己亂出題）
@@ -981,6 +1184,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             if (nextQ && typeof nextQ.question === 'string' && nextQ.question.trim().length > 0) {
               // 題庫有下一題：推進題號（題號仍用於追蹤/記錄）
               setCurrentQuestionIndex(nextIdx)
+              setCurrentQuestionId(nextQ.id || '')
               // 不再由系統插入下一題，改為要求 AI 在 CONTENT 內逐字輸出 nextQuestionText
             } else {
               // 題庫已無下一題：不要用題號/題庫狀態自動結束面試
@@ -991,15 +1195,84 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             setIsFollowUpPhase(false)
             setFollowUpCount(0)
           }
+
         }
         
         // 檢查是否為面試結束的回應
         const endKeywords = ['面試到此結束', '面試結束', '感謝你的參與', '我們的面試', '後續流程']
         const isInterviewEnding = endKeywords.some((keyword) => streamingContent.includes(keyword))
+
+        // ⭐ 關鍵：每題 AI 串流結束後只存一次（把 AI 回覆/評分落盤；不在「使用者送出」時先存，避免重複與錯位）
+        // 若本回合已判定結束（endKeywords），則把 nowMs 快照留給最後一次 final save 使用，避免多打一發 save-session。
+        try {
+          if (finalScoreResult) {
+            const updatedScores = currentScoresRef.current || {}
+            const updatedAnswerScores = answerScoresRef.current || []
+            const baseMs = messagesRef.current || []
+            const nowMs: ChatMessage[] = baseMs.map((m) =>
+              m.id === streamingMessageId
+                ? {
+                    ...m,
+                    content: streamingContent,
+                    aiFeedback: finalScoreResult?.aiFeedback,
+                    aiAdditionsDetail: finalScoreResult?.additionsDetail,
+                    aiDeductionsDetail: finalScoreResult?.deductionsDetail,
+                    aiScoreDeltas: (finalScoreResult?.scores || undefined) as any,
+                    aiScoreEvents: {
+                      deductions: (finalScoreResult as any)?.deductionItems || null,
+                      additions: (finalScoreResult as any)?.additionItems || null,
+                    },
+                    aiCurrentScores: updatedScores,
+                    personality: finalScoreResult?.personality,
+                  }
+                : m
+            )
+
+            if (isInterviewEnding) {
+              finalTranscriptSnapshotRef.current = nowMs
+            } else {
+              const duration_seconds = Math.floor((Date.now() - interviewStartTimeRef.current) / 1000)
+              const nextIndex = decidedAction === 'next' ? (currentQuestionIndex + 1) : currentQuestionIndex
+              const nextIsFollowUp = decidedAction === 'followup'
+              const nextFollowUpCount = decidedAction === 'followup' ? Math.min(MAX_FOLLOWUPS, followUpCount + 1) : 0
+              const nextQuestionId =
+                decidedAction === 'next' ? (questionSequence[currentQuestionIndex + 1]?.id || '') : currentQuestionId
+
+              const progress_state = {
+                v: 1,
+                currentQuestionIndex: nextIndex,
+                currentQuestionId: nextQuestionId,
+                isFollowUpPhase: nextIsFollowUp,
+                followUpCount: nextFollowUpCount,
+                interviewLanguage,
+                currentScores: updatedScores,
+                answerScores: (updatedAnswerScores || []).map((s: any) => ({
+                  ...(s || {}),
+                  timestamp: (s as any)?.timestamp instanceof Date ? (s as any).timestamp.toISOString() : (s as any)?.timestamp,
+                })),
+                tokens_input: tokensInputRef.current,
+                tokens_output: tokensOutputRef.current,
+                duration_seconds,
+                pending_ai: null,
+                last_message: { id: streamingMessageId, type: 'ai', timestamp: new Date().toISOString() },
+              }
+
+              saveInterviewProgressRef.current?.({
+                messages: nowMs,
+                pending_ai: null,
+                progress_state,
+              })
+            }
+          }
+        } catch (e) {
+          if (DEBUG_INTERVIEW) console.warn('[Interview] save after AI response failed', e)
+        }
         
         if (isInterviewEnding) {
-          // 標記本場面試已由 AI 正常結束
+          // 標記本場面試已由 AI 進入結尾（注意：此時不代表資料已保存完成）
           setInterviewCompletionStatus('complete')
+          setFinalizing(true)
+          setFinalSaveError(null)
           // 先等待 3 秒讓 AI 最後的回覆完全顯示，再停止錄製
           setTimeout(() => {
             recording.stopRecording()
@@ -1007,13 +1280,21 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
 
           // 總共等待 6 秒後完成儲存與資源釋放（但不自動跳轉結果頁，改由使用者按「結束面試」按鈕）
           setTimeout(async () => {
+            if (finalSaveInFlightRef.current) return
+            finalSaveInFlightRef.current = true
             const finalResult = scoringEngine.generateFinalResult('candidate-001')
             // 保存到資料庫並讀取DB決策，確保結果頁可以看到最新資料（包含 personality）
             if (interviewId) {
-              const outcome = await saveInterviewSession(finalResult)
+              const transcriptMessages = finalTranscriptSnapshotRef.current || undefined
+              const outcome = await saveInterviewSession(finalResult, { transcriptMessages })
               if (outcome) {
                 // 以 DB 的 interview_result 為準統一顯示
                 finalResult.isPassed = outcome === 'hired'
+              }
+              if (outcome !== undefined) {
+                setFinalSaveCompleted(true)
+              } else {
+                setFinalSaveError('資料保存失敗，請稍後再試或重新整理頁面。')
               }
             }
             // 停止攝像機與麥克風
@@ -1038,6 +1319,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       setIsWaitingForAnswer(true)
     } finally {
       setIsAIResponding(false)
+      turnLockRef.current = false
     }
   }, [
     isAIResponding,
@@ -1057,11 +1339,126 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     stopCamera,
   ])
 
+  // 重連還原後：若上次停在「已回答但 AI 尚未回覆」，自動補跑一次 AI 回覆
+  useEffect(() => {
+    if (!hasRestoredRef.current) return
+    if (resumeTriggeredRef.current) return
+    const pending = resumePendingAiRef.current
+    if (!pending || typeof pending.answer !== 'string' || !pending.answer.trim()) return
+
+    // 僅在最後一則訊息仍是 user 時才補跑（避免已經有 AI 回覆還重跑一次）
+    const last = (messagesRef.current || [])[ (messagesRef.current || []).length - 1 ]
+    if (last?.type !== 'user') {
+      resumePendingAiRef.current = null
+      return
+    }
+
+    resumeTriggeredRef.current = true
+    setTimeout(() => {
+      try {
+        processAIResponse(pending.answer)
+      } catch {}
+    }, 200)
+  }, [processAIResponse])
+
+  const buildTranscriptFromMessages = useCallback((ms: ChatMessage[]) => {
+    return (ms || []).map((msg) => ({
+      role: msg.type,
+      content: msg.content,
+      timestamp: msg.timestamp.toISOString(),
+      aiFeedback: msg.type === 'ai' ? (msg.aiFeedback || '') : '',
+      additions_detail: msg.type === 'ai' ? (msg.aiAdditionsDetail || '') : '',
+      deductions_detail: msg.type === 'ai' ? (msg.aiDeductionsDetail || '') : '',
+      score_deltas: msg.type === 'ai' ? (msg.aiScoreDeltas || null) : null,
+      score_events: msg.type === 'ai' ? (msg.aiScoreEvents || null) : null,
+      current_scores: msg.type === 'ai' ? (msg.aiCurrentScores || null) : null,
+      personality: msg.type === 'ai' ? (msg.personality || null) : null,
+    }))
+  }, [])
+
+  const buildProgressStateV1 = useCallback((opts?: { pending_ai?: { for_message_id: string; answer: string; at: string } | null; messages?: ChatMessage[] }) => {
+    const nowMessages = opts?.messages || (messagesRef.current || [])
+    const duration_seconds = Math.floor((Date.now() - interviewStartTimeRef.current) / 1000)
+    return {
+      v: 1,
+      currentQuestionIndex,
+      currentQuestionId,
+      isFollowUpPhase,
+      followUpCount,
+      interviewLanguage,
+      currentScores,
+      answerScores: (answerScores || []).map((s) => ({
+        ...(s as any),
+        timestamp: (s as any)?.timestamp instanceof Date ? (s as any).timestamp.toISOString() : (s as any)?.timestamp,
+      })),
+      tokens_input: tokensInputRef.current,
+      tokens_output: tokensOutputRef.current,
+      duration_seconds,
+      pending_ai: opts?.pending_ai ?? null,
+      last_message: (() => {
+        const last = nowMessages[nowMessages.length - 1]
+        return last ? { id: last.id, type: last.type, timestamp: last.timestamp.toISOString() } : null
+      })(),
+    }
+  }, [
+    answerScores,
+    currentQuestionId,
+    currentQuestionIndex,
+    currentScores,
+    followUpCount,
+    interviewLanguage,
+    isFollowUpPhase,
+  ])
+
+  // 每次面試者回答後保存進度（不中斷、不結算）
+  const saveInterviewProgress = useCallback(async (params: {
+    messages: ChatMessage[]
+    pending_ai?: { for_message_id: string; answer: string; at: string } | null
+    progress_state?: any
+  }) => {
+    if (!interviewId) return
+    try {
+      const { data: session } = await supabase.auth.getSession()
+      const token = session.session?.access_token
+      if (!token) return
+
+      const transcript = buildTranscriptFromMessages(params.messages)
+      const progress_state =
+        params.progress_state ?? buildProgressStateV1({ pending_ai: params.pending_ai ?? null, messages: params.messages })
+      const durationSeconds = Math.floor((Date.now() - interviewStartTimeRef.current) / 1000)
+
+      await fetch('/api/interviews/save-session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          interviews_id: interviewId,
+          interview_transcript: transcript,
+          progress_state,
+          duration_seconds: durationSeconds,
+          tokens_input: tokensInputRef.current,
+          tokens_output: tokensOutputRef.current,
+          is_final: false,
+        }),
+      })
+    } catch (e) {
+      if (DEBUG_INTERVIEW) console.warn('[Interview] saveInterviewProgress failed', e)
+    }
+  }, [DEBUG_INTERVIEW, buildProgressStateV1, buildTranscriptFromMessages, interviewId])
+
+  // 讓 processAIResponse 可以在宣告順序不變的情況下呼叫 saveInterviewProgress
+  useEffect(() => {
+    saveInterviewProgressRef.current = saveInterviewProgress
+  }, [saveInterviewProgress])
+
   // 處理用戶回答
   const handleUserAnswer = useCallback((answer: string) => {
     if (!answer.trim() || !isWaitingForAnswer || isAIResponding) return
+    if (turnLockRef.current) return
     
-    addUserMessage(answer)
+    const newMsg = addUserMessage(answer)
     
     // 立即處理AI回應
     processAIResponse(answer)
@@ -1154,10 +1551,13 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       // 初始化鏡頭
       initializeCamera()
       
-      // 開始面試流程（延遲一小段時間確保組件完全初始化）
-      setTimeout(() => {
-        startInterview()
-      }, 100)
+      // 若已從 session 還原進度，避免自動「從頭開始」
+      if (!hasRestoredRef.current) {
+        // 開始面試流程（延遲一小段時間確保組件完全初始化）
+        setTimeout(() => {
+          startInterview()
+        }, 100)
+      }
       
       // 標記為已初始化
       isInitializedRef.current = true
@@ -1320,60 +1720,47 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             </button>
             <button
               onClick={async () => {
-                const isCancelledByUser = interviewCompletionStatus !== 'complete'
+                // Gate：final save 尚未完成時，避免誤判 cancelled_by_user
+                if (!finalSaveCompleted) {
+                  setShowEarlyEndModal(true)
+                  return
+                }
 
-                // 等待 2 秒再停止錄製（給最後的對話時間錄製）
-                setTimeout(() => {
-                  recording.stopRecording()
-                }, 2000)
-                
-                // 總共等待 5 秒後顯示結果 / 儲存記錄
-                setTimeout(async () => {
-                  const finalResult = scoringEngine.generateFinalResult('candidate-001')
-                  // 保存到資料庫並讀取DB決策
-                  if (interviewId) {
-                    const outcome = await saveInterviewSession(finalResult, isCancelledByUser ? { userCancelled: true } : undefined)
-                    // 只有在非「面試者提早結束」情況下，才依 DB 結果更新 isPassed
-                    if (outcome && !isCancelledByUser) {
-                      finalResult.isPassed = outcome === 'hired'
-                    }
-                  }
-                  // 停止攝像機與麥克風
-                  try { stopListening() } catch {}
-                  stopCamera()
-                  setShowLocalVideo(false)
-                  if (interviewId) {
-                    if (resultNotificationMethod === 'later') {
-                      // 後續通知：不顯示面試結果頁，直接回到個人頁（面試列表）
-                      window.location.replace('/me?tab=interviews')
-                    } else {
-                      // 即時通知：在新分頁打開結果頁面（立即執行，避免被彈出視窗阻擋器阻擋）
-                      const resultUrl = `/interview/result?id=${encodeURIComponent(interviewId)}`
-                      const newWindow = window.open(resultUrl, '_blank')
-                      if (newWindow) {
-                        newWindow.focus() // 確保新分頁獲得焦點
-                        // 將當前頁面完整重新載入到首頁（像 F5 一樣），確保組件完全卸載並釋放攝影機資源
-                        setTimeout(() => {
-                          console.log('準備完整重新載入到首頁')
-                          window.location.replace('/')
-                        }, 1000) // 增加延遲時間，確保新分頁已打開
-                      } else {
-                        // 如果被阻擋，則在當前頁面完整重新載入結果頁面（像 F5 一樣）
-                        console.warn('新分頁被阻擋，改為在當前頁面完整重新載入結果')
-                        console.log('準備完整重新載入到:', resultUrl)
-                        // 使用 replace 強制完整重新載入，繞過 Next.js 路由
-                        window.location.replace(resultUrl)
-                      }
-                    }
-                  } else {
-                    onInterviewComplete(finalResult)
-                  }
-                }, 5000)
+                // final save 已完成：直接去結果頁
+                if (interviewId) {
+                  const resultUrl = `/interview/result?id=${encodeURIComponent(interviewId)}`
+                  window.location.replace(resultUrl)
+                  return
+                }
+
+                // 後備：沒有 interviewId 的情況仍走原本的 onInterviewComplete
+                const finalResult = scoringEngine.generateFinalResult('candidate-001')
+                onInterviewComplete(finalResult)
               }}
               className="px-4 py-2 rounded-lg text-white font-medium bg-gray-500 hover:bg-gray-600"
             >
               結束面試
             </button>
+
+            {/* 面試狀態顯示：[進行中 / 資料保存中 / 完成] */}
+            <div
+              className={`px-3 py-2 rounded-lg text-sm font-medium ${
+                finalSaveCompleted
+                  ? 'bg-green-100 text-green-800'
+                  : finalizing
+                    ? 'bg-yellow-100 text-yellow-800'
+                    : 'bg-gray-100 text-gray-700'
+              }`}
+              title={
+                finalSaveCompleted
+                  ? '面試已完成'
+                  : finalizing
+                    ? '資料保存中'
+                    : '面試進行中'
+              }
+            >
+              {finalSaveCompleted ? '面試已完成' : finalizing ? '資料保存中' : '面試進行中'}
+            </div>
             
             {/* 錄製狀態指示 */}
             {recording.isRecording && (
@@ -1389,6 +1776,9 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
               </div>
             )}
           </div>
+          {finalSaveError && (
+            <div className="text-xs text-red-600 mt-1">{finalSaveError}</div>
+          )}
           <div className="flex gap-2">
             <input
               type="text"
@@ -1445,6 +1835,49 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             </div>
           )}
         </div>
+
+        {/* 結束面試保護 Modal：final save 尚未完成時阻止誤取消 */}
+        {showEarlyEndModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4">
+            <div className="w-full max-w-lg bg-white rounded-xl shadow-xl p-6">
+              <div className="text-lg font-semibold text-gray-900 mb-2">面試尚未完成</div>
+              <div className="text-sm text-gray-700 leading-relaxed mb-5">
+                面試尚未完成或資料仍在保存中；此時中途離開可能導致面試失敗或結果不完整。建議你先回到面試等待保存完成。
+              </div>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setShowEarlyEndModal(false)}
+                  className="px-4 py-2 rounded-lg bg-gray-100 text-gray-800 text-sm font-medium hover:bg-gray-200"
+                >
+                  回到面試
+                </button>
+                <button
+                  onClick={async () => {
+                    setShowEarlyEndModal(false)
+
+                    // 使用者確認中途離開：寫入 cancelled_by_user 並前往 result 頁
+                    try { recording.stopRecording() } catch {}
+                    try { stopListening() } catch {}
+                    stopCamera()
+                    setShowLocalVideo(false)
+
+                    const finalResult = scoringEngine.generateFinalResult('candidate-001')
+                    if (interviewId) {
+                      await saveInterviewSession(finalResult, { userCancelled: true })
+                      const resultUrl = `/interview/result?id=${encodeURIComponent(interviewId)}`
+                      window.location.replace(resultUrl)
+                    } else {
+                      onInterviewComplete(finalResult)
+                    }
+                  }}
+                  className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700"
+                >
+                  我要離開
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 右側：AI面試官模型 (1/3) */}

@@ -143,6 +143,15 @@ export default function CompanyAdminPage() {
   }
   const criteriaKeys = Object.keys(criteriaNames)
 
+  const DEFAULT_CUSTOM_CRITERIA = [
+    // 預設五項：統一改為綜合制（composite），避免扣分制一路扣到 0 分
+    { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '答非所問-1.5分\n回答不完整或缺少關鍵資訊-1分', addition_rules: '切題且至少回答問題核心+0.5分\n提供具體例子/步驟/數據+1分' },
+    { key: 'logical_clarity', display_name: '邏輯清晰度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '條理不清-1分\n自相矛盾或邏輯錯誤-1.5分', addition_rules: '回答有結構（先結論後理由）+1分\n前後一致、因果清楚+1.5分' },
+    { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '專業知識明顯錯誤-1.5分\n無法舉出實務案例或只背誦定義-1分', addition_rules: '使用正確基本概念/術語+0.5分\n能解釋trade-off或提出實務案例+2分\n展現深度理解（拆解原因/限制）+1分' },
+    { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '表達不清晰-1分\n表達不流暢或跳躍導致難以理解-1分', addition_rules: '表達清楚、重點明確+0.5分\n主動釐清前提/確認需求/條列化表達+1分' },
+    { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '缺乏企圖心與主動性-1.5分\n對學習成長明顯消極-1分\n團隊合作態度不佳或推責-1.5分\n抗壓與面對挫折態度消極-1分', addition_rules: '展現正常職場合作/學習態度+0.5分\n向上心求知慾（具體例子）+1.5分\n持續學習（具體做法）+1.5分\n抗壓與面對挫折成熟+1.5分\n主動性/負責任態度+1.5分' }
+  ] as Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction' | 'composite'; addition_rules: string; deduction_rules: string }>
+
   const [newJob, setNewJob] = useState({ 
     job_title: '', 
     use_ai_generate_question: false, 
@@ -151,17 +160,9 @@ export default function CompanyAdminPage() {
     evalPolicy: {
       overall_threshold: '',
       criteria_minimums: {} as Record<string, string>,
-      // UI 改為「輸入框預設打開」：全部 criteria 都顯示可直接輸入；空值代表不啟用
       active_criteria: Object.keys(criteriaNames) as string[]
     },
-    customCriteria: [
-      // 預設五項：統一改為綜合制（composite），避免扣分制一路扣到 0 分
-      { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '答非所問-1.5分\n回答不完整或缺少關鍵資訊-1分', addition_rules: '切題且至少回答問題核心+0.5分\n提供具體例子/步驟/數據+1分' },
-      { key: 'logical_clarity', display_name: '邏輯清晰度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '條理不清-1分\n自相矛盾或邏輯錯誤-1.5分', addition_rules: '回答有結構（先結論後理由）+1分\n前後一致、因果清楚+1.5分' },
-      { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '專業知識明顯錯誤-1.5分\n無法舉出實務案例或只背誦定義-1分', addition_rules: '使用正確基本概念/術語+0.5分\n能解釋trade-off或提出實務案例+2分\n展現深度理解（拆解原因/限制）+1分' },
-      { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '表達不清晰-1分\n表達不流暢或跳躍導致難以理解-1分', addition_rules: '表達清楚、重點明確+0.5分\n主動釐清前提/確認需求/條列化表達+1分' },
-      { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '缺乏企圖心與主動性-1.5分\n對學習成長明顯消極-1分\n團隊合作態度不佳或推責-1.5分\n抗壓與面對挫折態度消極-1分', addition_rules: '展現正常職場合作/學習態度+0.5分\n向上心求知慾（具體例子）+1.5分\n持續學習（具體做法）+1.5分\n抗壓與面對挫折成熟+1.5分\n主動性/負責任態度+1.5分' }
-    ] as Array<{ key: string; display_name: string; weight: number; max_score: number; scoring_logic: 'addition' | 'deduction' | 'composite'; addition_rules: string; deduction_rules: string }>
+    customCriteria: DEFAULT_CUSTOM_CRITERIA
   })
   const [editJob, setEditJob] = useState({ 
     job_title: '', 
@@ -434,8 +435,9 @@ export default function CompanyAdminPage() {
     
     const result = await r.json()
     
-    // 如果啟用了自訂評估項目，更新 evaluation_criteria
-    if (newJob.enableCustomCriteria && result.job_opening_id) {
+    // 新增職種後：同步 evaluation_criteria（就算未展開「自訂評估項目」也要確保預設為綜合制）
+    if (createOk && result.job_opening_id) {
+      const desiredCriteria = (newJob.enableCustomCriteria ? newJob.customCriteria : DEFAULT_CUSTOM_CRITERIA) || []
       // 獲取該職種的 evaluation_criteria
       const criteriaRes = await fetch(
         `/api/evaluation-criteria/list?company_id=${companyId}&job_opening_id=${result.job_opening_id}`,
@@ -443,18 +445,23 @@ export default function CompanyAdminPage() {
       )
       const criteriaData = await criteriaRes.json()
       const existingCriteria = criteriaData.items || []
+      const existingByKey: Record<string, any> = {}
+      ;(Array.isArray(existingCriteria) ? existingCriteria : []).forEach((c: any) => {
+        if (c && typeof c.key === 'string') existingByKey[c.key] = c
+      })
       
       // 更新或創建 evaluation_criteria
-      for (let i = 0; i < newJob.customCriteria.length; i++) {
-        const customCriteria = newJob.customCriteria[i]
-        const existing = existingCriteria[i]
+      for (let i = 0; i < desiredCriteria.length; i++) {
+        const customCriteria = desiredCriteria[i]
+        const existing = existingByKey[customCriteria.key]
+        const logic = (customCriteria.scoring_logic || 'composite') as 'addition' | 'deduction' | 'composite'
         
         // 轉換規則為 JSONB 格式（字符串數組）
-        const additionRulesArray = customCriteria.addition_rules 
-          ? customCriteria.addition_rules.split('\n').filter(r => r.trim())
+        const additionRulesArray = (logic === 'addition' || logic === 'composite')
+          ? (customCriteria.addition_rules ? customCriteria.addition_rules.split('\n').filter(r => r.trim()) : [])
           : null
-        const deductionRulesArray = customCriteria.deduction_rules 
-          ? customCriteria.deduction_rules.split('\n').filter(r => r.trim())
+        const deductionRulesArray = (logic === 'deduction' || logic === 'composite')
+          ? (customCriteria.deduction_rules ? customCriteria.deduction_rules.split('\n').filter(r => r.trim()) : [])
           : null
         
         if (existing) {
@@ -470,10 +477,10 @@ export default function CompanyAdminPage() {
               weight: customCriteria.weight,
               // 自訂評估項目 max score 鎖死為 10
               max_score: 10,
-              scoring_logic: customCriteria.scoring_logic || 'deduction',
+              scoring_logic: logic,
               // 綜合制：同時帶入加分與扣分規則
-              addition_rules: (customCriteria.scoring_logic === 'addition' || customCriteria.scoring_logic === 'composite') ? additionRulesArray : null,
-              deduction_rules: (customCriteria.scoring_logic === 'deduction' || customCriteria.scoring_logic === 'composite') ? deductionRulesArray : null,
+              addition_rules: additionRulesArray,
+              deduction_rules: deductionRulesArray,
               sort_order: i + 1
             })
           })
@@ -490,10 +497,10 @@ export default function CompanyAdminPage() {
               weight: customCriteria.weight,
               // 自訂評估項目 max score 鎖死為 10
               max_score: 10,
-              scoring_logic: customCriteria.scoring_logic || 'deduction',
+              scoring_logic: logic,
               // 綜合制：同時帶入加分與扣分規則
-              addition_rules: (customCriteria.scoring_logic === 'addition' || customCriteria.scoring_logic === 'composite') ? additionRulesArray : null,
-              deduction_rules: (customCriteria.scoring_logic === 'deduction' || customCriteria.scoring_logic === 'composite') ? deductionRulesArray : null,
+              addition_rules: additionRulesArray,
+              deduction_rules: deductionRulesArray,
               sort_order: i + 1
             })
           })
@@ -501,13 +508,16 @@ export default function CompanyAdminPage() {
       }
       
       // 刪除多餘的 criteria
-      if (existingCriteria.length > newJob.customCriteria.length) {
-        for (let i = newJob.customCriteria.length; i < existingCriteria.length; i++) {
+      if (newJob.enableCustomCriteria && existingCriteria.length > desiredCriteria.length) {
+        const desiredKeys = new Set(desiredCriteria.map((c: any) => c.key))
+        for (const c of existingCriteria) {
+          if (!c?.id || !c?.key) continue
+          if (desiredKeys.has(c.key)) continue
           await fetch('/api/evaluation-criteria/delete', {
             method: 'POST',
             headers: headers(token, { 'Content-Type': 'application/json' }),
             body: JSON.stringify({
-              id: existingCriteria[i].id,
+              id: c.id,
               company_id: companyId
             })
           })
@@ -525,13 +535,7 @@ export default function CompanyAdminPage() {
         criteria_minimums: {},
         active_criteria: Object.keys(criteriaNames)
       },
-      customCriteria: [
-        { key: 'content_integrity', display_name: '內容完整性', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '答非所問-1.5分\n回答不完整或缺少關鍵資訊-1分', addition_rules: '切題且至少回答問題核心+0.5分\n提供具體例子/步驟/數據+1分' },
-        { key: 'logical_clarity', display_name: '邏輯清晰度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '條理不清-1分\n自相矛盾或邏輯錯誤-1.5分', addition_rules: '回答有結構（先結論後理由）+0.5分\n前後一致、因果清楚+1分' },
-        { key: 'professional_depth', display_name: '專業深度', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '專業知識明顯錯誤-1.5分\n無法舉出實務案例或只背誦定義-1分', addition_rules: '使用正確基本概念/術語+0.5分\n能解釋trade-off或提出實務案例+2分\n展現深度理解（拆解原因/限制）+1分' },
-        { key: 'communication', display_name: '溝通能力', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '表達不清晰-1分\n表達不流暢或跳躍導致難以理解-1分', addition_rules: '表達清楚、重點明確+0.5分\n主動釐清前提/確認需求/條列化表達+1分' },
-        { key: 'personal_attributes', display_name: '個人特質', weight: 0.2, max_score: 10, scoring_logic: 'composite' as const, deduction_rules: '缺乏企圖心與主動性-1.5分\n對學習成長明顯消極-1分\n團隊合作態度不佳或推責-1.5分\n抗壓與面對挫折態度消極-1分', addition_rules: '展現正常職場合作/學習態度+0.5分\n向上心求知慾（具體例子）+1.5分\n持續學習（具體做法）+1.5分\n抗壓與面對挫折成熟+1.5分\n主動性/負責任態度+1.5分' }
-      ]
+      customCriteria: DEFAULT_CUSTOM_CRITERIA
     })
     await loadJobs(token)
     // 教學 step6：建立完成一個職種後進到 step7（共用題庫）
@@ -684,7 +688,7 @@ export default function CompanyAdminPage() {
           return [
             `${idx + 1}. key: ${c.key}`,
             `   display_name: ${c.display_name}`,
-            `   scoring_logic: ${c.scoring_logic || 'deduction'}`,
+            `   scoring_logic: ${c.scoring_logic || 'composite'}`,
             `   addition_rules: ${additionRules.filter((r: string) => r && r.trim()).join('；') || '無'}`,
             `   deduction_rules: ${deductionRules.filter((r: string) => r && r.trim()).join('；') || '無'}`,
           ].join('\n')
@@ -1168,7 +1172,7 @@ ${criteriaText}
             weight: c.weight,
             // 自訂評估項目 max score 鎖死為 10（即使資料庫不是 10，也統一視為 10）
             max_score: 10,
-            scoring_logic: c.scoring_logic || 'deduction',
+            scoring_logic: c.scoring_logic || 'composite',
             addition_rules: Array.isArray(c.addition_rules) ? c.addition_rules.join('\n') : (typeof c.addition_rules === 'string' ? c.addition_rules : ''),
             deduction_rules: Array.isArray(c.deduction_rules) ? c.deduction_rules.join('\n') : (typeof c.deduction_rules === 'string' ? c.deduction_rules : '')
           }))
@@ -2178,7 +2182,7 @@ ${criteriaText}
                                       計算邏輯
                                     </label>
                                     <select
-                                      value={criteria.scoring_logic || 'deduction'}
+                                      value={criteria.scoring_logic || 'composite'}
                                       onChange={(e) => {
                                         const newLogic = e.target.value as 'addition' | 'deduction' | 'composite'
                                         const updated = [...newJob.customCriteria]
@@ -2547,7 +2551,7 @@ ${criteriaText}
                                             計算邏輯
                                           </label>
                                           <select
-                                            value={criteria.scoring_logic || 'deduction'}
+                                            value={criteria.scoring_logic || 'composite'}
                                             onChange={(e) => {
                                               const newLogic = e.target.value as 'addition' | 'deduction' | 'composite'
                                               const updated = [...editJob.customCriteria]

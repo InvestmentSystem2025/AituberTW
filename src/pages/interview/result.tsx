@@ -138,12 +138,6 @@ export default function InterviewResultPage() {
             >
               回到面試列表
             </button>
-            <button
-              onClick={() => router.push('/')}
-              className="px-4 py-2 rounded-lg bg-gray-100 text-gray-700 text-sm font-medium hover:bg-gray-200"
-            >
-              回首頁
-            </button>
           </div>
         </div>
       </div>
