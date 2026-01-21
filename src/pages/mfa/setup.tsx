@@ -18,12 +18,13 @@ export default function MfaSetupPage() {
   const [message, setMessage] = useState<string>('')
   const [verifying, setVerifying] = useState(false)
   const [alreadyEnabled, setAlreadyEnabled] = useState(false)
+  const [qrBlobUrl, setQrBlobUrl] = useState<string>('')
 
-  const qrImgSrc = useMemo(() => {
+  const qrApiUrl = useMemo(() => {
     if (!otpauthUrl) return ''
-    // 外部 QR 產生服務（MVP）。若環境無法連外，使用者仍可手動輸入 secret。
-    const url = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(otpauthUrl)}`
-    return url
+    // 伺服器端生成 QR（避免依賴外部服務）；注意：<img> 不會自帶 Authorization header，
+    // 因此前端會用 fetch 取得 blob，再轉成 object URL 顯示。
+    return `/api/mfa/totp/qr-code?otpauth_url=${encodeURIComponent(otpauthUrl)}`
   }, [otpauthUrl])
 
   useEffect(() => {
@@ -80,6 +81,50 @@ export default function MfaSetupPage() {
     }
     run()
   }, [])
+
+  useEffect(() => {
+    if (!qrApiUrl) {
+      if (qrBlobUrl) URL.revokeObjectURL(qrBlobUrl)
+      setQrBlobUrl('')
+      return
+    }
+
+    const controller = new AbortController()
+    const run = async () => {
+      try {
+        const { data: session } = await supabase.auth.getSession()
+        const token = session.session?.access_token
+        if (!token) return
+
+        const r = await fetch(qrApiUrl, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        })
+        if (!r.ok) return
+        const blob = await r.blob()
+        const nextUrl = URL.createObjectURL(blob)
+        setQrBlobUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev)
+          return nextUrl
+        })
+      } catch {
+        // ignore (abort / network)
+      }
+    }
+    run()
+
+    return () => {
+      controller.abort()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qrApiUrl])
+
+  useEffect(() => {
+    return () => {
+      if (qrBlobUrl) URL.revokeObjectURL(qrBlobUrl)
+    }
+  }, [qrBlobUrl])
 
   const onVerify = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -151,10 +196,10 @@ export default function MfaSetupPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, alignItems: 'start' }}>
               <div style={{ textAlign: 'center', border: '2px solid rgb(152 155 161)', borderRadius: 12, padding: 12 }}>
                 <p>若已下載並註冊Authenticator，請用Authenticator掃描下方QR code以新增帳戶。</p>
-                {qrImgSrc ? (
+                {qrBlobUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={qrImgSrc}
+                    src={qrBlobUrl}
                     alt="Authenticator 綁定 QR"
                     width={220}
                     height={220}
