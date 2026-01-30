@@ -1,0 +1,276 @@
+services:
+  # Public entrypoint (HTTPS) for both domains.
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+      - supabase-kong
+
+  # Next.js app (production)
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - TZ=Asia/Taipei
+      # Browser-side Supabase URL must be public HTTPS.
+      - NEXT_PUBLIC_SUPABASE_URL=https://supabase.ai-interview.tw
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      # Server-side keys (never expose these to users)
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      # Server-side internal routing to Kong inside docker network
+      - SUPABASE_INTERNAL_URL=http://supabase-kong:8000
+    command: npm run start
+    depends_on:
+      - supabase-kong
+
+  # ----------------------------
+  # Supabase (self-hosted)
+  # ----------------------------
+
+  supabase-db:
+    image: supabase/postgres:15.6.1.101
+    restart: unless-stopped
+    # Bind only to localhost (admin use via SSH tunnel)
+    ports:
+      - "127.0.0.1:5432:5432"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Taipei
+      APP_SEED_ADMIN_EMAIL: ${APP_SEED_ADMIN_EMAIL:-}
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - listen_addresses=*
+      - -c
+      - search_path="$user", public, auth, storage, extensions
+    volumes:
+      - supabase_db_data:/var/lib/postgresql/data
+      - ./supabase/init.sql:/docker-entrypoint-initdb.d/init-scripts/99_user_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+
+  supabase-auth:
+    image: supabase/gotrue:v2.150.0
+    restart: unless-stopped
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Frontend site URL (where users land)
+      GOTRUE_SITE_URL: ${AUTH_REDIRECT_URL:-https://ai-interview.tw}
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      GOTRUE_DB_DRIVER: postgres
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres?search_path=auth,public,storage,extensions
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      GOTRUE_MAILER_SECURE_EMAIL_CHANGE_ENABLED: "true"
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: ${SMTP_CONFIRMATION_PATH:-/auth/confirm}
+      GOTRUE_MAILER_URLPATHS_INVITE: ${SMTP_INVITE_PATH:-/auth/confirm}
+      GOTRUE_MAILER_DEFAULT_REDIRECT_URL: ${SMTP_DEFAULT_REDIRECT_URL:-https://ai-interview.tw}
+      GOTRUE_SMTP_HOST: ""
+      GOTRUE_SMTP_PORT: "0"
+      GOTRUE_SMTP_USER: ""
+      GOTRUE_SMTP_PASS: ""
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-AITuber Kit}
+      GOTRUE_SMTP_MAX_FREQUENCY: ${SMTP_MAX_FREQUENCY:-1s}
+      # Public Supabase API gateway URL (Kong)
+      GOTRUE_EXTERNAL_URL: ${SITE_URL:-https://supabase.ai-interview.tw}
+      GOTRUE_API_EXTERNAL_URL: ${SITE_URL:-https://supabase.ai-interview.tw}
+      API_EXTERNAL_URL: ${SITE_URL:-https://supabase.ai-interview.tw}
+      TZ: Asia/Taipei
+
+  supabase-rest:
+    image: postgrest/postgrest:v12.0.2
+    restart: unless-stopped
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      PGRST_DB_URI: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_DB_SCHEMAS: public,storage
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      TZ: Asia/Taipei
+
+  supabase-realtime:
+    image: supabase/realtime:v2.30.34
+    restart: unless-stopped
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_HOST: supabase-db
+      DB_NAME: postgres
+      DB_USER: postgres
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      PORT: 4000
+      API_JWT_SECRET: ${JWT_SECRET}
+      SECRET_KEY_BASE: ${REALTIME_SECRET_KEY_BASE:-dev-secret-key-base-change-me}
+      APP_NAME: supabase-realtime
+      REALTIME_CLUSTER_STRATEGY: none
+      RELEASE_DISTRIBUTION: none
+      RLIMIT_NOFILE: "100000"
+      ELIXIR_ERL_OPTIONS: "-logger level error -kernel logger_level error"
+      DB_MIGRATIONS_TABLE: realtime_schema_migrations
+      TZ: Asia/Taipei
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+
+  supabase-storage:
+    image: supabase/storage-api:v1.0.11
+    restart: unless-stopped
+    depends_on:
+      supabase-db:
+        condition: service_started
+      supabase-auth:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      ANON_KEY: ${SUPABASE_ANON_KEY}
+      SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      POSTGREST_URL: http://supabase-rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres?search_path=auth,public,storage,extensions
+      FILE_STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TZ: Asia/Taipei
+    volumes:
+      - supabase_storage_data:/var/lib/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  supabase-meta:
+    image: supabase/postgres-meta:v0.80.1
+    restart: unless-stopped
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres?search_path=auth,public,storage,extensions
+      TZ: Asia/Taipei
+
+  # Studio is localhost-only (SSH tunnel) by default.
+  supabase-studio:
+    image: supabase/studio:2025.06.09-sha-4c1349f
+    restart: unless-stopped
+    depends_on: [supabase-db, supabase-rest, supabase-auth, supabase-storage, supabase-meta]
+    env_file:
+      - .env
+    environment:
+      STUDIO_PG_META_URL: http://supabase-meta:8080
+      SUPABASE_URL: ${SITE_URL:-https://supabase.ai-interview.tw}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      STUDIO_DEFAULT_DB_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
+      TZ: Asia/Taipei
+    ports:
+      - "127.0.0.1:54323:3000"
+
+  # Kong API Gateway (public via Caddy)
+  supabase-kong:
+    image: kong:2.8.1
+    restart: unless-stopped
+    depends_on: [supabase-auth, supabase-rest, supabase-realtime, supabase-storage]
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME,SRV
+      KONG_LOG_LEVEL: notice
+      KONG_PLUGINS: bundled,cors
+      KONG_PROXY_LISTEN: 0.0.0.0:8000
+      # (This env isn't interpolated by kong.yml, but we keep it for documentation.)
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-https://ai-interview.tw}
+    volumes:
+      - ./supabase/kong.gcp.yml:/var/lib/kong/kong.yml:ro
+
+  # Optional one-shot bootstrap (create default buckets etc.)
+  supabase-bootstrap:
+    image: alpine:3.20
+    depends_on:
+      supabase-storage:
+        condition: service_started
+      supabase-rest:
+        condition: service_started
+    env_file:
+      - .env
+    command: >
+      sh -lc "set -e;
+      apk add --no-cache curl >/dev/null;
+      for i in $(seq 1 60); do curl -sf http://supabase-storage:5000/status && break || sleep 2; done;
+      for i in $(seq 1 60); do curl -sf http://supabase-rest:3000/ && break || sleep 2; done;
+      echo Seeding buckets...;
+      curl -s -o /dev/null -w '%{http_code}\n' \
+        -H 'Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}' \
+        -H 'apikey: ${SUPABASE_SERVICE_ROLE_KEY}' \
+        -H 'Content-Type: application/json' \
+        -d '{\"name\":\"avatars\",\"public\":true}' \
+        http://supabase-storage:5000/bucket || true;
+      curl -s -o /dev/null -w '%{http_code}\n' \
+        -H 'Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}' \
+        -H 'apikey: ${SUPABASE_SERVICE_ROLE_KEY}' \
+        -H 'Content-Type: application/json' \
+        -d '{\"name\":\"private\",\"public\":false}' \
+        http://supabase-storage:5000/bucket || true;
+      if [ -n \"${APP_SEED_ADMIN_EMAIL}\" ]; then \
+        echo Seeding app_admins...; \
+        curl -s -o /dev/null -w '%{http_code}\n' \
+          -H 'Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}' \
+          -H 'apikey: ${SUPABASE_SERVICE_ROLE_KEY}' \
+          -H 'Content-Type: application/json' \
+          -H 'Prefer: resolution=merge-duplicates' \
+          -d '[{\"email\":\"'\"${APP_SEED_ADMIN_EMAIL}\"'\"}]' \
+          'http://supabase-rest:3000/app_admins?on_conflict=email' || true; \
+      fi;
+      echo Done."
+    restart: "no"
+
+volumes:
+  caddy_data:
+  caddy_config:
+  supabase_db_data:
+  supabase_storage_data:
+

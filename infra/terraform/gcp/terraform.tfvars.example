@@ -1,0 +1,12 @@
+# これは例です。実運用では terraform.tfvars を作成し、この値を埋めてください。
+
+project_id = "YOUR_GCP_PROJECT_ID"
+
+# 必要なら変更
+region = "asia-east1"
+zone   = "asia-east1-a"
+
+# セキュリティのため、可能なら自分のグローバルIPに絞る
+# 例: ["203.0.113.10/32"]
+ssh_source_ranges = ["0.0.0.0/0"]
+
