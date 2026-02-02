@@ -8,6 +8,7 @@
     "public/scripts/*",
     "scripts/**",
     ".mypy_cache/**",
-    "mcp-server/**"
+    "mcp-server/**",
+    "supabase/examples/**"
   ]
 }

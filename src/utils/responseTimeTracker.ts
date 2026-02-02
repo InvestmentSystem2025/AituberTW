@@ -9,13 +9,13 @@ export interface ResponseTimeMetrics {
   apiCallStartTime: number // API 調用開始時間
   apiCallEndTime: number // API 調用結束時間
   responseCompleteTime: number // 回應完成時間
-  
+
   // 時間段（毫秒）
   totalResponseTime: number // 總回應時間（從用戶輸入到回應完成）
   apiResponseTime: number // API 回應時間（從 API 調用到回應）
   networkLatency?: number // 網絡延遲（可選）
   processingTime?: number // 處理時間（可選）
-  
+
   // 影響因素
   userInputLength: number // 用戶輸入文字量（字符數）
   conversationHistoryLength: number // 對話歷史長度（消息數）
@@ -23,7 +23,7 @@ export interface ResponseTimeMetrics {
   aiService: string // 使用的 AI 服務
   aiModel: string // 使用的 AI 模型
   responseLength: number // AI 回應長度（字符數）
-  
+
   // 其他元數據
   questionIndex?: number // 問題索引
   interviewStage?: string // 面試階段
@@ -39,15 +39,18 @@ export interface ResponseTimeAnalysis {
   medianTotalTime: number
   p95TotalTime: number
   p99TotalTime: number
-  
+
   // 按服務分組的統計
-  byService: Record<string, {
-    count: number
-    averageTime: number
-    minTime: number
-    maxTime: number
-  }>
-  
+  byService: Record<
+    string,
+    {
+      count: number
+      averageTime: number
+      minTime: number
+      maxTime: number
+    }
+  >
+
   // 按輸入長度分組的統計
   byInputLength: {
     short: { count: number; averageTime: number } // < 50 字符
@@ -64,13 +67,20 @@ class ResponseTimeTracker {
   /**
    * 開始追蹤回應時間
    */
-  startTracking(userInput: string, aiService: string, aiModel: string, conversationHistoryLength: number, questionIndex?: number, interviewStage?: string): string {
+  startTracking(
+    userInput: string,
+    aiService: string,
+    aiModel: string,
+    conversationHistoryLength: number,
+    questionIndex?: number,
+    interviewStage?: string
+  ): string {
     const trackingId = `track_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
     const userInputTime = performance.now()
-    
+
     // 估算對話歷史 token 數量（粗略估算：1 token ≈ 4 字符）
     const conversationHistoryTokens = conversationHistoryLength * 100 // 假設每條消息平均 100 tokens
-    
+
     const metric: Partial<ResponseTimeMetrics> = {
       userInputTime,
       userInputLength: userInput.length,
@@ -82,14 +92,19 @@ class ResponseTimeTracker {
       interviewStage,
       timestamp: new Date().toISOString(),
     }
-    
+
     // 使用 sessionStorage 暫時儲存（避免頁面重新載入時丟失）
     if (typeof window !== 'undefined') {
-      const pendingMetrics = JSON.parse(sessionStorage.getItem('pending_response_metrics') || '{}')
+      const pendingMetrics = JSON.parse(
+        sessionStorage.getItem('pending_response_metrics') || '{}'
+      )
       pendingMetrics[trackingId] = metric
-      sessionStorage.setItem('pending_response_metrics', JSON.stringify(pendingMetrics))
+      sessionStorage.setItem(
+        'pending_response_metrics',
+        JSON.stringify(pendingMetrics)
+      )
     }
-    
+
     return trackingId
   }
 
@@ -98,14 +113,19 @@ class ResponseTimeTracker {
    */
   recordApiCallStart(trackingId: string) {
     if (typeof window === 'undefined') return
-    
-    const pendingMetrics = JSON.parse(sessionStorage.getItem('pending_response_metrics') || '{}')
+
+    const pendingMetrics = JSON.parse(
+      sessionStorage.getItem('pending_response_metrics') || '{}'
+    )
     const metric = pendingMetrics[trackingId]
     if (!metric) return
-    
+
     metric.apiCallStartTime = performance.now()
     pendingMetrics[trackingId] = metric
-    sessionStorage.setItem('pending_response_metrics', JSON.stringify(pendingMetrics))
+    sessionStorage.setItem(
+      'pending_response_metrics',
+      JSON.stringify(pendingMetrics)
+    )
   }
 
   /**
@@ -113,17 +133,22 @@ class ResponseTimeTracker {
    */
   recordApiCallEnd(trackingId: string) {
     if (typeof window === 'undefined') return
-    
-    const pendingMetrics = JSON.parse(sessionStorage.getItem('pending_response_metrics') || '{}')
+
+    const pendingMetrics = JSON.parse(
+      sessionStorage.getItem('pending_response_metrics') || '{}'
+    )
     const metric = pendingMetrics[trackingId]
     if (!metric) return
-    
+
     metric.apiCallEndTime = performance.now()
     if (metric.apiCallStartTime) {
       metric.apiResponseTime = metric.apiCallEndTime - metric.apiCallStartTime
     }
     pendingMetrics[trackingId] = metric
-    sessionStorage.setItem('pending_response_metrics', JSON.stringify(pendingMetrics))
+    sessionStorage.setItem(
+      'pending_response_metrics',
+      JSON.stringify(pendingMetrics)
+    )
   }
 
   /**
@@ -131,41 +156,51 @@ class ResponseTimeTracker {
    */
   completeTracking(trackingId: string, responseText: string) {
     if (typeof window === 'undefined') return
-    
-    const pendingMetrics = JSON.parse(sessionStorage.getItem('pending_response_metrics') || '{}')
+
+    const pendingMetrics = JSON.parse(
+      sessionStorage.getItem('pending_response_metrics') || '{}'
+    )
     const metric = pendingMetrics[trackingId]
     if (!metric) {
       console.warn(`找不到追蹤 ID: ${trackingId}`)
       return
     }
-    
+
     const responseCompleteTime = performance.now()
     const totalResponseTime = responseCompleteTime - metric.userInputTime
-    
+
     const completeMetric: ResponseTimeMetrics = {
-      ...metric as ResponseTimeMetrics,
+      ...(metric as ResponseTimeMetrics),
       responseCompleteTime,
       totalResponseTime,
       responseLength: responseText.length,
-      apiResponseTime: metric.apiResponseTime || (metric.apiCallEndTime ? metric.apiCallEndTime - (metric.apiCallStartTime || metric.userInputTime) : 0),
+      apiResponseTime:
+        metric.apiResponseTime ||
+        (metric.apiCallEndTime
+          ? metric.apiCallEndTime -
+            (metric.apiCallStartTime || metric.userInputTime)
+          : 0),
     }
-    
+
     // 計算網絡延遲（如果可能）
     if (metric.apiCallStartTime && metric.apiCallEndTime) {
       completeMetric.networkLatency = metric.apiResponseTime || 0
     }
-    
+
     // 儲存到本地儲存
     this.metrics.push(completeMetric)
     this.saveMetrics()
-    
+
     // 從 sessionStorage 中移除
     delete pendingMetrics[trackingId]
-    sessionStorage.setItem('pending_response_metrics', JSON.stringify(pendingMetrics))
-    
+    sessionStorage.setItem(
+      'pending_response_metrics',
+      JSON.stringify(pendingMetrics)
+    )
+
     // 記錄到控制台
     this.logMetric(completeMetric)
-    
+
     return completeMetric
   }
 
@@ -174,8 +209,12 @@ class ResponseTimeTracker {
    */
   private logMetric(metric: ResponseTimeMetrics) {
     console.group('📊 AI 回應時間指標')
-    console.log(`總回應時間: ${metric.totalResponseTime.toFixed(2)}ms (${(metric.totalResponseTime / 1000).toFixed(2)}秒)`)
-    console.log(`API 回應時間: ${metric.apiResponseTime.toFixed(2)}ms (${(metric.apiResponseTime / 1000).toFixed(2)}秒)`)
+    console.log(
+      `總回應時間: ${metric.totalResponseTime.toFixed(2)}ms (${(metric.totalResponseTime / 1000).toFixed(2)}秒)`
+    )
+    console.log(
+      `API 回應時間: ${metric.apiResponseTime.toFixed(2)}ms (${(metric.apiResponseTime / 1000).toFixed(2)}秒)`
+    )
     console.log(`用戶輸入長度: ${metric.userInputLength} 字符`)
     console.log(`對話歷史長度: ${metric.conversationHistoryLength} 條消息`)
     console.log(`AI 回應長度: ${metric.responseLength} 字符`)
@@ -195,12 +234,12 @@ class ResponseTimeTracker {
    */
   private saveMetrics() {
     if (typeof window === 'undefined') return
-    
+
     // 只保留最新的 N 筆記錄
     if (this.metrics.length > this.MAX_STORED_METRICS) {
       this.metrics = this.metrics.slice(-this.MAX_STORED_METRICS)
     }
-    
+
     try {
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.metrics))
     } catch (error) {
@@ -213,7 +252,7 @@ class ResponseTimeTracker {
    */
   loadMetrics(): ResponseTimeMetrics[] {
     if (typeof window === 'undefined') return []
-    
+
     try {
       const stored = localStorage.getItem(this.STORAGE_KEY)
       if (stored) {
@@ -222,7 +261,7 @@ class ResponseTimeTracker {
     } catch (error) {
       console.warn('無法從 localStorage 載入回應時間指標:', error)
     }
-    
+
     return this.metrics
   }
 
@@ -249,7 +288,7 @@ class ResponseTimeTracker {
    */
   analyze(): ResponseTimeAnalysis {
     const metrics = this.metrics
-    
+
     if (metrics.length === 0) {
       return {
         metrics: [],
@@ -268,22 +307,31 @@ class ResponseTimeTracker {
         },
       }
     }
-    
+
     // 計算基本統計
-    const totalTimes = metrics.map(m => m.totalResponseTime).sort((a, b) => a - b)
-    const apiTimes = metrics.map(m => m.apiResponseTime).filter(t => t > 0)
-    
-    const averageTotalTime = totalTimes.reduce((a, b) => a + b, 0) / totalTimes.length
-    const averageApiTime = apiTimes.length > 0 ? apiTimes.reduce((a, b) => a + b, 0) / apiTimes.length : 0
+    const totalTimes = metrics
+      .map((m) => m.totalResponseTime)
+      .sort((a, b) => a - b)
+    const apiTimes = metrics.map((m) => m.apiResponseTime).filter((t) => t > 0)
+
+    const averageTotalTime =
+      totalTimes.reduce((a, b) => a + b, 0) / totalTimes.length
+    const averageApiTime =
+      apiTimes.length > 0
+        ? apiTimes.reduce((a, b) => a + b, 0) / apiTimes.length
+        : 0
     const minTotalTime = totalTimes[0] || 0
     const maxTotalTime = totalTimes[totalTimes.length - 1] || 0
     const medianTotalTime = totalTimes[Math.floor(totalTimes.length / 2)] || 0
     const p95TotalTime = totalTimes[Math.floor(totalTimes.length * 0.95)] || 0
     const p99TotalTime = totalTimes[Math.floor(totalTimes.length * 0.99)] || 0
-    
+
     // 按服務分組統計
-    const byService: Record<string, { count: number; averageTime: number; minTime: number; maxTime: number }> = {}
-    metrics.forEach(metric => {
+    const byService: Record<
+      string,
+      { count: number; averageTime: number; minTime: number; maxTime: number }
+    > = {}
+    metrics.forEach((metric) => {
       if (!byService[metric.aiService]) {
         byService[metric.aiService] = {
           count: 0,
@@ -298,17 +346,17 @@ class ResponseTimeTracker {
       service.minTime = Math.min(service.minTime, metric.totalResponseTime)
       service.maxTime = Math.max(service.maxTime, metric.totalResponseTime)
     })
-    
-    Object.keys(byService).forEach(service => {
+
+    Object.keys(byService).forEach((service) => {
       byService[service].averageTime /= byService[service].count
     })
-    
+
     // 按輸入長度分組統計
     const short: ResponseTimeMetrics[] = []
     const medium: ResponseTimeMetrics[] = []
     const long: ResponseTimeMetrics[] = []
-    
-    metrics.forEach(metric => {
+
+    metrics.forEach((metric) => {
       if (metric.userInputLength < 50) {
         short.push(metric)
       } else if (metric.userInputLength <= 200) {
@@ -317,22 +365,34 @@ class ResponseTimeTracker {
         long.push(metric)
       }
     })
-    
+
     const byInputLength = {
       short: {
         count: short.length,
-        averageTime: short.length > 0 ? short.reduce((sum, m) => sum + m.totalResponseTime, 0) / short.length : 0,
+        averageTime:
+          short.length > 0
+            ? short.reduce((sum, m) => sum + m.totalResponseTime, 0) /
+              short.length
+            : 0,
       },
       medium: {
         count: medium.length,
-        averageTime: medium.length > 0 ? medium.reduce((sum, m) => sum + m.totalResponseTime, 0) / medium.length : 0,
+        averageTime:
+          medium.length > 0
+            ? medium.reduce((sum, m) => sum + m.totalResponseTime, 0) /
+              medium.length
+            : 0,
       },
       long: {
         count: long.length,
-        averageTime: long.length > 0 ? long.reduce((sum, m) => sum + m.totalResponseTime, 0) / long.length : 0,
+        averageTime:
+          long.length > 0
+            ? long.reduce((sum, m) => sum + m.totalResponseTime, 0) /
+              long.length
+            : 0,
       },
     }
-    
+
     return {
       metrics,
       averageTotalTime,
@@ -364,4 +424,3 @@ class ResponseTimeTracker {
 
 // 單例實例
 export const responseTimeTracker = new ResponseTimeTracker()
-

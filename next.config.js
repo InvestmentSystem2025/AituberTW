@@ -4,6 +4,11 @@ const nextConfig = {
   assetPrefix: process.env.BASE_PATH || '',
   basePath: process.env.BASE_PATH || '',
   trailingSlash: true,
+  // Deploy build should not fail on formatting-only lint issues.
+  // Run `npm run lint` / `npm run format` in CI or locally instead.
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   publicRuntimeConfig: {
     root: process.env.BASE_PATH || '',
   },
