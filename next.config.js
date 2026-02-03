@@ -4,6 +4,14 @@ const nextConfig = {
   assetPrefix: process.env.BASE_PATH || '',
   basePath: process.env.BASE_PATH || '',
   trailingSlash: true,
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'images.unsplash.com',
+      },
+    ],
+  },
   // Deploy build should not fail on formatting-only lint issues.
   // Run `npm run lint` / `npm run format` in CI or locally instead.
   eslint: {
