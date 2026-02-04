@@ -81,7 +81,7 @@ const Home = () => {
                 className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-8 py-3 rounded-lg transition-colors inline-flex items-center justify-center gap-2"
               >
                 <PaperAirplaneIcon className="w-5 h-5" />
-                申請 PoC
+                立即試用
               </Link>
 
               <a
