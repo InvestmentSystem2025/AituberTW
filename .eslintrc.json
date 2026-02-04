@@ -4,5 +4,11 @@
   "rules": {
     "prettier/prettier": "error"
   },
-  "ignorePatterns": ["public/scripts/*", "scripts/**", ".mypy_cache/**"]
+  "ignorePatterns": [
+    "public/scripts/*",
+    "scripts/**",
+    ".mypy_cache/**",
+    "mcp-server/**",
+    "supabase/examples/**"
+  ]
 }

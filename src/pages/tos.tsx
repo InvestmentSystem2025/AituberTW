@@ -21,7 +21,7 @@ export default function TosAndSignupPage() {
       // 後端代理（Service Role）讀取最新版與本文
       const r = await fetch('/api/tos/latest')
       if (!r.ok) {
-        setMessage('規約の取得に失敗しました')
+        setMessage('條約取得失敗')
         return
       }
       const j = await r.json()
@@ -82,7 +82,7 @@ export default function TosAndSignupPage() {
             setToken(null)
             // 清除 nonce 但重新設置（因為 preconsent 已成功），直接顯示註冊表單
             setNonceInfo(json)
-            setMessage('セッションが無効になりました。下記フォームからアカウントを作成してください。')
+            setMessage('session 已過期，請按F5刷新頁面')
             setLoading(false)
             return
           }
@@ -105,7 +105,7 @@ export default function TosAndSignupPage() {
       // 未登入：顯示註冊表單
       setNonceInfo(json)
     } catch (e: any) {
-      setMessage(e?.message || '同意処理に失敗しました')
+      setMessage(e?.message || '處理失敗')
     } finally {
       setLoading(false)
     }
@@ -157,13 +157,13 @@ export default function TosAndSignupPage() {
     } catch (err: any) {
       const code = String(err?.message || '')
       if (code === 'TOS_EXPIRED') {
-        setMessage('同意の有効期限が切れました。もう一度お試しください。')
+        setMessage('您的認證已過期，請重試')
         setNonceInfo(null)
       } else if (code === 'TOS_MISMATCH') {
-        setMessage('規約の最新版が更新されました。最新に同意してください。')
+        setMessage('條約已出現新版本，如要繼續使用請同意最新版本條約')
         setNonceInfo(null)
       } else {
-        setMessage('サインアップに失敗しました。' + code)
+        setMessage('登入失敗' + code)
       }
     } finally {
       setLoading(false)
@@ -172,12 +172,12 @@ export default function TosAndSignupPage() {
 
   return (
     <div style={{ maxWidth: 720, margin: '48px auto', padding: 24 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>使用規約</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>使用條約</h1>
       <div style={{ color: '#666', marginBottom: 12 }}>最新版本: {version || '未発行'}</div>
       {!nonceInfo && (
         <>
           <div style={{ whiteSpace: 'pre-wrap', border: '1px solid #ddd', padding: 16, borderRadius: 8, maxHeight: 360, overflow: 'auto' }}>
-            {body || '（管理者が terms_of_service に本文を登録してください）'}
+            {body || '（管理者請新增條約'}
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
             <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
@@ -185,7 +185,7 @@ export default function TosAndSignupPage() {
           </label>
           <div style={{ marginTop: 12 }}>
             <button disabled={!checked || loading || !version} onClick={onAgree} style={{ padding: '8px 12px' }}>
-              {loading ? '処理中…' : '同意する'}
+              {loading ? '處理中…' : '我同意'}
             </button>
           </div>
         </>
@@ -225,7 +225,7 @@ export default function TosAndSignupPage() {
             </select>
           </label>
           <button type="submit" disabled={loading} style={{ padding: 10 }}>
-            {loading ? '処理中…' : 'アカウント作成'}
+            {loading ? '處理中…' : '建立帳號'}
           </button>
         </form>
       )}

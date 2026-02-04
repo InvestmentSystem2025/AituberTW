@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { responseTimeTracker, ResponseTimeAnalysis } from '@/utils/responseTimeTracker'
+import { responseTimeTracker, type ResponseTimeAnalysis as ResponseTimeAnalysisData } from '@/utils/responseTimeTracker'
 
 interface ResponseTimeAnalysisProps {
   isOpen: boolean
@@ -10,7 +10,7 @@ export const ResponseTimeAnalysis: React.FC<ResponseTimeAnalysisProps> = ({
   isOpen,
   onClose,
 }) => {
-  const [analysis, setAnalysis] = useState<ResponseTimeAnalysis | null>(null)
+  const [analysis, setAnalysis] = useState<ResponseTimeAnalysisData | null>(null)
   const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {

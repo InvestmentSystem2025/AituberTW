@@ -1,0 +1,15 @@
+{
+  # Optional: admin off
+  # admin off
+}
+
+# AITuberKit (Next.js)
+ai-interview.tw {
+  reverse_proxy app:3000
+}
+
+# Self-hosted Supabase API gateway (Kong)
+supabase.ai-interview.tw {
+  reverse_proxy supabase-kong:8000
+}
+
