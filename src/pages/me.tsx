@@ -46,6 +46,8 @@ function clearTutorialState() {
 export default function MePage() {
   const router = useRouter()
   const [email, setEmail] = useState('')
+  const [familyName, setFamilyName] = useState<string>('')
+  const [givenName, setGivenName] = useState<string>('')
   const [profileId, setProfileId] = useState<string>('')
   const [userRole, setUserRole] = useState<'jobSeeker' | 'recruiter' | null>(null)
   const [alreadyTeach, setAlreadyTeach] = useState<boolean | null>(null)
@@ -158,13 +160,15 @@ export default function MePage() {
       if (token && sess?.user?.id) {
         const { data: profile } = await supabase
           .from('profiles')
-          .select('id, role, preferred_language, already_teach')
+          .select('id, role, preferred_language, already_teach, family_name, given_name')
           .eq('auth_id', sess.user.id)
           .single()
         
         if (profile?.id) {
           setProfileId(profile.id)
         }
+        setFamilyName(typeof (profile as any)?.family_name === 'string' ? (profile as any).family_name : '')
+        setGivenName(typeof (profile as any)?.given_name === 'string' ? (profile as any).given_name : '')
         if (profile?.role) {
           setUserRole(profile.role as 'jobSeeker' | 'recruiter')
           // 不需要在這裡設定預設 tab，因為已經在初始化時從 URL 讀取了
@@ -805,7 +809,12 @@ export default function MePage() {
       {activeTab === 'profile' && (
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 600 }}>個人資料</h2>
-          <div style={{ marginTop: 8 }}>您好，{email || '訪客'}</div>
+          <div style={{ marginTop: 8 }}>
+            您好，{[familyName, givenName].filter(Boolean).join('') || email || '訪客'}
+          </div>
+          {!!([familyName, givenName].filter(Boolean).join('')) && !!email && (
+            <div style={{ marginTop: 4, fontSize: 13, color: '#666' }}>Email：{email}</div>
+          )}
           {tos && (
             <div style={{ marginTop: 8, fontSize: 14, color: '#555' }}>
               最新ToS同意: {String(tos.accepted)} / version: {tos.version || '-'} {tos.accepted_at ? `(at ${tos.accepted_at})` : ''}

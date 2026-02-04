@@ -56,6 +56,7 @@ type Interview = {
   status?: 'waitToStart' | 'completed' | 'lateButComplete' | 'noShow' | 'cancelled'; 
   profiles_id?: string; 
   candidate_email?: string;
+  profiles?: { id: string; family_name?: string | null; given_name?: string | null } | null
   // 可能會包含從 Supabase 關聯查詢回來的 interview_sessions（0 或 1 筆）
   interview_sessions?: any;
 }
@@ -3250,12 +3251,24 @@ ${criteriaText}
                         const reviewType = sessionReviewType || interviewReviewType
                         const canHumanReview = !!session && reviewType === 'HUMAN'
                         const hasSession = !!session
+                        const candidateProfile = (iv as any).profiles as
+                          | { family_name?: string | null; given_name?: string | null }
+                          | null
+                          | undefined
+                        const candidateName = [
+                          candidateProfile?.family_name || '',
+                          candidateProfile?.given_name || '',
+                        ]
+                          .filter(Boolean)
+                          .join('')
+                        const candidateDisplay = candidateName || iv.candidate_email || iv.profiles_id || '-'
 
                         return (
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                               <div style={{ flex: 1, minWidth: 250 }}>
                                 <div style={{ fontWeight: 'bold' }}>職種: {job?.job_title || iv.job_opening_id}</div>
+                                <div style={{ fontWeight: 'bold' }}>面試者: {candidateDisplay}</div>
                                 <div style={{ fontSize: '0.9em', color: '#666' }}>
                                   開始: {iv.start_time}<br />
                                   狀態: {formatInterviewStatus(iv.status)}<br />

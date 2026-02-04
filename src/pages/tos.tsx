@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
-type PreconsentResp = { nonce: string; terms_version: string; expires_at: string }
+type PreconsentResp = {
+  nonce: string
+  terms_version: string
+  expires_at: string
+}
 
 export default function TosAndSignupPage() {
   const [body, setBody] = useState<string>('')
@@ -10,8 +14,12 @@ export default function TosAndSignupPage() {
   const [nonceInfo, setNonceInfo] = useState<PreconsentResp | null>(null)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [familyName, setFamilyName] = useState('')
+  const [givenName, setGivenName] = useState('')
   const [role, setRole] = useState<'jobSeeker' | 'recruiter'>('jobSeeker')
-  const [preferredLanguage, setPreferredLanguage] = useState<'zh-TW' | 'en-US' | 'ja-JP'>('zh-TW')
+  const [preferredLanguage, setPreferredLanguage] = useState<
+    'zh-TW' | 'en-US' | 'ja-JP'
+  >('zh-TW')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [token, setToken] = useState<string | null>(null)
@@ -52,7 +60,7 @@ export default function TosAndSignupPage() {
       const resp = await fetch('/api/tos/preconsent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_agent: ua })
+        body: JSON.stringify({ user_agent: ua }),
       })
       if (!resp.ok) throw new Error('PRECONSENT_FAILED')
       const json = (await resp.json()) as PreconsentResp
@@ -91,9 +99,15 @@ export default function TosAndSignupPage() {
         }
         // 同意完成後：除非「明確已完成 MFA」，否則一律先去 /mfa/setup，避免先跳 /me 再被 gate 轉跳
         try {
-          const mfaResp = await fetch('/api/me/mfa', { headers: { Authorization: `Bearer ${claimToken}` } })
+          const mfaResp = await fetch('/api/me/mfa', {
+            headers: { Authorization: `Bearer ${claimToken}` },
+          })
           const mfaJson = await mfaResp.json().catch(() => ({}))
-          const mfaEnabled = !!(mfaResp.ok && mfaJson && (mfaJson as any).mfa_enabled === true)
+          const mfaEnabled = !!(
+            mfaResp.ok &&
+            mfaJson &&
+            (mfaJson as any).mfa_enabled === true
+          )
           window.location.href = mfaEnabled ? '/me' : '/mfa/setup'
         } catch {
           // 保守：若判斷失敗，仍先去 /mfa/setup（避免先跳 /me）
@@ -123,34 +137,24 @@ export default function TosAndSignupPage() {
         body: JSON.stringify({
           email,
           password,
+          family_name: familyName,
+          given_name: givenName,
           role,
           nonce: nonceInfo.nonce,
           preferredLanguage,
-        })
+        }),
       })
       if (!resp.ok) {
         const j = await resp.json().catch(() => ({}))
         throw new Error(j?.code || j?.error || 'SIGNUP_FAILED')
       }
 
-      // try sign in to obtain token for claim (depends on email confirmation policy)
-      const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({ email, password })
+      // try sign in (depends on email confirmation policy)
+      const { data: signInData, error: signInErr } =
+        await supabase.auth.signInWithPassword({ email, password })
       if (signInErr || !signInData?.session?.access_token) {
         setMessage('帳號已建立，請前往信箱點擊驗證連結後再登入。')
         return
-      }
-      // claim
-      const claimResp = await fetch('/api/tos/claim', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${signInData.session.access_token}`
-        },
-        body: JSON.stringify({ nonce: nonceInfo.nonce })
-      })
-      if (!claimResp.ok) {
-        const j = await claimResp.json().catch(() => ({}))
-        throw new Error(j?.error || 'CLAIM_FAILED')
       }
       // 註冊完成後先導向 MFA 設定頁（/me 仍保留 gate 作為保險）
       window.location.href = '/mfa/setup'
@@ -172,39 +176,105 @@ export default function TosAndSignupPage() {
 
   return (
     <div style={{ maxWidth: 720, margin: '48px auto', padding: 24 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>使用條約</h1>
-      <div style={{ color: '#666', marginBottom: 12 }}>最新版本: {version || '未発行'}</div>
+      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>
+        使用條約
+      </h1>
+      <div style={{ color: '#666', marginBottom: 12 }}>
+        最新版本: {version || '未発行'}
+      </div>
       {!nonceInfo && (
         <>
-          <div style={{ whiteSpace: 'pre-wrap', border: '1px solid #ddd', padding: 16, borderRadius: 8, maxHeight: 360, overflow: 'auto' }}>
+          <div
+            style={{
+              whiteSpace: 'pre-wrap',
+              border: '1px solid #ddd',
+              padding: 16,
+              borderRadius: 8,
+              maxHeight: 360,
+              overflow: 'auto',
+            }}
+          >
             {body || '（管理者請新增條約'}
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
-            <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
-            同意します
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginTop: 12,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={(e) => setChecked(e.target.checked)}
+            />
+            我同意
           </label>
           <div style={{ marginTop: 12 }}>
-            <button disabled={!checked || loading || !version} onClick={onAgree} style={{ padding: '8px 12px' }}>
-              {loading ? '處理中…' : '我同意'}
+            <button
+              disabled={!checked || loading || !version}
+              onClick={onAgree}
+              style={{ padding: '8px 12px' }}
+            >
+              {loading ? '處理中…' : '確認'}
             </button>
           </div>
         </>
       )}
 
       {nonceInfo && (
-        <form onSubmit={onSignup} style={{ display: 'grid', gap: 12, marginTop: 16 }}>
+        <form
+          onSubmit={onSignup}
+          style={{ display: 'grid', gap: 12, marginTop: 16 }}
+        >
           <div style={{ fontWeight: 600 }}>註冊</div>
           <label>
             Email
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required style={{ width: '100%', padding: 8, marginTop: 4 }} />
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              style={{ width: '100%', padding: 8, marginTop: 4 }}
+            />
           </label>
           <label>
             Password
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} style={{ width: '100%', padding: 8, marginTop: 4 }} />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={6}
+              style={{ width: '100%', padding: 8, marginTop: 4 }}
+            />
+          </label>
+          <label>
+            姓（Family name）
+            <input
+              value={familyName}
+              onChange={(e) => setFamilyName(e.target.value)}
+              required
+              style={{ width: '100%', padding: 8, marginTop: 4 }}
+            />
+          </label>
+          <label>
+            名（Given name）
+            <input
+              value={givenName}
+              onChange={(e) => setGivenName(e.target.value)}
+              required
+              style={{ width: '100%', padding: 8, marginTop: 4 }}
+            />
           </label>
           <label>
             Role
-            <select value={role} onChange={(e) => setRole(e.target.value as any)} style={{ width: '100%', padding: 8, marginTop: 4 }}>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as any)}
+              style={{ width: '100%', padding: 8, marginTop: 4 }}
+            >
               <option value="jobSeeker">jobSeeker</option>
               <option value="recruiter">recruiter</option>
             </select>
@@ -214,7 +284,9 @@ export default function TosAndSignupPage() {
             <select
               value={preferredLanguage}
               onChange={(e) =>
-                setPreferredLanguage(e.target.value as 'zh-TW' | 'en-US' | 'ja-JP')
+                setPreferredLanguage(
+                  e.target.value as 'zh-TW' | 'en-US' | 'ja-JP'
+                )
               }
               style={{ width: '100%', padding: 8, marginTop: 4 }}
               required
@@ -234,5 +306,3 @@ export default function TosAndSignupPage() {
     </div>
   )
 }
-
-

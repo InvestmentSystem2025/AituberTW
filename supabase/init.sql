@@ -72,6 +72,9 @@ CREATE TABLE public.profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   auth_id UUID UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT,
+  -- 姓名（註冊時輸入）
+  family_name TEXT,
+  given_name TEXT,
   role TEXT NOT NULL CHECK (role IN ('jobSeeker','recruiter')),
   -- recruiter 新手教學：是否已看過使用教學
   already_teach BOOLEAN NOT NULL DEFAULT false,
@@ -108,6 +111,28 @@ BEGIN
     ALTER TABLE public.profiles
       ALTER COLUMN already_teach SET DEFAULT false,
       ALTER COLUMN already_teach SET NOT NULL;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'profiles'
+      AND column_name = 'family_name'
+  ) THEN
+    ALTER TABLE public.profiles
+      ADD COLUMN family_name TEXT;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'profiles'
+      AND column_name = 'given_name'
+  ) THEN
+    ALTER TABLE public.profiles
+      ADD COLUMN given_name TEXT;
   END IF;
 
   IF NOT EXISTS (
@@ -1060,11 +1085,16 @@ AS $$
 DECLARE
   v_role TEXT;
   v_lang TEXT;
+  v_family_name TEXT;
+  v_given_name TEXT;
 BEGIN
   -- 從 user_metadata 中讀取 role
   v_role := NEW.raw_user_meta_data->>'role';
   -- 從 user_metadata 中讀取偏好語言
   v_lang := NEW.raw_user_meta_data->>'preferred_language';
+  -- 從 user_metadata 中讀取姓與名
+  v_family_name := NEW.raw_user_meta_data->>'family_name';
+  v_given_name := NEW.raw_user_meta_data->>'given_name';
   
   -- 如果 role 不在 user_metadata 中，嘗試從 raw_app_meta_data 中讀取
   IF v_role IS NULL THEN
@@ -1074,14 +1104,23 @@ BEGIN
   IF v_lang IS NULL THEN
     v_lang := NEW.raw_app_meta_data->>'preferred_language';
   END IF;
+  -- 如果姓/名不在 user_metadata 中，嘗試從 raw_app_meta_data 中讀取
+  IF v_family_name IS NULL THEN
+    v_family_name := NEW.raw_app_meta_data->>'family_name';
+  END IF;
+  IF v_given_name IS NULL THEN
+    v_given_name := NEW.raw_app_meta_data->>'given_name';
+  END IF;
   
   -- 使用 SECURITY DEFINER 權限直接插入，繞過 RLS
-  INSERT INTO public.profiles (auth_id, email, role, preferred_language)
+  INSERT INTO public.profiles (auth_id, email, role, preferred_language, family_name, given_name)
   VALUES (
     NEW.id,
     NEW.email,
     COALESCE(v_role, 'jobSeeker'),
-    COALESCE(v_lang, 'zh-TW')
+    COALESCE(v_lang, 'zh-TW'),
+    NULLIF(btrim(COALESCE(v_family_name, '')), ''),
+    NULLIF(btrim(COALESCE(v_given_name, '')), '')
   )
   ON CONFLICT (auth_id) DO NOTHING;
   RETURN NEW;
