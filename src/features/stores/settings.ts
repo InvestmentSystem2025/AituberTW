@@ -537,9 +537,9 @@ const getInitialValuesFromEnv = (): SettingsState => ({
     parseFloat(process.env.NEXT_PUBLIC_NIJIVOICE_SOUND_DURATION || '0.1') ||
     0.1,
   voaiApiKey: process.env.NEXT_PUBLIC_VOAI_API_KEY || '',
-  voaiSpeaker: process.env.NEXT_PUBLIC_VOAI_SPEAKER || '雨榛',
-  voaiStyle: process.env.NEXT_PUBLIC_VOAI_STYLE || '高興',
-  voaiSpeed: parseFloat(process.env.NEXT_PUBLIC_VOAI_SPEED || '1.0') || 1.0,
+  voaiSpeaker: process.env.NEXT_PUBLIC_VOAI_SPEAKER || '柔洢',
+  voaiStyle: process.env.NEXT_PUBLIC_VOAI_STYLE || '預設',
+  voaiSpeed: parseFloat(process.env.NEXT_PUBLIC_VOAI_SPEED || '1.3') || 1.0,
   voaiPitchShift: parseFloat(process.env.NEXT_PUBLIC_VOAI_PITCH_SHIFT || '0') || 0,
   voaiStyleWeight: parseFloat(process.env.NEXT_PUBLIC_VOAI_STYLE_WEIGHT || '0.5') || 0.5,
   voaiBreathPause: parseFloat(process.env.NEXT_PUBLIC_VOAI_BREATH_PAUSE || '0') || 0,

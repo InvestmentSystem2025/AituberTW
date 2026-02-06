@@ -31,7 +31,7 @@ export default async function handler(
         version: 'Classic',
         text: text,
         speaker: speaker,
-        style: style || '高興',
+        style: style || '預設',
         speed: speed || 1,
         pitch_shift: pitch_shift || 0,
         style_weight: style_weight || 0.5,
