@@ -39,3 +39,9 @@ variable "ssh_source_ranges" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "allow_stopping_for_update" {
+  description = "インスタンス更新のために停止を許可する（machine_type 変更など）"
+  type        = bool
+  default     = false
+}
+

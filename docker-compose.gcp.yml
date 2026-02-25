@@ -6,6 +6,10 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      # Used by Caddyfile.stg basicauth. Safe to be empty in prod.
+      - BASIC_AUTH_USER=${BASIC_AUTH_USER}
+      - BASIC_AUTH_PASS_HASH=${BASIC_AUTH_PASS_HASH}
     volumes:
       - ./${CADDYFILE_NAME}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

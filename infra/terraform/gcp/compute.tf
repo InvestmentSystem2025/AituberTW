@@ -8,6 +8,8 @@ resource "google_compute_instance" "vm" {
   machine_type = var.machine_type
   zone         = var.zone
 
+  allow_stopping_for_update = var.allow_stopping_for_update
+
   tags = ["${var.name_prefix}-web"]
 
   boot_disk {
