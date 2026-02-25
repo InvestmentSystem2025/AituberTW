@@ -39,6 +39,33 @@ terraform plan
 terraform apply
 ```
 
+## prod/stg：Terraform workspace（本機 state）
+
+同一份 `.tf` 程式碼可用 workspace 建立兩套完全隔離的環境（prod/stg 各自一份 state）。
+
+1) 準備變數檔（不 commit）：
+
+```bash
+cp terraform.prod.tfvars.example terraform.prod.tfvars
+cp terraform.stg.tfvars.example terraform.stg.tfvars
+```
+
+2) 建立/切換 workspace 並套用：
+
+```bash
+terraform init
+
+terraform workspace new prod || true
+terraform workspace select prod
+terraform apply -var-file=terraform.prod.tfvars
+
+terraform workspace new stg || true
+terraform workspace select stg
+terraform apply -var-file=terraform.stg.tfvars
+```
+
+各 workspace 套用後可用 `terraform output external_ip` 取得對應的 static IP。
+
 刪除資源：
 
 ```bash

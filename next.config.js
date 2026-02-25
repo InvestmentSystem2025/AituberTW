@@ -1,10 +1,48 @@
 /** @type {import('next').NextConfig} */
+const isStrictSecurityMode = process.env.SECURITY_HEADERS_MODE === 'strict'
+
 const nextConfig = {
   reactStrictMode: true,
+  poweredByHeader: false,
   assetPrefix: process.env.BASE_PATH || '',
   basePath: process.env.BASE_PATH || '',
   trailingSlash: true,
+  // Avoid 308 redirects (some scanners flag missing headers on redirects)
+  skipTrailingSlashRedirect: true,
+  async headers() {
+    // Some internal Next routes (e.g. /_next/image) may not reliably pick up middleware headers
+    // depending on runtime/route handling. Setting baseline security headers here ensures coverage.
+    return [
+      // Next page data endpoints should always be served as JSON (avoid MIME sniffing).
+      {
+        source: '/_next/data/:path*',
+        headers: [
+          { key: 'Content-Type', value: 'application/json; charset=utf-8' },
+        ],
+      },
+      {
+        source: '/:path*',
+        headers: [
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          { key: 'X-Permitted-Cross-Domain-Policies', value: 'none' },
+          {
+            key: 'Permissions-Policy',
+            value:
+              'camera=(self), microphone=(self), geolocation=(), payment=(), usb=(), interest-cohort=()',
+          },
+          // HSTS is meaningful only over HTTPS (kept for parity with middleware; harmless on HTTP)
+          { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
+        ],
+      },
+    ]
+  },
   images: {
+    // Next.js image optimizer endpoint `/_next/image` does not consistently include custom security headers
+    // (e.g. X-Content-Type-Options) and may bypass middleware/next.config headers.
+    // In strict security scanning mode, disable optimization so pages won't hit `/_next/image` at all.
+    unoptimized: isStrictSecurityMode,
     remotePatterns: [
       {
         protocol: 'https',

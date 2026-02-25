@@ -32,6 +32,16 @@ yarn-error.log*
 .env
 .env*.local
 .env.deploy
+.env.prod
+.env.stg
+
+# terraform local state/vars (keep local; do not commit)
+**/.terraform/
+**/terraform.tfstate
+**/terraform.tfstate.*
+**/terraform.tfstate.d/
+**/terraform.prod.tfvars
+**/terraform.stg.tfvars
 # vercel
 .vercel
 

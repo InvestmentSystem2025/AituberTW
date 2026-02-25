@@ -233,6 +233,11 @@ export type SettingsState = APIKeys &
   General &
   ModelType
 
+const getWebSearchModeFromEnv = (): 'openai' | 'vector-db' => {
+  const envValue = process.env.NEXT_PUBLIC_WEB_SEARCH_MODE
+  return envValue === 'openai' || envValue === 'vector-db' ? envValue : 'vector-db'
+}
+
 // Function to get initial values from environment variables
 const getInitialValuesFromEnv = (): SettingsState => ({
   // API Keys
@@ -269,7 +274,12 @@ const getInitialValuesFromEnv = (): SettingsState => ({
   selectAIModel: migrateOpenAIModelName(
     process.env.NEXT_PUBLIC_SELECT_AI_MODEL || 'gpt-4.1-mini'
   ),
-  localLlmUrl: process.env.NEXT_PUBLIC_LOCAL_LLM_URL || '',
+  // Avoid embedding internal/local service URLs into production client bundles.
+  // (ZAP can flag these as "Suspicious Comments" because URLs contain `//...` substrings.)
+  localLlmUrl:
+    process.env.NODE_ENV === 'production'
+      ? ''
+      : process.env.NEXT_PUBLIC_LOCAL_LLM_URL || '',
   selectVoice: (process.env.NEXT_PUBLIC_SELECT_VOICE as AIVoice) || 'voai',
   koeiroParam: DEFAULT_PARAM,
   googleTtsType: process.env.NEXT_PUBLIC_GOOGLE_TTS_TYPE || '',
@@ -338,8 +348,10 @@ const getInitialValuesFromEnv = (): SettingsState => ({
     0.2,
   stylebertvits2Length:
     parseFloat(process.env.NEXT_PUBLIC_STYLEBERTVITS2_LENGTH || '1.0') || 1.0,
+  // Avoid embedding local/internal default URLs into production client bundles.
   gsviTtsServerUrl:
-    process.env.NEXT_PUBLIC_GSVI_TTS_URL || 'http://127.0.0.1:5000/tts',
+    process.env.NEXT_PUBLIC_GSVI_TTS_URL ||
+    (process.env.NODE_ENV === 'production' ? '' : 'http://127.0.0.1:5000/tts'),
   gsviTtsModelId: process.env.NEXT_PUBLIC_GSVI_TTS_MODEL_ID || '0',
   gsviTtsBatchSize:
     parseInt(process.env.NEXT_PUBLIC_GSVI_TTS_BATCH_SIZE || '2') || 2,
@@ -450,15 +462,8 @@ const getInitialValuesFromEnv = (): SettingsState => ({
     process.env.NEXT_PUBLIC_MESSAGE_RECEIVER_ENABLED === 'true',
   clientId: process.env.NEXT_PUBLIC_CLIENT_ID || '',
   useSearchGrounding: process.env.NEXT_PUBLIC_USE_SEARCH_GROUNDING === 'true',
-  webSearchMode: (() => {
-    const envValue = process.env.NEXT_PUBLIC_WEB_SEARCH_MODE;
-    console.log('🔍 環境變數檢查:', {
-      NEXT_PUBLIC_WEB_SEARCH_MODE: envValue,
-      type: typeof envValue,
-      allEnvKeys: Object.keys(process.env).filter(key => key.includes('WEB_SEARCH'))
-    });
-    return (envValue as 'openai' | 'vector-db') || 'vector-db';
-  })(),
+  // NOTE: 這段會在 build/SSR 多次執行，避免在這裡 console.log 造成噪音
+  webSearchMode: getWebSearchModeFromEnv(),
   dynamicRetrievalThreshold:
     parseFloat(process.env.NEXT_PUBLIC_DYNAMIC_RETRIEVAL_THRESHOLD || '0.3') ||
     0.3,
@@ -578,13 +583,7 @@ const settingsStore = create<SettingsState>()(
 
       // 強制 webSearchMode 使用環境變數
       if (state) {
-        const envWebSearchMode = (process.env.NEXT_PUBLIC_WEB_SEARCH_MODE as 'openai' | 'vector-db') || 'vector-db'
-        console.log('🔄 強制覆蓋 webSearchMode:', {
-          localStorage: state.webSearchMode,
-          env: envWebSearchMode,
-          overriding: state.webSearchMode !== envWebSearchMode
-        })
-        state.webSearchMode = envWebSearchMode
+        state.webSearchMode = getWebSearchModeFromEnv()
       }
 
       // Override with environment variables if the option is enabled

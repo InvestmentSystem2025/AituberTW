@@ -1,0 +1,18 @@
+{
+  # Optional: admin off
+  # admin off
+}
+
+# AITuberKit (Next.js) - Staging (protected by Basic Auth)
+stg.ai-interview.tw {
+  basicauth {
+    {env.BASIC_AUTH_USER} {env.BASIC_AUTH_PASS_HASH}
+  }
+  reverse_proxy app:3000
+}
+
+# Self-hosted Supabase API gateway (Kong) - Staging (NO Basic Auth)
+supabase-stg.ai-interview.tw {
+  reverse_proxy supabase-kong:8000
+}
+

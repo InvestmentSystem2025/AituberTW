@@ -2,6 +2,7 @@ import '@charcoal-ui/icons'
 import type { AppProps } from 'next/app'
 import React, { useEffect } from 'react'
 import { Analytics } from '@vercel/analytics/react'
+import { Montserrat, M_PLUS_2 } from 'next/font/google'
 
 import { isLanguageSupported } from '@/features/constants/settings'
 import homeStore from '@/features/stores/home'
@@ -10,6 +11,19 @@ import '@/styles/globals.css'
 import '@/styles/themes.css'
 import migrateStore from '@/utils/migrateStore'
 import i18n from '../lib/i18n'
+
+const montserrat = Montserrat({
+  subsets: ['latin'],
+  variable: '--font-montserrat',
+  display: 'swap',
+})
+
+const mPlus2 = M_PLUS_2({
+  // M PLUS 2 supports Japanese; keep latin as fallback for environments that subset.
+  subsets: ['latin'],
+  variable: '--font-mplus2',
+  display: 'swap',
+})
 
 async function loadGlobalAdminSettings() {
   try {
@@ -98,10 +112,15 @@ export default function App({ Component, pageProps }: AppProps) {
     homeStore.setState({ userOnboarded: true })
   }, [])
 
+  // Avoid noisy console errors in local/self-hosted envs where `/_vercel/insights/script.js` doesn't exist.
+  const enableVercelAnalytics =
+    process.env.NEXT_PUBLIC_ENABLE_VERCEL_ANALYTICS === '1' ||
+    process.env.NEXT_PUBLIC_ENABLE_VERCEL_ANALYTICS === 'true'
+
   return (
-    <>
+    <div className={`${montserrat.variable} ${mPlus2.variable}`}>
       <Component {...pageProps} />
-      <Analytics />
-    </>
+      {enableVercelAnalytics ? <Analytics /> : null}
+    </div>
   )
 }

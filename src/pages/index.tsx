@@ -239,7 +239,7 @@ const Home = () => {
             <div className="relative">
               <div className="relative h-[400px] rounded-2xl overflow-hidden shadow-2xl">
                 <Image
-                  src="https://images.unsplash.com/photo-1767788115794-0e93fb905016?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxkYXRhJTIwYW5hbHl0aWNzJTIwdmlzdWFsaXphdGlvbnxlbnwxfHx8fDE3Njk0ODA1OTN8MA&ixlib=rb-4.1.0&q=80&w=1080"
+                  src="/images/home/computer.jpg"
                   alt="AI Interview System"
                   fill
                   sizes="(max-width: 768px) 100vw, 50vw"

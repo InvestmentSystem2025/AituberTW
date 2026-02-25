@@ -1,0 +1,67 @@
+_format_version: "2.1"
+_transform: true
+
+services:
+  - name: auth
+    url: http://supabase-auth:9999
+    routes:
+      - name: auth-route
+        paths: ["/auth"]
+        strip_path: false
+      - name: auth-route-v1
+        paths: ["/auth/v1"]
+        strip_path: true
+
+  - name: rest
+    url: http://supabase-rest:3000
+    routes:
+      - name: rest-route
+        paths: ["/rest"]
+        strip_path: false
+      - name: rest-route-v1
+        paths: ["/rest/v1"]
+        strip_path: true
+
+  - name: storage
+    url: http://supabase-storage:5000
+    routes:
+      - name: storage-route
+        paths: ["/storage"]
+        strip_path: false
+      - name: storage-route-v1
+        paths: ["/storage/v1"]
+        strip_path: true
+
+  - name: realtime
+    url: http://supabase-realtime:4000
+    routes:
+      - name: realtime-route
+        paths: ["/realtime"]
+        strip_path: false
+      - name: realtime-route-v1
+        paths: ["/realtime/v1"]
+        strip_path: true
+
+plugins:
+  - name: cors
+    config:
+      origins:
+        - "https://stg.ai-interview.tw"
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+      headers: [
+        "Authorization",
+        "apikey",
+        "Content-Type",
+        "Accept-Profile",
+        "Content-Profile",
+        "Prefer",
+        "Range",
+        "x-client-info",
+        "x-supabase-api-version",
+        "x-connection-encrypted",
+        "x-request-id"
+      ]
+      exposed_headers: ["Content-Range", "Content-Type", "authorization", "apikey", "x-client-info", "x-supabase-api-version"]
+      credentials: true
+      max_age: 3600
+

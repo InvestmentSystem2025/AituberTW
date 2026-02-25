@@ -1,51 +1,50 @@
 services:
-  # Public entrypoint (HTTPS) for both domains.
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./${CADDYFILE_NAME}:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - app
-      - supabase-kong
-
-  # Next.js app (production)
+  # Next.js App (ZAP scan target)
   app:
     build: .
-    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
     environment:
+      # Production runtime (use strict security headers for scanning)
       - NODE_ENV=production
-      - TZ=Asia/Taipei
-      # Browser-side Supabase URL must be public HTTPS.
-      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
-      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
-      # Server-side keys (never expose these to users)
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      # Server-side internal routing to Kong inside docker network
+      - SECURITY_HEADERS_MODE=strict
+      # Ensure server-side Supabase client can reach Kong via Docker network
       - SUPABASE_INTERNAL_URL=http://supabase-kong:8000
-    command: npm run start
+      # Ensure browser-side Supabase client hits host-exposed Kong
+      - NEXT_PUBLIC_SUPABASE_URL=http://localhost:8001
+      - SUPABASE_AUTH_PUBLIC_URL=http://localhost:8001
+      # Optional: if you don't need MCP during ZAP, keep it empty.
+      - NEXT_PUBLIC_MCP_SERVER_URL=
     depends_on:
-      - supabase-kong
+      supabase-kong:
+        condition: service_started
+      supabase-auth:
+        condition: service_started
+      supabase-rest:
+        condition: service_started
+      supabase-db:
+        condition: service_healthy
+    # Run a fresh build inside container, then wait for Kong+REST to respond, then start server.
+    # Also generate a stable CSP nonce for strict scanning mode (SSG pages need a build-time nonce).
+    command: >
+      sh -lc "export CSP_NONCE=$(node -e \"process.stdout.write(require('crypto').randomBytes(16).toString('base64'))\")
+      && npm run build
+      && node -e \"const deadline=Date.now()+180000; const urls=['http://supabase-kong:8000/rest/v1/','http://supabase-kong:8000/auth/v1/health']; (async()=>{for(;;){try{const rs=await Promise.all(urls.map(u=>fetch(u).then(r=>r.status).catch(()=>0))); if(rs.every(s=>s>0 && s<500)) break;}catch{} if(Date.now()>deadline){console.error('Supabase not ready in time'); process.exit(1);} await new Promise(r=>setTimeout(r,2000));}})();\"
+      && node_modules/.bin/next start -p 3000"
 
-  # ----------------------------
-  # Supabase (self-hosted)
-  # ----------------------------
-
+  # Supabase PostgreSQL
   supabase-db:
     image: supabase/postgres:15.6.1.101
     restart: unless-stopped
-    # Bind only to localhost (admin use via SSH tunnel)
     ports:
-      - "127.0.0.1:5432:5432"
+      - "5432:5432"
+    env_file:
+      - .env
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       TZ: Asia/Taipei
       APP_SEED_ADMIN_EMAIL: ${APP_SEED_ADMIN_EMAIL}
     command:
@@ -61,25 +60,28 @@ services:
       - -c
       - listen_addresses=*
       - -c
-      - search_path="$$user", public, auth, storage, extensions
+      - search_path="$user", public, auth, storage, extensions
     volumes:
       - supabase_db_data:/var/lib/postgresql/data
       - ./supabase/init.sql:/docker-entrypoint-initdb.d/init-scripts/99_user_init.sql:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -h localhost"]
       interval: 5s
       timeout: 5s
       retries: 40
 
+  # Supabase Auth (GoTrue)
   supabase-auth:
     image: supabase/gotrue:v2.150.0
-    restart: unless-stopped
     depends_on:
       supabase-db:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
-      # Frontend site URL (where users land)
-      GOTRUE_SITE_URL: ${AUTH_REDIRECT_URL}
+      GOTRUE_SITE_URL: ${AUTH_REDIRECT_URL:-http://localhost:3000}
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
       GOTRUE_DB_DRIVER: postgres
@@ -89,41 +91,46 @@ services:
       GOTRUE_DISABLE_SIGNUP: "false"
       GOTRUE_MAILER_AUTOCONFIRM: "false"
       GOTRUE_MAILER_SECURE_EMAIL_CHANGE_ENABLED: "true"
-      GOTRUE_MAILER_URLPATHS_CONFIRMATION: ${SMTP_CONFIRMATION_PATH}
-      GOTRUE_MAILER_URLPATHS_INVITE: ${SMTP_INVITE_PATH}
-      GOTRUE_MAILER_DEFAULT_REDIRECT_URL: ${SMTP_DEFAULT_REDIRECT_URL}
-      GOTRUE_SMTP_HOST: ""
-      GOTRUE_SMTP_PORT: "0"
-      GOTRUE_SMTP_USER: ""
-      GOTRUE_SMTP_PASS: ""
-      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL}
-      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME}
-      GOTRUE_SMTP_MAX_FREQUENCY: ${SMTP_MAX_FREQUENCY}
-      # Public Supabase API gateway URL (Kong)
-      GOTRUE_EXTERNAL_URL: ${SITE_URL}
-      GOTRUE_API_EXTERNAL_URL: ${SITE_URL}
-      API_EXTERNAL_URL: ${SITE_URL}
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: ${SMTP_CONFIRMATION_PATH:-/auth/confirm}
+      GOTRUE_MAILER_URLPATHS_INVITE: ${SMTP_INVITE_PATH:-/auth/confirm}
+      GOTRUE_MAILER_DEFAULT_REDIRECT_URL: ${SMTP_DEFAULT_REDIRECT_URL:-http://localhost:3000}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-0}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-AITuber Kit}
+      GOTRUE_SMTP_MAX_FREQUENCY: ${SMTP_MAX_FREQUENCY:-1s}
+      GOTRUE_EXTERNAL_URL: ${SITE_URL:-http://localhost:8001}
+      GOTRUE_API_EXTERNAL_URL: ${SITE_URL:-http://localhost:8001}
+      API_EXTERNAL_URL: ${SITE_URL:-http://localhost:8001}
       TZ: Asia/Taipei
+    restart: unless-stopped
 
+  # Supabase REST API (PostgREST)
   supabase-rest:
     image: postgrest/postgrest:v12.0.2
-    restart: unless-stopped
     depends_on:
       supabase-db:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
       PGRST_DB_URI: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
       PGRST_DB_ANON_ROLE: anon
       PGRST_DB_SCHEMAS: public,storage
       PGRST_JWT_SECRET: ${JWT_SECRET}
       TZ: Asia/Taipei
+    restart: unless-stopped
 
+  # Supabase Realtime
   supabase-realtime:
     image: supabase/realtime:v2.30.34
-    restart: unless-stopped
     depends_on:
       supabase-db:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
       DB_HOST: supabase-db
       DB_NAME: postgres
@@ -131,7 +138,7 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       PORT: 4000
       API_JWT_SECRET: ${JWT_SECRET}
-      SECRET_KEY_BASE: ${REALTIME_SECRET_KEY_BASE}
+      SECRET_KEY_BASE: ${REALTIME_SECRET_KEY_BASE:-dev-secret-key-base-change-me}
       APP_NAME: supabase-realtime
       REALTIME_CLUSTER_STRATEGY: none
       RELEASE_DISTRIBUTION: none
@@ -143,15 +150,18 @@ services:
       nofile:
         soft: 100000
         hard: 100000
+    restart: unless-stopped
 
+  # Supabase Storage
   supabase-storage:
     image: supabase/storage-api:v1.0.11
-    restart: unless-stopped
     depends_on:
       supabase-db:
         condition: service_started
       supabase-auth:
         condition: service_started
+    env_file:
+      - .env
     environment:
       ANON_KEY: ${SUPABASE_ANON_KEY}
       SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
@@ -160,44 +170,39 @@ services:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres?search_path=auth,public,storage,extensions
       FILE_STORAGE_BACKEND: file
       FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      STORAGE_S3_REGION: us-east-1
+      STORAGE_S3_BUCKET: storage
+      STORAGE_S3_ENDPOINT: http://localhost:9000
+      STORAGE_S3_FORCE_PATH_STYLE: "true"
+      STORAGE_S3_ACCESS_KEY_ID: minioadmin
+      STORAGE_S3_SECRET_ACCESS_KEY: minioadmin
       TZ: Asia/Taipei
+    restart: unless-stopped
     volumes:
       - supabase_storage_data:/var/lib/storage
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/status"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+    # Healthcheck removed: this image may not include curl, which can show as "unhealthy" even when OK.
 
+  # Supabase Postgres Meta (pg-meta)
   supabase-meta:
     image: supabase/postgres-meta:v0.80.1
-    restart: unless-stopped
     depends_on:
       supabase-db:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres?search_path=auth,public,storage,extensions
+      PG_META_DB_HOST: supabase-db
+      PG_META_DB_PORT: "5432"
+      PG_META_DB_NAME: postgres
+      PG_META_DB_USER: postgres
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
       TZ: Asia/Taipei
-
-  # Studio is localhost-only (SSH tunnel) by default.
-  supabase-studio:
-    image: supabase/studio:2025.06.09-sha-4c1349f
     restart: unless-stopped
-    depends_on: [supabase-db, supabase-rest, supabase-auth, supabase-storage, supabase-meta]
-    environment:
-      STUDIO_PG_META_URL: http://supabase-meta:8080
-      SUPABASE_URL: ${SITE_URL}
-      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
-      STUDIO_DEFAULT_DB_URL: postgres://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
-      TZ: Asia/Taipei
-    ports:
-      - "127.0.0.1:54323:3000"
 
-  # Kong API Gateway (public via Caddy)
+  # Kong API Gateway (host exposes 8001 -> container 8000)
   supabase-kong:
     image: kong:2.8.1
-    restart: unless-stopped
     depends_on: [supabase-auth, supabase-rest, supabase-realtime, supabase-storage]
     environment:
       KONG_DATABASE: "off"
@@ -206,19 +211,29 @@ services:
       KONG_LOG_LEVEL: notice
       KONG_PLUGINS: bundled,cors
       KONG_PROXY_LISTEN: 0.0.0.0:8000
-      # (This env isn't interpolated by kong.yml, but we keep it for documentation.)
-      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}
+      # Hide Kong version info in response headers.
+      # Kong defaults to: headers=server_tokens,latency_tokens
+      # Remove server_tokens (Server/Via) while keeping latency headers.
+      KONG_HEADERS: "latency_tokens"
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+    ports:
+      - "8001:8000"
     volumes:
-      - ./supabase/${KONG_CONFIG_NAME}:/var/lib/kong/kong.yml:ro
+      - ./supabase/kong.yml:/var/lib/kong/kong.yml:ro
+    restart: unless-stopped
 
-  # Optional one-shot bootstrap (create default buckets etc.)
+  # One-shot bootstrap: create default storage buckets (and seed app_admins if APP_SEED_ADMIN_EMAIL is set).
+  # NOTE: This does NOT seed ToS. ToS seeding is handled by supabase-db init script mount (supabase/init.sql).
   supabase-bootstrap:
     image: alpine:3.20
+    restart: "no"
     depends_on:
       supabase-storage:
         condition: service_started
       supabase-rest:
         condition: service_started
+    env_file:
+      - .env
     command: >
       sh -lc "set -e;
       apk add --no-cache curl >/dev/null;
@@ -248,11 +263,8 @@ services:
           'http://supabase-rest:3000/app_admins?on_conflict=email' || true; \
       fi;
       echo Done."
-    restart: "no"
 
 volumes:
-  caddy_data:
-  caddy_config:
   supabase_db_data:
   supabase_storage_data:
 

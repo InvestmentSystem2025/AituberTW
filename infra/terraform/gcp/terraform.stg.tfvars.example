@@ -1,0 +1,18 @@
+## Copy to `terraform.stg.tfvars` (do not commit).
+## Then run with:
+##   terraform workspace select stg
+##   terraform apply -var-file=terraform.stg.tfvars
+
+project_id = "YOUR_GCP_PROJECT_ID"
+
+region = "asia-east1"
+zone   = "asia-east1-a"
+
+name_prefix  = "ai-interview-stg"
+# Staging can be smaller to reduce cost.
+machine_type = "e2-small"
+
+# Security: restrict to your public IP if possible.
+# Example: ["203.0.113.10/32"]
+ssh_source_ranges = ["0.0.0.0/0"]
+

@@ -1,24 +1,36 @@
-import { Html, Head, Main, NextScript } from 'next/document'
+import Document, { Head, Html, Main, NextScript } from 'next/document'
 
-export default function Document() {
-  return (
-    <Html lang="ja">
-      <Head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossOrigin=""
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=M+PLUS+2&family=Montserrat&display=swap"
-          rel="stylesheet"
-        />
-      </Head>
-      <body>
-        <Main />
-        <NextScript />
-      </body>
-    </Html>
-  )
+type Props = {
+  nonce?: string
+}
+
+export default class MyDocument extends Document<Props> {
+  static async getInitialProps(ctx: any) {
+    const initialProps = await Document.getInitialProps(ctx)
+    const nonce =
+      (ctx?.req?.headers?.['x-nonce'] as string | undefined) ||
+      (ctx?.req?.headers?.['X-Nonce'] as string | undefined) ||
+      // For SSG pages there is no request, so we need a build-time stable nonce when strict mode is enabled.
+      (process.env.SECURITY_HEADERS_MODE === 'strict'
+        ? (process.env.CSP_NONCE as string | undefined)
+        : undefined) ||
+      undefined
+
+    return { ...initialProps, nonce }
+  }
+
+  render() {
+    const nonce = this.props.nonce
+
+    return (
+      <Html lang="ja">
+        {/* nonce props are used by Next.js to apply CSP nonces to tags it controls */}
+        <Head nonce={nonce} />
+        <body>
+          <Main />
+          <NextScript nonce={nonce} />
+        </body>
+      </Html>
+    )
+  }
 }

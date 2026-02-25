@@ -4,6 +4,11 @@ import { modelDefinitions, ModelInfo } from '@/features/constants/aiModels'
 import type { AIService } from '@/features/constants/settings'
 import type { SettingsState } from '@/features/stores/settings'
 
+// ZAP / 健康檢查可能會頻繁呼叫 GET /api/admin/settings。
+// 若 Supabase 連線失敗（常見為本機未啟動/URL 錯誤），避免刷爆 server log。
+let lastAdminSettingsFetchFailedLogAt = 0
+const FETCH_FAILED_LOG_THROTTLE_MS = 60_000
+
 type SuccessResponse<T> = {
   success: true
   data: T
@@ -81,6 +86,23 @@ const handler = async (
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse<AdminSettingsPayload> | ErrorResponse>
 ) => {
+  // 明確指定 JSON content-type（避免部分掃描工具在 redirect/錯誤路徑誤判缺少 header）
+  res.setHeader('Content-Type', 'application/json; charset=utf-8')
+
+  const supabaseUrl =
+    (process.env.SUPABASE_INTERNAL_URL as string) ||
+    (process.env.NEXT_PUBLIC_SUPABASE_URL as string)
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY as string
+
+  // Supabase 環境變數未設定時，避免觸發 undici 的「fetch failed」並狂刷 log。
+  if (!supabaseUrl || !serviceRoleKey) {
+    return res.status(503).json({
+      success: false,
+      error:
+        'Supabase 尚未設定（需要 SUPABASE_INTERNAL_URL 或 NEXT_PUBLIC_SUPABASE_URL，且需要 SUPABASE_SERVICE_ROLE_KEY）',
+    })
+  }
+
   const supabase = getServiceClient()
 
   if (req.method === 'GET') {
@@ -92,10 +114,32 @@ const handler = async (
       .maybeSingle()
 
     if (error) {
-      console.error('讀取 admin_settings 失敗:', error)
-      return res
-        .status(500)
-        .json({ success: false, error: '讀取全域設定失敗，請稍後再試' })
+      const message = error.message || ''
+      const code = (error as any).code as string | undefined
+      const isFetchFailed =
+        message.includes('fetch failed') || message.includes('TypeError: fetch failed')
+
+      // 這個 endpoint 可能會被健康檢查或掃描頻繁呼叫，避免輸出過多錯誤細節到 log。
+      if (isFetchFailed) {
+        const now = Date.now()
+        if (now - lastAdminSettingsFetchFailedLogAt > FETCH_FAILED_LOG_THROTTLE_MS) {
+          lastAdminSettingsFetchFailedLogAt = now
+          console.warn('讀取 admin_settings 失敗（Supabase 連線失敗）:', {
+            message,
+            code,
+          })
+        }
+        return res.status(503).json({
+          success: false,
+          error: '全域設定服務暫時不可用（資料庫連線失敗），請稍後再試',
+        })
+      }
+
+      console.error('讀取 admin_settings 失敗:', { message, code })
+      return res.status(500).json({
+        success: false,
+        error: '讀取全域設定失敗，請稍後再試',
+      })
     }
 
     if (!data) {
