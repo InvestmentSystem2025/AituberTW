@@ -7,6 +7,13 @@ type PreconsentResp = {
   expires_at: string
 }
 
+// Force SSR to ensure per-request CSP nonce is present.
+// Without this, Next may SSG this page and the runtime CSP nonce won't match,
+// causing browser to block Next.js scripts under strict CSP.
+export async function getServerSideProps() {
+  return { props: {} }
+}
+
 export default function TosAndSignupPage() {
   const [body, setBody] = useState<string>('')
   const [version, setVersion] = useState<string>('')
