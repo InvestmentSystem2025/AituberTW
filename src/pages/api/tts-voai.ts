@@ -12,11 +12,17 @@ export default async function handler(
     pitch_shift,
     style_weight,
     breath_pause,
-    apiKey,
-  } = req.body
+    apiKey: bodyApiKey,
+  } = req.body || {}
+
+  // 優先使用伺服器端環境變數，絕不將 API Key 暴露給前端
+  const apiKey =
+    (process.env.VOAI_API_KEY as string)?.trim() || (bodyApiKey as string)?.trim()
 
   if (!text || !speaker || !apiKey) {
-    return res.status(400).json({ error: 'Missing required parameters' })
+    return res.status(400).json({
+      error: 'Missing required parameters (text, speaker, and VOAI API key in env or request)',
+    })
   }
 
   try {

@@ -541,7 +541,7 @@ const getInitialValuesFromEnv = (): SettingsState => ({
   nijivoiceSoundDuration:
     parseFloat(process.env.NEXT_PUBLIC_NIJIVOICE_SOUND_DURATION || '0.1') ||
     0.1,
-  voaiApiKey: process.env.NEXT_PUBLIC_VOAI_API_KEY || '',
+  voaiApiKey: '', // 僅能由 Admin 設定或伺服器端 VOAI_API_KEY 提供，不從前端 env 讀取
   voaiSpeaker: process.env.NEXT_PUBLIC_VOAI_SPEAKER || '柔洢',
   voaiStyle: process.env.NEXT_PUBLIC_VOAI_STYLE || '預設',
   voaiSpeed: parseFloat(process.env.NEXT_PUBLIC_VOAI_SPEED || '1.3') || 1.0,

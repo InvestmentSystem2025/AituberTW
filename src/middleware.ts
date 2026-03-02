@@ -105,8 +105,6 @@ function buildCsp(nonce: string, isRelaxed: boolean, connectSrc: string): string
     [
       "script-src 'self'",
       `'nonce-${nonce}'`,
-      // strict-dynamic is recommended with nonces; keep 'self' for older browsers.
-      "'strict-dynamic'",
       // MediaPipe / WebAssembly compilation can be blocked by CSP unless wasm is explicitly allowed.
       // Prefer the narrower directive over 'unsafe-eval'.
       ...(isRelaxed ? [] : ["'wasm-unsafe-eval'"]),
@@ -149,16 +147,14 @@ export function middleware(req: NextRequest) {
   // 預設：dev 放寬（避免破壞 HMR / source map）、prod 嚴格。
   // 若你想在 dev 跑 ZAP 也使用嚴格 CSP，可設：SECURITY_HEADERS_MODE=strict
   const securityMode = process.env.SECURITY_HEADERS_MODE
-  const isStrictSecurityMode = securityMode === 'strict'
   const isRelaxed = securityMode ? securityMode !== 'strict' : isDev
 
   // IMPORTANT:
   // - Static (SSG) pages are rendered at build time. They cannot embed a per-request nonce.
-  // - If we use 'strict-dynamic' + nonce-based CSP with a per-request nonce, the browser will block all parser-inserted scripts on SSG pages.
-  // - Therefore in SECURITY_HEADERS_MODE=strict we use a *stable* nonce (CSP_NONCE) so the build output and runtime CSP match.
-  const nonce = isStrictSecurityMode
-    ? ((process.env.CSP_NONCE as string | undefined) || 'zap-scan-nonce')
-    : generateNonceBase64()
+  // - Therefore, when security headers are strict (i.e. not relaxed), we must use a *stable* nonce
+  //   so the build output and runtime CSP match.
+  const stableNonce = (process.env.CSP_NONCE as string | undefined) || 'zap-scan-nonce'
+  const nonce = isRelaxed ? generateNonceBase64() : stableNonce
   const connectSrc = buildConnectSrc(req, isRelaxed)
 
   // Pass nonce to SSR so Document can apply it.

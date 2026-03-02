@@ -52,11 +52,31 @@ async function loadGlobalAdminSettings() {
     }
 
     // 優先使用 DB 側に保存されている settingsJson（全設定のスナップショット）
+    // VOAI 等の .env 預設：若 DB 內對應欄位為空且 .env 有設，則以 .env 為準，避免每次都要到 Admin 手動填寫
     if (settingsJson && typeof settingsJson === 'object') {
-      settingsStore.setState((prev) => ({
-        ...prev,
-        ...settingsJson,
-      }))
+      const merged = { ...settingsStore.getState(), ...settingsJson }
+      // VOAI API Key 僅在伺服器端由 VOAI_API_KEY 提供，不從前端 env 寫入
+      if (process.env.NEXT_PUBLIC_VOAI_SPEAKER && !merged.voaiSpeaker)
+        merged.voaiSpeaker = process.env.NEXT_PUBLIC_VOAI_SPEAKER
+      if (process.env.NEXT_PUBLIC_VOAI_STYLE && !merged.voaiStyle)
+        merged.voaiStyle = process.env.NEXT_PUBLIC_VOAI_STYLE
+      if (process.env.NEXT_PUBLIC_VOAI_SPEED != null && process.env.NEXT_PUBLIC_VOAI_SPEED !== '') {
+        const v = parseFloat(process.env.NEXT_PUBLIC_VOAI_SPEED)
+        if (Number.isFinite(v)) merged.voaiSpeed = v
+      }
+      if (process.env.NEXT_PUBLIC_VOAI_PITCH_SHIFT != null && process.env.NEXT_PUBLIC_VOAI_PITCH_SHIFT !== '') {
+        const v = parseFloat(process.env.NEXT_PUBLIC_VOAI_PITCH_SHIFT)
+        if (Number.isFinite(v)) merged.voaiPitchShift = v
+      }
+      if (process.env.NEXT_PUBLIC_VOAI_STYLE_WEIGHT != null && process.env.NEXT_PUBLIC_VOAI_STYLE_WEIGHT !== '') {
+        const v = parseFloat(process.env.NEXT_PUBLIC_VOAI_STYLE_WEIGHT)
+        if (Number.isFinite(v)) merged.voaiStyleWeight = v
+      }
+      if (process.env.NEXT_PUBLIC_VOAI_BREATH_PAUSE != null && process.env.NEXT_PUBLIC_VOAI_BREATH_PAUSE !== '') {
+        const v = parseFloat(process.env.NEXT_PUBLIC_VOAI_BREATH_PAUSE)
+        if (Number.isFinite(v)) merged.voaiBreathPause = v
+      }
+      settingsStore.setState(merged)
       return
     }
 
