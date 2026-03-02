@@ -59,7 +59,7 @@ const homeStore = create<HomeState>()(
       // persisted states
       userOnboarded: false,
       chatLog: [],
-      showIntroduction: process.env.NEXT_PUBLIC_SHOW_INTRODUCTION !== 'false',
+      showIntroduction: false, // 面試頁不再顯示「About This Application」初次提示
 
       // transient states
       viewer: new Viewer(),

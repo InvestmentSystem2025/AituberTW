@@ -3,7 +3,6 @@ import { useRouter } from 'next/router'
 import { useTranslation } from 'react-i18next'
 import { Form } from '@/components/form'
 import MessageReceiver from '@/components/messageReceiver'
-import { Introduction } from '@/components/introduction'
 import { Menu } from '@/components/menu'
 import { Meta } from '@/components/meta'
 import ModalImage from '@/components/modalImage'
@@ -356,7 +355,6 @@ const Interview = () => {
   return (
     <div className="h-[100svh] bg-cover" style={backgroundStyle}>
       <Meta />
-      <Introduction />
 
       {/* 面試模式：顯示人員檢測 */}
       {interviewFlow.interviewStatus === 'waiting' ||
