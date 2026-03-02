@@ -300,6 +300,11 @@ const AdminSettingPage = () => {
   return renderSettingsForm()
 }
 
+// 強制 SSR，使每次請求都能取得 middleware 設定的 CSP nonce，避免 SSG 頁面在執行時 nonce 與 CSP 不符導致腳本被擋、無法登入。
+export async function getServerSideProps() {
+  return { props: {} }
+}
+
 export default AdminSettingPage
 
 type AdminFeedbackItem = any
