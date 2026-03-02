@@ -667,7 +667,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          'x-supabase-token': token,
         },
         body: JSON.stringify({
           interviews_id: interviewId,
@@ -703,7 +703,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       // 後備：讀取最新 session 以取得 DB 決策（interview_result）
       try {
         const check = await fetch(`/api/interviews/get-session?interview_id=${encodeURIComponent(interviewId)}`, {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { 'x-supabase-token': token },
         })
         if (check.ok) {
           const data = await check.json()
@@ -1431,7 +1431,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          'x-supabase-token': token,
         },
         body: JSON.stringify({
           interviews_id: interviewId,

@@ -308,7 +308,7 @@ export default function CompanyAdminPage() {
 
   const headers = (t?: string, extra: Record<string, string> = {}): HeadersInit => {
     const tk = (typeof t === 'string' && t) ? t : token
-    return tk ? { Authorization: `Bearer ${tk}`, ...extra } : { ...extra }
+    return tk ? { 'x-supabase-token': tk, ...extra } : { ...extra }
   }
 
   // 刷新 token 函數

@@ -88,7 +88,7 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
 
         const resp = await fetch(
           `/api/interviews/feedback/jobseeker?interview_id=${encodeURIComponent(interviewId)}`,
-          { headers: { Authorization: `Bearer ${authSession.access_token}` } }
+          { headers: { 'x-supabase-token': authSession.access_token } }
         )
         if (!resp.ok) return
         const body = await resp.json()
@@ -139,7 +139,7 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${authSession.access_token}`,
+          'x-supabase-token': authSession.access_token,
         },
         body: JSON.stringify({
           interview_id: interviewId,

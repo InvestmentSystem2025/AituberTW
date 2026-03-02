@@ -16,7 +16,7 @@ export default function TosAdminPage() {
       setMsg('ログインしてください')
       return
     }
-    const resp = await fetch('/api/admin/tos', { headers: { Authorization: `Bearer ${token}` } })
+    const resp = await fetch('/api/admin/tos', { headers: { 'x-supabase-token': token } })
     const json = await resp.json()
     if (resp.ok) setItems(json.items)
     else setMsg(json.error || '読み込み失敗')
@@ -34,7 +34,7 @@ export default function TosAdminPage() {
       if (!token) throw new Error('UNAUTHORIZED')
       const resp = await fetch('/api/admin/tos', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', 'x-supabase-token': token },
         body: JSON.stringify({ version, body, publish_now: true })
       })
       const json = await resp.json()

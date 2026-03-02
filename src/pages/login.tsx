@@ -19,7 +19,7 @@ export default function LoginPage() {
       // 同意未完はガードして /tos へ
       const token = (await supabase.auth.getSession()).data.session?.access_token
       if (token) {
-        const resp = await fetch('/api/me/tos', { headers: { Authorization: `Bearer ${token}` } })
+        const resp = await fetch('/api/me/tos', { headers: { 'x-supabase-token': token } })
         const json = await resp.json()
         if (!json.accepted) {
           window.location.href = '/tos'
@@ -27,7 +27,7 @@ export default function LoginPage() {
         }
 
         // MFA 未完成則強制導去設定頁（首次登入 gate）
-        const mfaResp = await fetch('/api/me/mfa', { headers: { Authorization: `Bearer ${token}` } })
+        const mfaResp = await fetch('/api/me/mfa', { headers: { 'x-supabase-token': token } })
         const mfaJson = await mfaResp.json().catch(() => ({} as any))
         // 保守策略：只要不是「明確已完成 MFA」，就先去 /mfa/setup，避免落到 /me 再被 gate 轉跳
         if (!mfaResp.ok || !mfaJson || mfaJson.mfa_enabled !== true) {

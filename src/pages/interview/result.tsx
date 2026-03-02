@@ -46,7 +46,7 @@ export default function InterviewResultPage() {
         // 改為呼叫後端 API，由 service client 讀取 session（避免前端直接被 RLS 卡住）
         const resp = await fetch(`/api/interviews/get-session?interview_id=${encodeURIComponent(interviewId)}`, {
           headers: {
-            Authorization: `Bearer ${authSession.access_token}`,
+            'x-supabase-token': authSession.access_token,
           },
         })
 

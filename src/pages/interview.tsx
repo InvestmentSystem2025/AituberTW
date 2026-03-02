@@ -130,7 +130,7 @@ const Interview = () => {
 
         // 1) 載入面試配置
         const response = await fetch(`/api/interviews/get?interview_id=${interview_id}`, {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { 'x-supabase-token': token }
         })
         
         if (!response.ok) {
@@ -156,7 +156,7 @@ const Interview = () => {
         // 1.5) 開始面試扣點（server-side）
         const startResp = await fetch('/api/interviews/start-session', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          headers: { 'Content-Type': 'application/json', 'x-supabase-token': token },
           body: JSON.stringify({ interviews_id: interview_id }),
         })
         if (!startResp.ok) {
@@ -183,7 +183,7 @@ const Interview = () => {
         // 1.6) 重連/續接：讀取 session，若有進度則直接切到 interviewing
         try {
           const sessResp = await fetch(`/api/interviews/get-session?interview_id=${encodeURIComponent(interview_id)}`, {
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { 'x-supabase-token': token },
           })
           if (sessResp.ok) {
             const sj = await sessResp.json().catch(() => ({}))

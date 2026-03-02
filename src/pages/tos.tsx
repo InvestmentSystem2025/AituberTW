@@ -85,7 +85,7 @@ export default function TosAndSignupPage() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${claimToken}`,
+            'x-supabase-token': claimToken,
           },
           body: JSON.stringify({ nonce: json.nonce }),
         })
@@ -107,7 +107,7 @@ export default function TosAndSignupPage() {
         // 同意完成後：除非「明確已完成 MFA」，否則一律先去 /mfa/setup，避免先跳 /me 再被 gate 轉跳
         try {
           const mfaResp = await fetch('/api/me/mfa', {
-            headers: { Authorization: `Bearer ${claimToken}` },
+            headers: { 'x-supabase-token': claimToken },
           })
           const mfaJson = await mfaResp.json().catch(() => ({}))
           const mfaEnabled = !!(

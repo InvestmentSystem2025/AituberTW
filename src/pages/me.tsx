@@ -187,7 +187,7 @@ export default function MePage() {
       }
       
       if (token) {
-        const resp = await fetch('/api/me/tos', { headers: { Authorization: `Bearer ${token}` } })
+        const resp = await fetch('/api/me/tos', { headers: { 'x-supabase-token': token } })
         const json = (await resp.json()) as TosResp
         setTos(json)
         if (!json.accepted) {
@@ -196,7 +196,7 @@ export default function MePage() {
         }
 
         // MFA 未完成則強制導去設定頁（首次登入 gate）
-        const mfaResp = await fetch('/api/me/mfa', { headers: { Authorization: `Bearer ${token}` } })
+        const mfaResp = await fetch('/api/me/mfa', { headers: { 'x-supabase-token': token } })
         const mfaJson = await mfaResp.json()
         if (mfaResp.ok && mfaJson && mfaJson.mfa_enabled === false) {
           window.location.href = '/mfa/setup'
@@ -208,7 +208,7 @@ export default function MePage() {
       // jobSeeker：顯示剩餘免費次數（free_quota - used_count）
       if (token) {
         try {
-          const r = await fetch('/api/me/quota', { headers: { Authorization: `Bearer ${token}` } })
+          const r = await fetch('/api/me/quota', { headers: { 'x-supabase-token': token } })
           const j = await r.json()
           if (r.ok && j?.ok) {
             setQuotaInfo({ remaining: j.remaining, used_count: j.used_count, free_quota: j.free_quota })
@@ -366,13 +366,13 @@ export default function MePage() {
   }, [tutorial.active, tutorial.step, userRole, prefillCompanyForm])
 
   const loadCompanies = async (token?: string) => {
-    const r = await fetch('/api/company/list', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+    const r = await fetch('/api/company/list', { headers: token ? { 'x-supabase-token': token } : {} })
     const j = await r.json()
     setCompanies(j.items || [])
   }
 
   const loadInterviews = async (token?: string) => {
-    const r = await fetch('/api/interviews/my-interviews', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+    const r = await fetch('/api/interviews/my-interviews', { headers: token ? { 'x-supabase-token': token } : {} })
     const j = await r.json()
     setInterviews(j.items || [])
   }
@@ -424,7 +424,7 @@ export default function MePage() {
       // 先做 server-side gate 檢查（不扣點），避免 quota 用完還先跳轉到面試頁再被擋回來
       try {
         const r = await fetch(`/api/interviews/get?interview_id=${encodeURIComponent(interviewId)}`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: { 'x-supabase-token': accessToken },
         })
         if (!r.ok) {
           const err = await r.json().catch(() => ({}))
@@ -456,7 +456,7 @@ export default function MePage() {
     try {
       const startResp = await fetch('/api/interviews/start-session', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        headers: { 'Content-Type': 'application/json', 'x-supabase-token': accessToken },
         body: JSON.stringify({ interviews_id: interviewId }),
       })
       if (!startResp.ok) {
@@ -519,7 +519,7 @@ export default function MePage() {
     if (!accessToken || !editForm.id) return
     const r = await fetch('/api/company/update', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      headers: { 'Content-Type': 'application/json', 'x-supabase-token': accessToken },
       body: JSON.stringify(editForm)
     })
       if (!r.ok) {
@@ -535,7 +535,7 @@ export default function MePage() {
     if (!confirm('確定要刪除嗎？此操作無法復原。')) return
     const r = await fetch('/api/company/delete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      headers: { 'Content-Type': 'application/json', 'x-supabase-token': accessToken },
       body: JSON.stringify({ id })
     })
     if (!r.ok) {
@@ -555,7 +555,7 @@ export default function MePage() {
     try {
       const r = await fetch('/api/company/create', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        headers: { 'Content-Type': 'application/json', 'x-supabase-token': accessToken },
         body: JSON.stringify(form)
       })
       if (!r.ok) {

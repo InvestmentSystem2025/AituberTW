@@ -48,7 +48,7 @@ export default function MfaSetupPage() {
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           const r = await fetch('/api/mfa/totp/enroll', {
             method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { 'x-supabase-token': token },
           })
           j = (await r.json().catch(() => null)) as EnrollResp | null
           if (r.ok && isEnrollOk(j)) {
@@ -98,7 +98,7 @@ export default function MfaSetupPage() {
 
         const r = await fetch(qrApiUrl, {
           method: 'GET',
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { 'x-supabase-token': token },
           signal: controller.signal,
         })
         if (!r.ok) return
@@ -140,7 +140,7 @@ export default function MfaSetupPage() {
 
       const r = await fetch('/api/mfa/totp/verify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', 'x-supabase-token': token },
         body: JSON.stringify({ code }),
       })
       const j = await r.json()

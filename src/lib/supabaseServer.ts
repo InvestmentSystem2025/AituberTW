@@ -36,8 +36,17 @@ export function getAnonClient(): SupabaseClient {
 
 export async function getAuthUserIdFromRequest(req: { headers?: any }): Promise<string | null> {
   const authz = req.headers?.authorization || req.headers?.Authorization
-  if (!authz || typeof authz !== 'string') return null
-  const token = authz.replace(/^Bearer\s+/i, '')
+  const headerToken =
+    typeof authz === 'string' && /^Bearer\s+/i.test(authz)
+      ? authz.replace(/^Bearer\s+/i, '').trim()
+      : null
+  const xToken =
+    (req.headers?.['x-supabase-token'] as string | undefined) ||
+    (req.headers?.['x_supabase_token'] as string | undefined) ||
+    (req.headers?.['x-access-token'] as string | undefined) ||
+    (req.headers?.['x_access_token'] as string | undefined) ||
+    null
+  const token = (headerToken || xToken || '').trim()
   if (!token) return null
   
   try {
@@ -70,8 +79,17 @@ export async function getAuthUserIdFromRequest(req: { headers?: any }): Promise<
 
 export async function getAuthEmailFromRequest(req: { headers?: any }): Promise<string | null> {
   const authz = req.headers?.authorization || req.headers?.Authorization
-  if (!authz || typeof authz !== 'string') return null
-  const token = authz.replace(/^Bearer\s+/i, '')
+  const headerToken =
+    typeof authz === 'string' && /^Bearer\s+/i.test(authz)
+      ? authz.replace(/^Bearer\s+/i, '').trim()
+      : null
+  const xToken =
+    (req.headers?.['x-supabase-token'] as string | undefined) ||
+    (req.headers?.['x_supabase_token'] as string | undefined) ||
+    (req.headers?.['x-access-token'] as string | undefined) ||
+    (req.headers?.['x_access_token'] as string | undefined) ||
+    null
+  const token = (headerToken || xToken || '').trim()
   if (!token) return null
   const anon = getAnonClient()
   const { data, error } = await anon.auth.getUser(token)
