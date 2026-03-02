@@ -12,18 +12,18 @@ easyreset-gcp.sh - docker-compose.gcp.yml 用：Supabase DB 重置並重新初�
   ./scripts/easyreset-gcp.sh
   ./scripts/easyreset-gcp.sh --reset-storage
   ./scripts/easyreset-gcp.sh -f docker-compose.gcp.yml
-  ./scripts/easyreset-gcp.sh --env-file .env.stg
+  ./scripts/easyreset-gcp.sh --env-file .env
 
 選項:
   -f, --compose-file <path>  指定 compose 檔（預設：docker-compose.gcp.yml）
-  -e, --env-file <path>      指定 env 檔（預設：若存在 .env.stg 則用它，否則不指定讓 compose 自行載入 .env）
+  -e, --env-file <path>      指定 env 檔（預設：若存在 .env 則用它，否則不指定）
   --reset-storage            同時刪除 storage volume（會清空所有上傳檔案）
   -h, --help                 顯示說明
 
 說明:
   - 會刪除 Supabase DB volume，資料庫資料會被完全清空並重新初始化（會重新跑 ./supabase/init.sql）
   - 預設只洗 DB；加上 --reset-storage 才會連 Storage 一起清空
-  - 若你的 stg 設定放在 .env.stg，請務必使用 --env-file .env.stg，或先將變數 export 後再執行，否則 POSTGRES_PASSWORD 等會是空值造成 DB unhealthy
+  - 建議在 VM 上將目標環境的設定檔命名為 .env；本腳本也會預設優先使用 .env，避免 POSTGRES_PASSWORD 等變數空值造成 DB unhealthy
   - Project name 會自動偵測：
       1) 若有環境變數 COMPOSE_PROJECT_NAME 就用它
       2) 否則從 docker volumes 的 *_supabase_db_data 反推（例如 aitubertw_supabase_db_data -> aitubertw）
@@ -80,9 +80,9 @@ if [[ ! -f "$compose_file" ]]; then
   exit 1
 fi
 
-# Auto-pick .env.stg when present (common on staging VM)
-if [[ -z "$env_file" && -f ".env.stg" ]]; then
-  env_file=".env.stg"
+# Auto-pick .env when present
+if [[ -z "$env_file" && -f ".env" ]]; then
+  env_file=".env"
 fi
 if [[ -n "$env_file" && ! -f "$env_file" ]]; then
   err "找不到 env 檔：$env_file（目前目錄：$repo_root）"
@@ -128,7 +128,7 @@ log "ProjectName: $project_name"
 if [[ -n "$env_file" ]]; then
   log "EnvFile: $env_file"
 else
-  warn "未指定 env 檔，docker compose 將只會自動載入 ./.env（若存在）。若你用的是 .env.stg，請用 --env-file .env.stg 或先 export 變數。"
+  warn "未指定 env 檔；請確認你已在 shell export 了必要變數，否則 docker compose 可能會把未設定的變數視為空字串。"
 fi
 warn "將刪除 DB volume：$db_volume"
 if [[ "$reset_storage" == "1" ]]; then

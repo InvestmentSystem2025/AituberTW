@@ -3,13 +3,11 @@ services:
   caddy:
     image: caddy:2
     restart: unless-stopped
+    env_file:
+      - .env
     ports:
       - "80:80"
       - "443:443"
-    environment:
-      # Used by Caddyfile.stg basicauth. Safe to be empty in prod.
-      - BASIC_AUTH_USER=${BASIC_AUTH_USER}
-      - BASIC_AUTH_PASS_HASH=${BASIC_AUTH_PASS_HASH}
     volumes:
       - ./${CADDYFILE_NAME}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -22,31 +20,15 @@ services:
   app:
     build: .
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       - NODE_ENV=production
       - TZ=Asia/Taipei
-      # Frontend base URL (used for links in emails)
-      - FRONTEND_ORIGIN=${FRONTEND_ORIGIN}
-      - AUTH_REDIRECT_URL=${AUTH_REDIRECT_URL}
-      # Browser-side Supabase URL must be public HTTPS.
-      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      # Browser-side key is referenced by the frontend bundle.
       - NEXT_PUBLIC_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
-      # Server-side keys (never expose these to users)
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
       # Server-side internal routing to Kong inside docker network
       - SUPABASE_INTERNAL_URL=http://supabase-kong:8000
-      # SMTP (used by app-side nodemailer)
-      - SMTP_HOST=${SMTP_HOST}
-      - SMTP_PORT=${SMTP_PORT}
-      - SMTP_USER=${SMTP_USER}
-      - SMTP_PASS=${SMTP_PASS}
-      - SMTP_ADMIN_EMAIL=${SMTP_ADMIN_EMAIL}
-      - SMTP_SENDER_NAME=${SMTP_SENDER_NAME}
-      - SMTP_SECURE=${SMTP_SECURE}
-      - SMTP_MAX_FREQUENCY=${SMTP_MAX_FREQUENCY}
-      - SMTP_DEFAULT_REDIRECT_URL=${SMTP_DEFAULT_REDIRECT_URL}
-      - SMTP_CONFIRMATION_PATH=${SMTP_CONFIRMATION_PATH}
-      - SMTP_INVITE_PATH=${SMTP_INVITE_PATH}
     command: npm run start
     depends_on:
       - supabase-kong
@@ -58,15 +40,15 @@ services:
   supabase-db:
     image: supabase/postgres:15.6.1.101
     restart: unless-stopped
+    env_file:
+      - .env
     # Bind only to localhost (admin use via SSH tunnel)
     ports:
       - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       TZ: Asia/Taipei
-      APP_SEED_ADMIN_EMAIL: ${APP_SEED_ADMIN_EMAIL}
     command:
       - postgres
       - -c
@@ -93,6 +75,8 @@ services:
   supabase-auth:
     image: supabase/gotrue:v2.150.0
     restart: unless-stopped
+    env_file:
+      - .env
     depends_on:
       supabase-db:
         condition: service_healthy
@@ -127,6 +111,8 @@ services:
   supabase-rest:
     image: postgrest/postgrest:v12.0.2
     restart: unless-stopped
+    env_file:
+      - .env
     depends_on:
       supabase-db:
         condition: service_healthy
@@ -140,6 +126,8 @@ services:
   supabase-realtime:
     image: supabase/realtime:v2.30.34
     restart: unless-stopped
+    env_file:
+      - .env
     depends_on:
       supabase-db:
         condition: service_healthy
@@ -166,6 +154,8 @@ services:
   supabase-storage:
     image: supabase/storage-api:v1.0.11
     restart: unless-stopped
+    env_file:
+      - .env
     depends_on:
       supabase-db:
         condition: service_started
@@ -192,6 +182,8 @@ services:
   supabase-meta:
     image: supabase/postgres-meta:v0.80.1
     restart: unless-stopped
+    env_file:
+      - .env
     depends_on:
       supabase-db:
         condition: service_healthy
@@ -203,6 +195,8 @@ services:
   supabase-studio:
     image: supabase/studio:2025.06.09-sha-4c1349f
     restart: unless-stopped
+    env_file:
+      - .env
     depends_on: [supabase-db, supabase-rest, supabase-auth, supabase-storage, supabase-meta]
     environment:
       STUDIO_PG_META_URL: http://supabase-meta:8080
@@ -217,6 +211,8 @@ services:
   supabase-kong:
     image: kong:2.8.1
     restart: unless-stopped
+    env_file:
+      - .env
     depends_on: [supabase-auth, supabase-rest, supabase-realtime, supabase-storage]
     environment:
       KONG_DATABASE: "off"
@@ -225,14 +221,14 @@ services:
       KONG_LOG_LEVEL: notice
       KONG_PLUGINS: bundled,cors
       KONG_PROXY_LISTEN: 0.0.0.0:8000
-      # (This env isn't interpolated by kong.yml, but we keep it for documentation.)
-      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}
     volumes:
       - ./supabase/${KONG_CONFIG_NAME}:/var/lib/kong/kong.yml:ro
 
   # Optional one-shot bootstrap (create default buckets etc.)
   supabase-bootstrap:
     image: alpine:3.20
+    env_file:
+      - .env
     depends_on:
       supabase-storage:
         condition: service_started
