@@ -8,6 +8,10 @@ stg.ai-interview.tw {
   basicauth {
     {env.BASIC_AUTH_USER} {env.BASIC_AUTH_PASS_HASH}
   }
+  log {
+    output stdout
+    level INFO
+  }
   reverse_proxy app:3000
 }
 
