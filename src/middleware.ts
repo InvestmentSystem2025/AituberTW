@@ -105,6 +105,8 @@ function buildCsp(nonce: string, isRelaxed: boolean, connectSrc: string): string
     [
       "script-src 'self'",
       `'nonce-${nonce}'`,
+      // MediaPipe Tasks Vision dynamically loads vision_wasm_internal.js from jsDelivr; allow that CDN for script.
+      "https://cdn.jsdelivr.net",
       // MediaPipe / WebAssembly compilation can be blocked by CSP unless wasm is explicitly allowed.
       // Prefer the narrower directive over 'unsafe-eval'.
       ...(isRelaxed ? [] : ["'wasm-unsafe-eval'"]),
