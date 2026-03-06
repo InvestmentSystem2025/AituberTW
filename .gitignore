@@ -86,3 +86,10 @@ public/scripts/*
 .claude/settings.local.json
 
 2026-02-06-ZAP-Report-localhost.html
+
+# load testing / local seeds (do not commit)
+/tmp/stress-accounts.json
+
+# k6 outputs (may contain auth tokens / sensitive data)
+/tmp/k6-*.json
+/tmp/k6-*.log
