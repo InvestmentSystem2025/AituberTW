@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # 在「被測的 VM」（Linux）上執行，於 k6 負荷測試期間採樣 CPU / 記憶體 / load average。
-# 用法: ./scripts/vm-stats-during-load.sh [秒數] [間隔秒]
-#   例: ./scripts/vm-stats-during-load.sh 600   → 取樣 600 秒，每 10 秒一筆
-#       ./scripts/vm-stats-during-load.sh 600 5 → 取樣 600 秒，每 5 秒一筆
-# 輸出到 stdout，可導向檔案: ... 600 > tmp/vm-stats-soak.log 2>&1
+# 用法: ./scripts/vm-stats-during-load.sh [分鐘] [間隔秒]
+#   例: ./scripts/vm-stats-during-load.sh 10    → 取樣 10 分鐘，每 10 秒一筆
+#       ./scripts/vm-stats-during-load.sh 10 5  → 取樣 10 分鐘，每 5 秒一筆
+# 輸出到 stdout，可導向檔案: ... 10 > tmp/vm-stats-soak.log 2>&1
 
 set -e
-DURATION="${1:-600}"
+MINUTES="${1:-10}"
 INTERVAL="${2:-10}"
+DURATION=$((MINUTES * 60))
 
 # 前一次 /proc/stat 用於算 CPU%
 read_cpu_line() { grep '^cpu ' /proc/stat; }
@@ -25,7 +26,7 @@ prev_idle=$(get_idle "$prev")
 prev_total=$(get_total "$prev")
 
 end_ts=$(($(date +%s) + DURATION))
-echo "# VM stats: every ${INTERVAL}s for ${DURATION}s (until $(date -d "@$end_ts" -Iseconds 2>/dev/null || date -r "$end_ts" -Iseconds 2>/dev/null))"
+echo "# VM stats: every ${INTERVAL}s for ${DURATION}s (${MINUTES}m) (until $(date -d "@$end_ts" -Iseconds 2>/dev/null || date -r "$end_ts" -Iseconds 2>/dev/null))"
 echo "# format: ISO_TIME LOAD1 LOAD5 LOAD15 MEM_MB_USED MEM_MB_TOTAL CPU_PCT"
 echo "# ---"
 
