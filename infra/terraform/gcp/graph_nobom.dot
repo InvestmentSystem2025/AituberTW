@@ -1,0 +1,15 @@
+digraph G {
+  rankdir = "RL";
+  node [shape = rect, fontname = "sans-serif"];
+  "google_compute_address.static_ip" [label="google_compute_address.static_ip"];
+  "google_compute_firewall.allow_http_https" [label="google_compute_firewall.allow_http_https"];
+  "google_compute_firewall.allow_ssh" [label="google_compute_firewall.allow_ssh"];
+  "google_compute_instance.vm" [label="google_compute_instance.vm"];
+  "google_compute_network.vpc" [label="google_compute_network.vpc"];
+  "google_compute_subnetwork.subnet" [label="google_compute_subnetwork.subnet"];
+  "google_compute_firewall.allow_http_https" -> "google_compute_network.vpc";
+  "google_compute_firewall.allow_ssh" -> "google_compute_network.vpc";
+  "google_compute_instance.vm" -> "google_compute_address.static_ip";
+  "google_compute_instance.vm" -> "google_compute_subnetwork.subnet";
+  "google_compute_subnetwork.subnet" -> "google_compute_network.vpc";
+}

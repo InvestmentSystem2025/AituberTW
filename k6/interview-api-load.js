@@ -7,6 +7,8 @@ import { textSummary } from 'https://jslib.k6.io/k6-summary/0.1.0/index.js'
 const endpointErrors = new Counter('endpoint_errors')
 
 // open() must be called in init stage (global scope).
+// NOTE: open() resolves relative to the script location, not the repo root.
+// When running `k6 run k6/...` from the repo root, `../tmp/...` points to the repo's tmp folder.
 const ACCOUNTS_PATH = (__ENV.ACCOUNTS_PATH || '../tmp/stress-accounts.json').trim()
 const ACCOUNTS = JSON.parse(open(ACCOUNTS_PATH))
 
@@ -155,6 +157,24 @@ export function setup() {
 
 // Per-VU flag: each VU should call start-session only once.
 let didStartSession = false
+let tokenCache = null
+
+function refreshToken(acc) {
+  const tokenUrl = `${SUPABASE_URL}/auth/v1/token?grant_type=password`
+  const res = http.post(
+    tokenUrl,
+    JSON.stringify({ email: acc.email, password: acc.password }),
+    { headers: authHeaders(), tags: { name: 'auth' } }
+  )
+  const body = safeJson(res)
+  const ok = check(res, { 'auth_refresh HTTP 200': (r) => r.status === 200 })
+  if (!ok) {
+    recordError('auth', res, body, res.body)
+    return null
+  }
+  const token = body?.access_token
+  return token || null
+}
 
 export default function (data) {
   const accounts = data.accounts
@@ -162,15 +182,27 @@ export default function (data) {
 
   const idx = (__VU - 1) % accounts.length
   const acc = accounts[idx]
-  const token = tokens[idx]
+  if (!tokenCache) tokenCache = tokens.slice()
+  let token = tokenCache[idx]
 
   if (!didStartSession) {
-    const res = http.post(
-      `${BASE_URL}/api/interviews/start-session`,
-      JSON.stringify({ interviews_id: acc.interview_id }),
-      { headers: appHeaders(token), tags: { name: 'start-session' } }
-    )
-    const body = safeJson(res)
+    const doStart = () =>
+      http.post(
+        `${BASE_URL}/api/interviews/start-session`,
+        JSON.stringify({ interviews_id: acc.interview_id }),
+        { headers: appHeaders(token), tags: { name: 'start-session' } }
+      )
+    let res = doStart()
+    let body = safeJson(res)
+    if (res.status === 401) {
+      const next = refreshToken(acc)
+      if (next) {
+        token = next
+        tokenCache[idx] = next
+        res = doStart()
+        body = safeJson(res)
+      }
+    }
     const ok = check(res, {
       'start-session HTTP 200': (r) => r.status === 200,
       'start-session body.ok === true': () => body?.ok === true,
@@ -181,11 +213,22 @@ export default function (data) {
 
   // GET /api/interviews/get
   {
-    const res = http.get(`${BASE_URL}/api/interviews/get?interview_id=${encodeURIComponent(acc.interview_id)}`, {
-      headers: appHeaders(token),
-      tags: { name: 'get' },
-    })
-    const body = safeJson(res)
+    const doGet = () =>
+      http.get(`${BASE_URL}/api/interviews/get?interview_id=${encodeURIComponent(acc.interview_id)}`, {
+        headers: appHeaders(token),
+        tags: { name: 'get' },
+      })
+    let res = doGet()
+    let body = safeJson(res)
+    if (res.status === 401) {
+      const next = refreshToken(acc)
+      if (next) {
+        token = next
+        tokenCache[idx] = next
+        res = doGet()
+        body = safeJson(res)
+      }
+    }
     const ok = check(res, { 'get HTTP 200': (r) => r.status === 200 })
     if (!ok) {
       recordError('get', res, body, res.body)
@@ -208,11 +251,22 @@ export default function (data) {
       progress_state: { v: 1, step },
       is_final: false,
     }
-    const res = http.post(`${BASE_URL}/api/interviews/save-session`, JSON.stringify(payload), {
-      headers: appHeaders(token),
-      tags: { name: 'save-session' },
-    })
-    const body = safeJson(res)
+    const doSave = () =>
+      http.post(`${BASE_URL}/api/interviews/save-session`, JSON.stringify(payload), {
+        headers: appHeaders(token),
+        tags: { name: 'save-session' },
+      })
+    let res = doSave()
+    let body = safeJson(res)
+    if (res.status === 401) {
+      const next = refreshToken(acc)
+      if (next) {
+        token = next
+        tokenCache[idx] = next
+        res = doSave()
+        body = safeJson(res)
+      }
+    }
     const ok = check(res, {
       'save-session HTTP 200': (r) => r.status === 200,
       'save-session body.ok === true': () => body?.ok === true,
@@ -235,9 +289,22 @@ export function handleSummary(data) {
 
   if (dist.length === 0) {
     const report = buildSanitizedReport(data)
+    
+    const d = new Date()
+    const pad = (n) => String(n).padStart(2, '0')
+    const timestamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}`
+    
+    let filename = 'tmp/k6-report.json'
+    if (TEST_MODE === 'soak') {
+      const mins = SOAK_DURATION.replace(/m$/, '')
+      filename = `tmp/k6-soak-${SOAK_VUS}vu-${mins}-${timestamp}.json`
+    } else {
+      filename = `tmp/k6-ramp-50vu-3-${timestamp}.json` // Default ramp in interview-api-load.js
+    }
+
     return {
       stdout: base + `\n\nendpoint_errors_total: ${totalErr}\n`,
-      'tmp/k6-report.json': JSON.stringify(report, null, 2) + '\n',
+      [filename]: JSON.stringify(report, null, 2) + '\n',
     }
   }
 
@@ -248,31 +315,53 @@ export function handleSummary(data) {
     lines.join('\n') +
     '\n'
   const report = buildSanitizedReport(data)
+  
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  const timestamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}`
+  
+  let filename = 'tmp/k6-report.json'
+  if (TEST_MODE === 'soak') {
+    const mins = SOAK_DURATION.replace(/m$/, '')
+    filename = `tmp/k6-soak-${SOAK_VUS}vu-${mins}-${timestamp}.json`
+  } else {
+    filename = `tmp/k6-ramp-50vu-3-${timestamp}.json` // Default ramp in interview-api-load.js
+  }
+
   return {
     stdout: base + extra,
-    'tmp/k6-report.json': JSON.stringify(report, null, 2) + '\n',
+    [filename]: JSON.stringify(report, null, 2) + '\n',
   }
 }
 
 function buildSanitizedReport(data) {
+  const metricValues = (m) => {
+    if (!m) return null
+    // In k6 handleSummary(), metric numbers live under `.values`.
+    // Some older/alternate outputs may put them on the metric itself.
+    return m.values || m
+  }
+
   const pickTrend = (k) => {
     const m = data?.metrics?.[k]
     if (!m) return null
+    const v = metricValues(m)
     // k6 trend values are in milliseconds in the summary object.
     return {
-      avg_ms: m.avg ?? null,
-      p95_ms: m['p(95)'] ?? null,
-      p99_ms: m['p(99)'] ?? null,
-      max_ms: m.max ?? null,
-      min_ms: m.min ?? null,
-      med_ms: m.med ?? null,
+      avg_ms: v.avg ?? null,
+      p95_ms: v['p(95)'] ?? null,
+      p99_ms: v['p(99)'] ?? null,
+      max_ms: v.max ?? null,
+      min_ms: v.min ?? null,
+      med_ms: v.med ?? null,
     }
   }
 
   const pickRate = (k) => {
     const m = data?.metrics?.[k]
     if (!m) return null
-    return { rate: m.value ?? null }
+    const v = metricValues(m)
+    return { rate: v.rate ?? v.value ?? null }
   }
 
   const thresholdsBreached = []
@@ -284,10 +373,18 @@ function buildSanitizedReport(data) {
     }
   }
 
-  const checks = data?.root_group?.checks || {}
+  const rawChecks = data?.root_group?.checks
   const checksSummary = {}
-  for (const [name, v] of Object.entries(checks)) {
-    checksSummary[name] = { passes: v?.passes ?? 0, fails: v?.fails ?? 0 }
+  if (Array.isArray(rawChecks)) {
+    for (const c of rawChecks) {
+      const name = String(c?.name ?? 'unknown')
+      checksSummary[name] = { passes: c?.passes ?? 0, fails: c?.fails ?? 0 }
+    }
+  } else {
+    const checks = rawChecks || {}
+    for (const [name, v] of Object.entries(checks)) {
+      checksSummary[String(name)] = { passes: v?.passes ?? 0, fails: v?.fails ?? 0 }
+    }
   }
 
   return {

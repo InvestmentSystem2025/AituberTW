@@ -142,6 +142,18 @@ k6 run `
   k6/interview-api-load.js | Tee-Object -FilePath tmp/k6-soak-run.log
 ```
 
+---
+
+## 4) 老闆常見要求：10VU 1h soak、30/50VU spike
+
+本 repo 已提供 3 個「可直接跑」的腳本（共用同一套 API 流程與報告輸出）：
+
+- `k6/interview-api-soak-10vu-1h.js`：平均分散（約 10 人同時），跑 1 小時
+- `k6/interview-api-spike-30vu.js`：Spike（0→30VU 30 秒，維持 5 分鐘，再用 5 分鐘降回 0）
+- `k6/interview-api-spike-50vu.js`：Spike（0→50VU 30 秒，維持 5 分鐘，再用 5 分鐘降回 0）
+
+> 這些腳本會在結束時自動產生 `tmp/k6-report.json`（已去除 token，可轉寄匯報）。
+
 ### k6 腳本固定規格（你會看到的行為）
 
 - VU 綁定：`idx = (__VU - 1) % accounts.length`
