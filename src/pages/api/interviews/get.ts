@@ -9,55 +9,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!interview_id) return res.status(400).json({ error: 'MISSING_INTERVIEW_ID' })
 
   const supa = getServiceClient()
-  const { data: me } = await supa.from('profiles').select('id').eq('auth_id', authUserId).single()
-  if (!me) return res.status(400).json({ error: 'PROFILE_NOT_FOUND' })
-
-  // 獲取interview基本信息
-  const { data: interview, error: ivError } = await supa
-    .from('interviews')
-    .select(`
-      id,
-      company_id,
-      job_opening_id,
-      start_time,
-      end_time,
-      status,
-      profiles_id,
-      candidate_email,
-      job_opening:job_opening_id (
+  // profiles 與 interview 可並行取得（彼此無依賴）
+  const [{ data: me, error: meErr }, { data: interview, error: ivError }] = await Promise.all([
+    supa
+      .from('profiles')
+      .select('id, role, email, mfa_totp_enabled_at')
+      .eq('auth_id', authUserId)
+      .single(),
+    supa
+      .from('interviews')
+      .select(`
         id,
-        job_title,
-        use_ai_generate_question,
-        result_notification_method,
-        evaluation_policy,
-        company:company_id (
+        company_id,
+        job_opening_id,
+        start_time,
+        end_time,
+        status,
+        profiles_id,
+        candidate_email,
+        job_opening:job_opening_id (
           id,
-          company_name,
-          ideal_candidate_profile
+          job_title,
+          use_ai_generate_question,
+          result_notification_method,
+          evaluation_policy,
+          company:company_id (
+            id,
+            company_name,
+            ideal_candidate_profile
+          )
         )
-      )
-    `)
-    .eq('id', interview_id)
-    .single()
+      `)
+      .eq('id', interview_id)
+      .single(),
+  ])
 
+  if (meErr || !me) return res.status(400).json({ error: 'PROFILE_NOT_FOUND' })
   if (ivError || !interview) return res.status(404).json({ error: 'INTERVIEW_NOT_FOUND' })
 
-  // 檢查權限：如果是jobSeeker，只能查看自己的interview
-  const { data: profile } = await supa
-    .from('profiles')
-    .select('role, email, mfa_totp_enabled_at')
-    .eq('auth_id', authUserId)
-    .single()
-  if (profile?.role === 'jobSeeker') {
+  // 檢查權限：如果是 jobSeeker，只能查看自己的 interview
+  if (me.role === 'jobSeeker') {
     if (interview.profiles_id !== me.id) {
-      // 檢查email是否匹配
-      if (profile.email?.toLowerCase() !== interview.candidate_email?.toLowerCase()) {
+      // 檢查 email 是否匹配
+      if (me.email?.toLowerCase() !== interview.candidate_email?.toLowerCase()) {
         return res.status(403).json({ error: 'FORBIDDEN' })
       }
     }
 
     // Gate 1: 必須完成 MFA
-    if (!profile.mfa_totp_enabled_at) {
+    if (!me.mfa_totp_enabled_at) {
       return res.status(403).json({
         error: 'MFA_REQUIRED',
         message: '開始面試前需要完成 Authenticator 認證。'
@@ -82,28 +82,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     
     // 自動授予該公司的 viewer 身份（如果還沒有）
-    const { data: existingMember } = await supa
-      .from('company_members')
-      .select('id, company_role')
-      .eq('company_id', interview.company_id)
-      .eq('profile_id', me.id)
-      .maybeSingle()
-    
-    if (!existingMember) {
-      // 使用 service client 繞過 RLS 插入 viewer 身份
-      const { error: insertError } = await supa
-        .from('company_members')
-        .insert({
-          company_id: interview.company_id,
-          profile_id: me.id,
-          company_role: 'viewer',
-        })
-      
-      if (insertError) {
-        console.error('Failed to grant viewer role:', insertError)
-        // 不阻擋繼續執行，只是記錄錯誤
+    // 不阻擋主流程（best-effort）；並避免覆蓋既有更高權限角色
+    void (async () => {
+      try {
+        const { error } = await supa
+          .from('company_members')
+          .upsert(
+            { company_id: interview.company_id, profile_id: me.id, company_role: 'viewer' },
+            { onConflict: 'company_id,profile_id', ignoreDuplicates: true }
+          )
+        if (error) console.error('Failed to grant viewer role:', error)
+      } catch (err: unknown) {
+        console.error('Failed to grant viewer role:', err)
       }
-    }
+    })()
   } else {
     // recruiter需要檢查是否為同公司成員
     const { data: scope } = await supa
@@ -115,27 +107,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!scope) return res.status(403).json({ error: 'FORBIDDEN' })
   }
 
-  // 獲取該job_opening的AI面試官列表（取第一個）
-  const { data: aiInterviewers } = await supa
-    .from('ai_interviewer')
-    .select('id, name, model_name, model_config')
-    .eq('company_id', interview.company_id)
-    .limit(1)
-    .order('created_at', { ascending: true })
-
-  // 獲取該job_opening的題目（包含 question_bank_id）
-  const { data: questions } = await supa
-    .from('job_opening_questions')
-    .select('id, detail, sort_order, question_bank_id')
-    .eq('job_opening_id', interview.job_opening_id)
-    .eq('is_active', true)
-    .order('sort_order', { ascending: true })
+  // quota / 權限通過後再抓其餘資料；這些查詢彼此可並行
+  const [{ data: aiInterviewers }, { data: questions }, { data: criteria }] = await Promise.all([
+    // 獲取該 job_opening 的 AI 面試官列表（取第一個）
+    supa
+      .from('ai_interviewer')
+      .select('id, name, model_name, model_config')
+      .eq('company_id', interview.company_id)
+      .limit(1)
+      .order('created_at', { ascending: true }),
+    // 獲取該 job_opening 的題目（包含 question_bank_id）
+    supa
+      .from('job_opening_questions')
+      .select('id, detail, sort_order, question_bank_id')
+      .eq('job_opening_id', interview.job_opening_id)
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true }),
+    // 獲取 evaluation_criteria
+    supa
+      .from('evaluation_criteria')
+      .select('id, key, display_name, weight, max_score, scoring_logic, addition_rules, deduction_rules, sort_order')
+      .eq('job_opening_id', interview.job_opening_id)
+      .order('sort_order', { ascending: true }),
+  ])
 
   // 合併 question_bank 的問題到 job_opening_questions
   if (questions && questions.length > 0) {
-    const questionBankIds = questions
+    const questionBankIds = Array.from(
+      new Set(
+        questions
       .map((q: any) => q.question_bank_id)
       .filter((id: any) => id != null)
+      )
+    )
     
     if (questionBankIds.length > 0) {
       // 批量查詢所有相關的 question_bank
@@ -218,13 +222,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     }
   }
-
-  // 獲取evaluation_criteria
-  const { data: criteria } = await supa
-    .from('evaluation_criteria')
-    .select('id, key, display_name, weight, max_score, scoring_logic, addition_rules, deduction_rules, sort_order')
-    .eq('job_opening_id', interview.job_opening_id)
-    .order('sort_order', { ascending: true })
 
   return res.status(200).json({
     interview,
