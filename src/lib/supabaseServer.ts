@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { getSupabaseJwtSecretsFromEnv, verifySupabaseAccessTokenAndGetSub } from '@/lib/jwtVerify'
 
 // 伺服端優先使用容器網路可達的 Internal URL（例：http://supabase-kong:8000），
 // 若未設定則退回公開的 NEXT_PUBLIC_SUPABASE_URL
@@ -48,6 +49,20 @@ export async function getAuthUserIdFromRequest(req: { headers?: any }): Promise<
     null
   const token = (headerToken || xToken || '').trim()
   if (!token) return null
+
+  // P2: Prefer local JWT verification if SUPABASE_JWT_SECRET(S) is provided.
+  // - SUPABASE_JWT_SECRET: single secret
+  // - SUPABASE_JWT_SECRETS: comma-separated secrets for rotation
+  try {
+    const secrets = getSupabaseJwtSecretsFromEnv()
+    if (secrets.length > 0) {
+      const sub = verifySupabaseAccessTokenAndGetSub(token, secrets)
+      if (sub) return sub
+    }
+  } catch (err) {
+    // Fall back to Supabase Auth API verification if local verification fails.
+    console.warn('getAuthUserIdFromRequest: local JWT verify failed, falling back:', err)
+  }
   
   try {
     // 先嘗試使用 service_role 來驗證（避免 RLS 問題）

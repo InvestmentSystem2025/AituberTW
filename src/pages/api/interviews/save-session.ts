@@ -1,9 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { getServiceClient, getAuthUserIdFromRequest } from '@/lib/supabaseServer'
+import { createAuthContext } from '@/lib/authContext'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
-  const authUserId = await getAuthUserIdFromRequest(req)
+  const ctx = createAuthContext(req)
+  const authUserId = await ctx.getAuthUserId()
   if (!authUserId) return res.status(401).json({ error: 'UNAUTHORIZED' })
   
   const { 
@@ -21,9 +22,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   
   if (!interviews_id) return res.status(400).json({ error: 'MISSING_INTERVIEWS_ID' })
 
-  const supa = getServiceClient()
-  const { data: me } = await supa.from('profiles').select('id').eq('auth_id', authUserId).single()
-  if (!me) return res.status(400).json({ error: 'PROFILE_NOT_FOUND' })
+  const supa = ctx.supa
+  let me: Awaited<ReturnType<typeof ctx.requireProfile>>
+  try {
+    me = await ctx.requireProfile()
+  } catch {
+    return res.status(400).json({ error: 'PROFILE_NOT_FOUND' })
+  }
 
   // 獲取interview信息並檢查權限
   const { data: interview } = await supa
@@ -35,9 +40,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!interview) return res.status(404).json({ error: 'INTERVIEW_NOT_FOUND' })
 
   // 檢查權限：jobSeeker只能保存自己的session
-  const { data: profile } = await supa.from('profiles').select('role, email').eq('auth_id', authUserId).single()
-  if (profile?.role === 'jobSeeker') {
-    if (interview.profiles_id !== me.id && profile.email?.toLowerCase() !== interview.candidate_email?.toLowerCase()) {
+  if (me.role === 'jobSeeker') {
+    if (interview.profiles_id !== me.id && me.email?.toLowerCase() !== interview.candidate_email?.toLowerCase()) {
       return res.status(403).json({ error: 'FORBIDDEN' })
     }
   } else {

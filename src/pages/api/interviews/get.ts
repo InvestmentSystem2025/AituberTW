@@ -1,21 +1,24 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { getServiceClient, getAuthUserIdFromRequest } from '@/lib/supabaseServer'
+import { TtlCache } from '@/lib/ttlCache'
+import { createAuthContext } from '@/lib/authContext'
+
+const TTL_300S_MS = 300_000
+const aiInterviewerCache = new TtlCache<any[]>({ ttlMs: TTL_300S_MS, maxEntries: 500 })
+const evaluationCriteriaCache = new TtlCache<any[]>({ ttlMs: TTL_300S_MS, maxEntries: 1000 })
+const questionsCache = new TtlCache<any[]>({ ttlMs: TTL_300S_MS, maxEntries: 2000 })
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end()
-  const authUserId = await getAuthUserIdFromRequest(req)
+  const ctx = createAuthContext(req)
+  const authUserId = await ctx.getAuthUserId()
   if (!authUserId) return res.status(401).json({ error: 'UNAUTHORIZED' })
   const interview_id = String(req.query.interview_id || '')
   if (!interview_id) return res.status(400).json({ error: 'MISSING_INTERVIEW_ID' })
 
-  const supa = getServiceClient()
-  // profiles 與 interview 可並行取得（彼此無依賴）
-  const [{ data: me, error: meErr }, { data: interview, error: ivError }] = await Promise.all([
-    supa
-      .from('profiles')
-      .select('id, role, email, mfa_totp_enabled_at')
-      .eq('auth_id', authUserId)
-      .single(),
+  const supa = ctx.supa
+  // profile 與 interview 可並行取得（request-scope cache：profile 只查一次，整個 handler 重用）
+  const [me, interviewRes] = await Promise.all([
+    ctx.getProfile(),
     supa
       .from('interviews')
       .select(`
@@ -44,8 +47,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .single(),
   ])
 
-  if (meErr || !me) return res.status(400).json({ error: 'PROFILE_NOT_FOUND' })
-  if (ivError || !interview) return res.status(404).json({ error: 'INTERVIEW_NOT_FOUND' })
+  if (!me) return res.status(400).json({ error: 'PROFILE_NOT_FOUND' })
+  const interview = interviewRes.data
+  if (interviewRes.error || !interview) return res.status(404).json({ error: 'INTERVIEW_NOT_FOUND' })
 
   // 檢查權限：如果是 jobSeeker，只能查看自己的 interview
   if (me.role === 'jobSeeker') {
@@ -65,20 +69,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Gate 2: quota 必須剩餘 >= 1
-    const { data: usage } = await supa
-      .from('job_seeker_usage')
-      .select('used_count, free_quota')
-      .eq('profile_id', me.id)
-      .maybeSingle()
+    // 只在「尚未開始 session（或狀態仍 waitToStart）」時才檢查 quota，避免面試進行中重複 hit usage
+    if (interview.status === 'waitToStart') {
+      const { data: usage } = await supa
+        .from('job_seeker_usage')
+        .select('used_count, free_quota')
+        .eq('profile_id', me.id)
+        .maybeSingle()
 
-    // 完成 MFA 後理論上已初始化；若缺失視為 0/3
-    const used = usage?.used_count ?? 0
-    const quota = usage?.free_quota ?? 3
-    if (used >= quota) {
-      return res.status(403).json({
-        error: 'FREE_QUOTA_EXCEEDED',
-        message: '免費使用次數已用完，請升級方案以繼續使用。'
-      })
+      // 完成 MFA 後理論上已初始化；若缺失視為 0/3
+      const used = usage?.used_count ?? 0
+      const quota = usage?.free_quota ?? 3
+      if (used >= quota) {
+        return res.status(403).json({
+          error: 'FREE_QUOTA_EXCEEDED',
+          message: '免費使用次數已用完，請升級方案以繼續使用。'
+        })
+      }
     }
     
     // 自動授予該公司的 viewer 身份（如果還沒有）
@@ -107,121 +114,121 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!scope) return res.status(403).json({ error: 'FORBIDDEN' })
   }
 
-  // quota / 權限通過後再抓其餘資料；這些查詢彼此可並行
-  const [{ data: aiInterviewers }, { data: questions }, { data: criteria }] = await Promise.all([
-    // 獲取該 job_opening 的 AI 面試官列表（取第一個）
-    supa
-      .from('ai_interviewer')
-      .select('id, name, model_name, model_config')
-      .eq('company_id', interview.company_id)
-      .limit(1)
-      .order('created_at', { ascending: true }),
-    // 獲取該 job_opening 的題目（包含 question_bank_id）
-    supa
-      .from('job_opening_questions')
-      .select('id, detail, sort_order, question_bank_id')
-      .eq('job_opening_id', interview.job_opening_id)
-      .eq('is_active', true)
-      .order('sort_order', { ascending: true }),
-    // 獲取 evaluation_criteria
-    supa
-      .from('evaluation_criteria')
-      .select('id, key, display_name, weight, max_score, scoring_logic, addition_rules, deduction_rules, sort_order')
-      .eq('job_opening_id', interview.job_opening_id)
-      .order('sort_order', { ascending: true }),
-  ])
+  const getAiInterviewers = async () => {
+    const key = `company:${String(interview.company_id)}:limit1:created_at_asc`
+    return aiInterviewerCache.getOrSet(key, async () => {
+      const { data } = await supa
+        .from('ai_interviewer')
+        .select('id, name, model_name, model_config')
+        .eq('company_id', interview.company_id)
+        .limit(1)
+        .order('created_at', { ascending: true })
+      return data || []
+    })
+  }
 
-  // 合併 question_bank 的問題到 job_opening_questions
-  if (questions && questions.length > 0) {
-    const questionBankIds = Array.from(
-      new Set(
-        questions
-      .map((q: any) => q.question_bank_id)
-      .filter((id: any) => id != null)
+  const getEvaluationCriteria = async () => {
+    const key = `job_opening:${String(interview.job_opening_id)}`
+    return evaluationCriteriaCache.getOrSet(key, async () => {
+      const { data } = await supa
+        .from('evaluation_criteria')
+        .select('id, key, display_name, weight, max_score, scoring_logic, addition_rules, deduction_rules, sort_order')
+        .eq('job_opening_id', interview.job_opening_id)
+        .order('sort_order', { ascending: true })
+      return data || []
+    })
+  }
+
+  const getQuestionsMerged = async () => {
+    const key = `job_opening:${String(interview.job_opening_id)}:active:true:merged_bank:true`
+    return questionsCache.getOrSet(key, async () => {
+      const { data: questions } = await supa
+        .from('job_opening_questions')
+        .select('id, detail, sort_order, question_bank_id')
+        .eq('job_opening_id', interview.job_opening_id)
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
+
+      if (!questions || questions.length === 0) return []
+
+      const questionBankIds = Array.from(
+        new Set(questions.map((q: any) => q.question_bank_id).filter((id: any) => id != null))
       )
-    )
-    
-    if (questionBankIds.length > 0) {
-      // 批量查詢所有相關的 question_bank
-      const { data: questionBanks } = await supa
-        .from('question_bank')
-        .select('id, detail')
-        .in('id', questionBankIds)
-      
-      // 建立 question_bank_id -> detail 的映射
-      const bankMap = new Map()
+
+      if (questionBankIds.length === 0) return questions
+
+      const { data: questionBanks } = await supa.from('question_bank').select('id, detail').in('id', questionBankIds)
+
+      const bankMap = new Map<any, any>()
       if (questionBanks) {
-        questionBanks.forEach((bank: any) => {
-          bankMap.set(bank.id, bank.detail)
-        })
+        questionBanks.forEach((bank: any) => bankMap.set(bank.id, bank.detail))
       }
 
-      // 對每個 job_opening_questions 合併對應的 question_bank 問題
-      questions.forEach((q: any) => {
-        if (q.question_bank_id && bankMap.has(q.question_bank_id)) {
-          const bankDetail = bankMap.get(q.question_bank_id)
-          
-          // 解析 job_opening_questions 的 detail
-          let joqQuestions: string[] = []
-          if (q.detail) {
-            if (typeof q.detail === 'string') {
-              try {
-                const parsed = JSON.parse(q.detail)
-                if (parsed && Array.isArray(parsed.questions)) {
-                  joqQuestions = parsed.questions
-                } else {
-                  joqQuestions = [q.detail] // 如果解析後不是 questions 陣列，當作單一問題
-                }
-              } catch {
-                joqQuestions = [q.detail] // JSON 解析失敗，當作單一問題字串
-              }
-            } else if (typeof q.detail === 'object') {
-              if (Array.isArray(q.detail.questions)) {
-                joqQuestions = q.detail.questions
-              } else {
-                // 嘗試從物件中提取問題
-                const text = q.detail.question || q.detail.text || q.detail.content || ''
-                if (text) joqQuestions = [text]
-              }
-            }
-          }
+      const merged = questions.map((q: any) => {
+        if (!q.question_bank_id || !bankMap.has(q.question_bank_id)) return q
 
-          // 解析 question_bank 的 detail
-          let bankQuestions: string[] = []
-          if (bankDetail) {
-            if (typeof bankDetail === 'string') {
-              try {
-                const parsed = JSON.parse(bankDetail)
-                if (parsed && Array.isArray(parsed.questions)) {
-                  bankQuestions = parsed.questions
-                } else {
-                  bankQuestions = [bankDetail] // 如果解析後不是 questions 陣列，當作單一問題
-                }
-              } catch {
-                bankQuestions = [bankDetail] // JSON 解析失敗，當作單一問題字串
-              }
-            } else if (typeof bankDetail === 'object') {
-              if (Array.isArray(bankDetail.questions)) {
-                bankQuestions = bankDetail.questions
-              } else {
-                // 嘗試從物件中提取問題
-                const text = bankDetail.question || bankDetail.text || bankDetail.content || ''
-                if (text) bankQuestions = [text]
-              }
-            }
-          }
+        const bankDetail = bankMap.get(q.question_bank_id)
 
-          // 合併問題：先 question_bank 的問題，再 job_opening_questions 的問題（共通題庫優先）
-          const mergedQuestions = [...bankQuestions, ...joqQuestions].filter((q: string) => q && q.trim().length > 0)
-          
-          // 更新 detail
-          q.detail = {
-            questions: mergedQuestions
+        // 解析 job_opening_questions 的 detail
+        let joqQuestions: string[] = []
+        if (q.detail) {
+          if (typeof q.detail === 'string') {
+            try {
+              const parsed = JSON.parse(q.detail)
+              if (parsed && Array.isArray(parsed.questions)) joqQuestions = parsed.questions
+              else joqQuestions = [q.detail]
+            } catch {
+              joqQuestions = [q.detail]
+            }
+          } else if (typeof q.detail === 'object') {
+            if (Array.isArray(q.detail.questions)) joqQuestions = q.detail.questions
+            else {
+              const text = q.detail.question || q.detail.text || q.detail.content || ''
+              if (text) joqQuestions = [text]
+            }
           }
         }
+
+        // 解析 question_bank 的 detail
+        let bankQuestions: string[] = []
+        if (bankDetail) {
+          if (typeof bankDetail === 'string') {
+            try {
+              const parsed = JSON.parse(bankDetail)
+              if (parsed && Array.isArray(parsed.questions)) bankQuestions = parsed.questions
+              else bankQuestions = [bankDetail]
+            } catch {
+              bankQuestions = [bankDetail]
+            }
+          } else if (typeof bankDetail === 'object') {
+            if (Array.isArray(bankDetail.questions)) bankQuestions = bankDetail.questions
+            else {
+              const text = bankDetail.question || bankDetail.text || bankDetail.content || ''
+              if (text) bankQuestions = [text]
+            }
+          }
+        }
+
+        const mergedQuestions = [...bankQuestions, ...joqQuestions].filter(
+          (qq: string) => qq && qq.trim().length > 0
+        )
+
+        return {
+          ...q,
+          detail: { questions: mergedQuestions },
+        }
       })
-    }
+
+      return merged
+    })
   }
+
+  // quota / 權限通過後再抓其餘資料；這些查詢彼此可並行（並加入短 TTL cache）
+  const [aiInterviewers, questions, criteria] = await Promise.all([
+    getAiInterviewers(),
+    getQuestionsMerged(),
+    getEvaluationCriteria(),
+  ])
 
   return res.status(200).json({
     interview,

@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { getAuthUserIdFromRequest, getServiceClient } from '@/lib/supabaseServer'
+import { createAuthContext } from '@/lib/authContext'
 
 type Resp =
   | { ok: true; usage?: { used_count: number; free_quota: number }; did_increment?: boolean }
@@ -12,13 +12,14 @@ const MSG_INTERVIEW_NOT_STARTABLE = '此面試已無法開始（可能已完成/
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
   if (req.method !== 'POST') return res.status(405).end()
 
-  const authUserId = await getAuthUserIdFromRequest(req)
+  const ctx = createAuthContext(req)
+  const authUserId = await ctx.getAuthUserId()
   if (!authUserId) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' })
 
   const interviews_id = String(req.body?.interviews_id || '').trim()
   if (!interviews_id) return res.status(400).json({ ok: false, error: 'MISSING_INTERVIEWS_ID' })
 
-  const supa = getServiceClient()
+  const supa = ctx.supa
 
   const { data, error } = await supa.rpc('start_interview_session', {
     p_interviews_id: interviews_id,
