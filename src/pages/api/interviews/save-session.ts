@@ -60,15 +60,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // 重要：save-session 不負責扣點；必須先呼叫 /api/interviews/start-session 建立 placeholder session。
   // 否則攻擊者可直接 upsert 繞過 quota。
-  const { data: existingSession } = await supa
-    .from('interview_sessions')
-    .select('id')
-    .eq('interviews_id', interviews_id)
-    .maybeSingle()
-  if (!existingSession) {
-    return res.status(403).json({ error: 'SESSION_NOT_STARTED' })
-  }
-
   // 準備數據
   const sessionData: any = {
     company_id: interview.company_id,
@@ -112,11 +103,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .update(sessionData)
     .eq('interviews_id', interviews_id)
     .select()
-    .single()
+    .maybeSingle()
 
   if (error) {
     console.error('Save session error:', error)
     return res.status(400).json({ error: 'SAVE_SESSION_FAILED', details: error.message })
+  }
+  if (!session) {
+    return res.status(403).json({ error: 'SESSION_NOT_STARTED' })
   }
 
   // 進度保存（非結算）：只回傳 session，不更新 interviews 狀態、不計分

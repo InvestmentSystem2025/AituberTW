@@ -6,6 +6,7 @@ const TTL_300S_MS = 300_000
 const aiInterviewerCache = new TtlCache<any[]>({ ttlMs: TTL_300S_MS, maxEntries: 500 })
 const evaluationCriteriaCache = new TtlCache<any[]>({ ttlMs: TTL_300S_MS, maxEntries: 1000 })
 const questionsCache = new TtlCache<any[]>({ ttlMs: TTL_300S_MS, maxEntries: 2000 })
+const jobOpeningCache = new TtlCache<any>({ ttlMs: TTL_300S_MS, maxEntries: 2000 })
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end()
@@ -29,27 +30,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         end_time,
         status,
         profiles_id,
-        candidate_email,
-        job_opening:job_opening_id (
-          id,
-          job_title,
-          use_ai_generate_question,
-          result_notification_method,
-          evaluation_policy,
-          company:company_id (
-            id,
-            company_name,
-            ideal_candidate_profile
-          )
-        )
+        candidate_email
       `)
       .eq('id', interview_id)
       .single(),
   ])
 
   if (!me) return res.status(400).json({ error: 'PROFILE_NOT_FOUND' })
-  const interview = interviewRes.data
-  if (interviewRes.error || !interview) return res.status(404).json({ error: 'INTERVIEW_NOT_FOUND' })
+  const interviewBase = interviewRes.data as any
+  if (interviewRes.error || !interviewBase) return res.status(404).json({ error: 'INTERVIEW_NOT_FOUND' })
+
+  const jobOpening = await jobOpeningCache.getOrSet(`job_opening:${String(interviewBase.job_opening_id)}:with_company:true`, async () => {
+    const { data } = await supa
+      .from('job_opening')
+      .select(`
+        id,
+        job_title,
+        use_ai_generate_question,
+        result_notification_method,
+        evaluation_policy,
+        company:company_id (
+          id,
+          company_name,
+          ideal_candidate_profile
+        )
+      `)
+      .eq('id', interviewBase.job_opening_id)
+      .maybeSingle()
+    return data || null
+  })
+
+  const interview = { ...interviewBase, job_opening: jobOpening }
 
   // 檢查權限：如果是 jobSeeker，只能查看自己的 interview
   if (me.role === 'jobSeeker') {
