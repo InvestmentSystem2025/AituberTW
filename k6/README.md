@@ -29,3 +29,12 @@ Notes:
 - Detailed guide (Traditional Chinese): `docs/interview-load-testing_zh-TW.md`
 - **Server-side metrics** (CPU, memory, load average): k6 only reports client-side metrics. To see VM resource usage during the test, run `scripts/vm-stats-during-load.sh` on the **target VM** while k6 runs, or use GCP Console monitoring. See doc section 「2.5) 伺服器端負荷」.
 
+### Soak / spike scripts (fixed VU & duration)
+
+- `k6/interview-api-soak-10vu-1h.js` — 10 VU, 1 hour
+- `k6/interview-api-soak-50vu-30m.js` — 50 VU, 30 minutes (long-term stability; watch p99 drift)
+- `k6/interview-api-spike-30vu.js` — spike 0→30 VU
+- `k6/interview-api-spike-50vu.js` — spike 0→50 VU
+
+Each run writes a JSON report under `tmp/` (e.g. `tmp/k6-soak-50vu-30-YYYYMMDDHHmm.json`) with **per-endpoint latency**: `latency.get`, `latency.start_session`, `latency.save_session`, each containing `p95_ms`, `p99_ms`, `avg_ms`, `max_ms`, etc. Use this for reporting and to compare runs.
+

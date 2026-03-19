@@ -65,6 +65,7 @@ export async function streamAiText({
   maxTokens,
   options = {},
   aiApiKey,
+  tokenRecord,
 }: {
   aiService?: VercelAIService | string
   model: string
@@ -74,6 +75,24 @@ export async function streamAiText({
   maxTokens: number
   options?: any
   aiApiKey?: string
+  /**
+   * Optional token usage recording.
+   * Called server-side in onFinish (fires even if client disconnects).
+   * The caller decides HOW to record:
+   *   - Edge routes: fire fetch to /api/internal/record-token-usage
+   *   - Node.js routes: call recordTokenUsage() directly (no HTTP round-trip)
+   */
+  tokenRecord?: {
+    requestId: string
+    userId: string | null
+    /** Fire-and-forget. Must not throw (wrap errors internally). */
+    onRecord: (data: {
+      requestId: string
+      userId: string | null
+      inputTokens: number
+      outputTokens: number
+    }) => void
+  }
 }) {
   try {
     // 檢查是否為 OpenAI web-search 模式
@@ -243,6 +262,18 @@ export async function streamAiText({
             streamData.append({ usage })
           }
           streamData.close()
+
+          // Fire-and-forget: record token usage via caller-provided onRecord().
+          // Runs server-side in onFinish → client disconnect does NOT prevent
+          // recording (spec: "server completion = record it").
+          if (tokenRecord && tokens) {
+            tokenRecord.onRecord({
+              requestId: tokenRecord.requestId,
+              userId: tokenRecord.userId,
+              inputTokens: tokens.tokens_input,
+              outputTokens: tokens.tokens_output,
+            })
+          }
         },
       })
 

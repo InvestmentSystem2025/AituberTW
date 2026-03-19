@@ -446,6 +446,36 @@ export default async function handler(req: NextRequest) {
 
     // ========== 通常の処理 ==========
     if (stream) {
+      // Generate requestId server-side BEFORE the AI call (spec requirement).
+      // crypto.randomUUID() is available in Edge runtime via Web Crypto API.
+      const requestId = crypto.randomUUID()
+      const internalSecret = process.env.CRON_SECRET ?? ''
+      // Derive origin from the incoming request URL (no env var needed).
+      const origin = req.url ? new URL(req.url).origin : 'http://app:3000'
+
+      // Edge runtime cannot import ioredis → delegate to internal Node.js API via HTTP.
+      const tokenRecord = internalSecret
+        ? {
+            requestId,
+            userId: null as null,  // Edge has no auth context; userId = null → global pool
+            onRecord: (data: {
+              requestId: string; userId: string | null
+              inputTokens: number; outputTokens: number
+            }) => {
+              fetch(`${origin}/api/internal/record-token-usage`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'x-internal-secret': internalSecret,
+                },
+                body: JSON.stringify(data),
+              }).catch((err) => {
+                console.error('[vercel.ts] record-token-usage fetch failed:', err?.message)
+              })
+            },
+          }
+        : undefined
+
       return await streamAiText({
         aiService,
         model: modifiedModel,
@@ -454,8 +484,8 @@ export default async function handler(req: NextRequest) {
         temperature,
         maxTokens,
         options,
-        // 額外傳入 openaiApiKey 供 web-search 分支使用官方 SDK
         aiApiKey,
+        tokenRecord,
       } as any)
     } else {
       return await generateAiText({

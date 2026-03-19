@@ -16,6 +16,15 @@ services:
       - app
       - supabase-kong
 
+  # Redis（Token Usage 即時限流）
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    # 不對外暴露 port（僅 Docker 內網使用）
+
   # Next.js app (production)
   app:
     build: .
@@ -35,9 +44,11 @@ services:
       - NEXT_PUBLIC_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       # Server-side internal routing to Kong inside docker network
       - SUPABASE_INTERNAL_URL=http://supabase-kong:8000
+      - REDIS_URL=redis://redis:6379
     command: npm run start
     depends_on:
       - supabase-kong
+      - redis
 
   # ----------------------------
   # Supabase (self-hosted)
@@ -230,6 +241,24 @@ services:
     volumes:
       - ./supabase/${KONG_CONFIG_NAME}:/var/lib/kong/kong.yml:ro
 
+  # Token Usage Cron（每日 00:00 / 每月 1 號 00:00 Asia/Taipei 執行聚合）
+  token-usage-cron:
+    image: alpine:3.20
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Taipei
+      - CRON_SECRET=${CRON_SECRET}
+      - APP_URL=http://app:3000
+    command: >
+      sh -c "
+      apk add --no-cache curl >/dev/null;
+      echo '0 0 * * * curl -sf -X POST -H \"Authorization: Bearer $$CRON_SECRET\" $$APP_URL/api/cron/aggregate-daily >> /var/log/cron.log 2>&1' > /etc/crontabs/root;
+      echo '0 0 1 * * curl -sf -X POST -H \"Authorization: Bearer $$CRON_SECRET\" $$APP_URL/api/cron/aggregate-monthly >> /var/log/cron.log 2>&1' >> /etc/crontabs/root;
+      crond -f -l 8
+      "
+    depends_on:
+      - app
+
   # Optional one-shot bootstrap (create default buckets etc.)
   supabase-bootstrap:
     image: alpine:3.20
@@ -276,4 +305,5 @@ volumes:
   caddy_config:
   supabase_db_data:
   supabase_storage_data:
+  redis_data:
 

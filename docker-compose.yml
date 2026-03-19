@@ -1,4 +1,4 @@
-﻿services:
+services:
   # Ollama 服務
   ollama:
     image: ollama/ollama:latest
@@ -100,6 +100,17 @@
     depends_on:
       - ocr-service
 
+  # Redis（Token Usage 即時限流）
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
   # 主應用服務
   #- /app/node_modules
   app:
@@ -118,10 +129,12 @@
       - NEXT_PUBLIC_MCP_SERVER_URL=http://localhost:3001
       - TZ=Asia/Taipei
       - SUPABASE_INTERNAL_URL=http://supabase-kong:8000
+      - REDIS_URL=redis://redis:6379
     depends_on:
       - ollama
       - chromadb
       - mcp-server
+      - redis
     command: npm run dev
     networks:
       - default
@@ -346,6 +359,25 @@
       - ./supabase/kong.yml:/var/lib/kong/kong.yml:ro
     restart: unless-stopped
 
+  # Token Usage Cron（每日 00:00 / 每月 1 號 00:00 Asia/Taipei 執行聚合）
+  token-usage-cron:
+    image: alpine:3.20
+    container_name: token-usage-cron
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Taipei
+      - CRON_SECRET=${CRON_SECRET}
+      - APP_URL=http://app:3000
+    command: >
+      sh -c "
+      apk add --no-cache curl >/dev/null;
+      echo '0 0 * * * curl -sf -X POST -H \"Authorization: Bearer $$CRON_SECRET\" $$APP_URL/api/cron/aggregate-daily >> /var/log/cron.log 2>&1' > /etc/crontabs/root;
+      echo '0 0 1 * * curl -sf -X POST -H \"Authorization: Bearer $$CRON_SECRET\" $$APP_URL/api/cron/aggregate-monthly >> /var/log/cron.log 2>&1' >> /etc/crontabs/root;
+      crond -f -l 8
+      "
+    depends_on:
+      - app
+
   # 一次性啟動的 Seed 服務：等待 Storage 就緒後自動建立預設 buckets
   supabase-bootstrap:
     image: alpine:3.20
@@ -397,6 +429,7 @@ volumes:
   supabase_db_data:
   supabase_storage_data:
   app_node_modules:
+  redis_data:
 
 networks:
   default:

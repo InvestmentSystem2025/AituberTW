@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import { Message } from '@/features/messages/messages'
 import {
   VercelAIService,
@@ -7,6 +8,7 @@ import {
 import { modifyMessages } from '../services/utils'
 import { aiServiceConfig, streamAiText, generateAiText } from '../services/vercelAi'
 import { googleSearchGroundingModels } from '@/features/constants/aiModels'
+import { recordTokenUsage } from '@/lib/tokenUsageService'
 
 export type VercelAiRequestBody = {
   messages: Message[]
@@ -406,6 +408,32 @@ export async function handleVercelAiJson(body: any): Promise<Response> {
 
     // ========== 通常の處理 ==========
     if (stream) {
+      // Generate requestId server-side BEFORE the AI call (spec requirement).
+      const requestId = crypto.randomUUID()
+
+      // Node.js route: call recordTokenUsage() directly — no HTTP round-trip needed.
+      // CRON_SECRET check: skip recording silently if secret is not configured
+      // (avoids crash in dev without Redis).
+      const tokenRecord = process.env.CRON_SECRET
+        ? {
+            requestId,
+            userId: null as null,
+            onRecord: (data: {
+              requestId: string; userId: string | null
+              inputTokens: number; outputTokens: number
+            }) => {
+              recordTokenUsage({
+                requestId: data.requestId,
+                userId: data.userId,
+                inputTokens: data.inputTokens,
+                outputTokens: data.outputTokens,
+              }).catch((err) => {
+                console.error('[vercelAiRoute] recordTokenUsage failed:', err?.message)
+              })
+            },
+          }
+        : undefined
+
       return await streamAiText({
         aiService,
         model: modifiedModel,
@@ -414,8 +442,8 @@ export async function handleVercelAiJson(body: any): Promise<Response> {
         temperature,
         maxTokens,
         options,
-        // 額外傳入 openaiApiKey 供 web-search 分支使用官方 SDK
         aiApiKey,
+        tokenRecord,
       } as any)
     } else {
       return await generateAiText({

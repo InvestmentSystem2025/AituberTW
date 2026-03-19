@@ -142,17 +142,32 @@ k6 run `
   k6/interview-api-load.js | Tee-Object -FilePath tmp/k6-soak-run.log
 ```
 
+### PowerShell 範例（soak：50 VU 跑 30 分鐘，看長時間穩定性）
+
+使用專用腳本（輸出檔名會是 `tmp/k6-soak-50vu-30-YYYYMMDDHHmm.json`）：
+
+```powershell
+k6 run `
+  -e BASE_URL=https://stg.ai-interview.tw `
+  -e BASIC_USER=stg `
+  -e BASIC_PASS=YOUR_PASSWORD `
+  -e NEXT_PUBLIC_SUPABASE_URL=https://YOUR_SUPABASE_URL `
+  -e NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_KEY `
+  k6/interview-api-soak-50vu-30m.js | Tee-Object -FilePath tmp/k6-soak-50vu-30m.log
+```
+
 ---
 
-## 4) 老闆常見要求：10VU 1h soak、30/50VU spike
+## 4) 老闆常見要求：10VU 1h soak、50VU 30m soak、30/50VU spike
 
-本 repo 已提供 3 個「可直接跑」的腳本（共用同一套 API 流程與報告輸出）：
+本 repo 已提供 4 個「可直接跑」的腳本（共用同一套 API 流程與報告輸出）：
 
 - `k6/interview-api-soak-10vu-1h.js`：平均分散（約 10 人同時），跑 1 小時
+- `k6/interview-api-soak-50vu-30m.js`：**50 VU、30 分鐘** soak，看長時間穩定性（p99 是否隨時間上升、記憶體/連線池累積等）
 - `k6/interview-api-spike-30vu.js`：Spike（0→30VU 30 秒，維持 5 分鐘，再用 5 分鐘降回 0）
 - `k6/interview-api-spike-50vu.js`：Spike（0→50VU 30 秒，維持 5 分鐘，再用 5 分鐘降回 0）
 
-> 這些腳本會在結束時自動產生 `tmp/k6-report.json`（已去除 token，可轉寄匯報）。
+> 這些腳本會在結束時自動產生 `tmp/k6-soak-*vu-*.json` 或 `tmp/k6-ramp-*.json`（檔名含時間戳；內容已去除 token，可轉寄匯報）。報告內含**各端點**的 P95/P99（`latency.get`、`latency.start_session`、`latency.save_session` 各有一組 `p95_ms`、`p99_ms` 等），方便比對與存檔。
 
 ### k6 腳本固定規格（你會看到的行為）
 
@@ -168,6 +183,25 @@ k6 run `
 ### 指標/Threshold
 
 腳本只針對 `get|start-session|save-session` 設 thresholds；`auth` 不會污染這些指標。
+
+### JSON 報告：各端點 P95 / P99
+
+每次跑完會寫入的 JSON 報告（例如 `tmp/k6-soak-50vu-30-YYYYMMDDHHmm.json`）結構如下（節錄）：
+
+- `latency.overall`：整體請求延遲
+- `latency.get`、`latency.start_session`、`latency.save_session`：**各端點**一組，每組含 `avg_ms`、`p95_ms`、`p99_ms`、`max_ms`、`min_ms`、`med_ms`
+- `error_rate.*`：各端點錯誤率
+- `checks`：各 check 的 passes/fails
+- `thresholds_breached`：觸發的 threshold
+
+可直接把該 JSON 存檔或交給 CI/報表使用。
+
+### 觀察「P99 是否隨時間慢慢上升」
+
+單次 run 的總結只會給**整段測試一個** P99；若要看 30 分鐘內 P99 是否隨時間漂高，可選：
+
+1. **k6 輸出每筆樣本**：`k6 run --out json=tmp/samples.json k6/interview-api-soak-50vu-30m.js`，再自行依時間視窗（例如每 5 分鐘）對 `tmp/samples.json` 做分桶、算各段 P95/P99。
+2. **InfluxDB / Prometheus + Grafana**：k6 的 `--out influxdb` 或 `--out experimental-prometheus` 可把指標打進時序 DB，在 Grafana 看各時段的 P99 曲線。
 
 ---
 

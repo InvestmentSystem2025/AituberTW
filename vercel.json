@@ -1,0 +1,13 @@
+{
+  "_comment": "Vercel Cron 設定（僅在部署至 Vercel 時生效）。Docker 環境使用 token-usage-cron 容器排程，此檔案對 Docker 環境無影響。UTC 16:00 = Asia/Taipei 00:00（隔天）",
+  "crons": [
+    {
+      "path": "/api/cron/aggregate-daily",
+      "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/cron/aggregate-monthly",
+      "schedule": "0 16 1 * *"
+    }
+  ]
+}

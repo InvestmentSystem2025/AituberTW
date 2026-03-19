@@ -3,6 +3,7 @@ import { useRouter } from 'next/router'
 import settingsStore from '@/features/stores/settings'
 import { TextButton } from '@/components/textButton'
 import Settings from '@/components/settings'
+import TokenUsageDashboard from '@/components/adminSetting/TokenUsageDashboard'
 
 const ADMIN_USERNAME = 'super123'
 const ADMIN_PASSWORD = 'kapibarachiikawa'
@@ -39,7 +40,7 @@ const AdminSettingPage = () => {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'settings' | 'feedback'>('settings')
+  const [activeTab, setActiveTab] = useState<'settings' | 'feedback' | 'token-usage'>('settings')
 
   // 初回ロード時に DB のグローバル設定を取得し settingsStore に反映
   useEffect(() => {
@@ -253,10 +254,25 @@ const AdminSettingPage = () => {
             >
               使用者反饋
             </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('token-usage')}
+              className={`px-3 py-2 rounded-lg text-sm ${
+                activeTab === 'token-usage'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-200 hover:bg-gray-300 text-gray-800'
+              }`}
+            >
+              AI Token Usage
+            </button>
           </div>
 
           {activeTab === 'feedback' ? (
             <AdminFeedbackTab />
+          ) : activeTab === 'token-usage' ? (
+            <div className="pb-8">
+              <TokenUsageDashboard />
+            </div>
           ) : (
             <>
               <p className="mb-4 text-gray-600 text-sm">
