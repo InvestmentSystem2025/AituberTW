@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/router'
+import dynamic from 'next/dynamic'
 import settingsStore from '@/features/stores/settings'
 import { TextButton } from '@/components/textButton'
 import Settings from '@/components/settings'
-import TokenUsageDashboard from '@/components/adminSetting/TokenUsageDashboard'
+
+// dynamic + ssr:false: prevents recharts / browser-API-dependent code from
+// running during SSR and crashing the entire adminSetting page render.
+const TokenUsageDashboard = dynamic(
+  () => import('@/components/adminSetting/TokenUsageDashboard'),
+  { ssr: false, loading: () => <div className="py-20 text-center text-gray-400 text-sm">載入中…</div> }
+)
 
 const ADMIN_USERNAME = 'super123'
 const ADMIN_PASSWORD = 'kapibarachiikawa'
