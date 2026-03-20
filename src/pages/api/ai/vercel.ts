@@ -17,6 +17,27 @@ export const config = {
   runtime: 'edge',
 }
 
+function getCandidateInternalOrigins(req: NextRequest): string[] {
+  const configuredInternalOrigin = (process.env.INTERNAL_API_ORIGIN || '').trim()
+  const requestOrigin = req.url ? new URL(req.url).origin : ''
+  const configuredBaseUrl = (process.env.BASE_URL || '').trim()
+  const dockerInternalOrigin = 'http://app:3000'
+
+  // Priority:
+  // 1) INTERNAL_API_ORIGIN (explicitly set for server-to-server calls)
+  // 2) request origin
+  // 3) BASE_URL (legacy fallback)
+  // 4) Docker internal service URL fallback
+  const ordered = [
+    configuredInternalOrigin,
+    requestOrigin,
+    configuredBaseUrl,
+    dockerInternalOrigin,
+  ].filter(Boolean)
+
+  return Array.from(new Set(ordered))
+}
+
 export default async function handler(req: NextRequest) {
   if (req.method !== 'POST') {
     return new Response(
@@ -450,8 +471,7 @@ export default async function handler(req: NextRequest) {
       // crypto.randomUUID() is available in Edge runtime via Web Crypto API.
       const requestId = crypto.randomUUID()
       const internalSecret = process.env.CRON_SECRET ?? ''
-      // Derive origin from the incoming request URL (no env var needed).
-      const origin = req.url ? new URL(req.url).origin : 'http://app:3000'
+      const candidateOrigins = getCandidateInternalOrigins(req)
 
       // Edge runtime cannot import ioredis → delegate to internal Node.js API via HTTP.
       const tokenRecord = internalSecret
@@ -462,16 +482,44 @@ export default async function handler(req: NextRequest) {
               requestId: string; userId: string | null
               inputTokens: number; outputTokens: number
             }) => {
-              fetch(`${origin}/api/internal/record-token-usage`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'x-internal-secret': internalSecret,
-                },
-                body: JSON.stringify(data),
-              }).catch((err) => {
-                console.error('[vercel.ts] record-token-usage fetch failed:', err?.message)
-              })
+              Promise.resolve()
+                .then(async () => {
+                  let lastError: unknown = null
+                  for (const origin of candidateOrigins) {
+                    const url = `${origin}/api/internal/record-token-usage`
+                    try {
+                      const res = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'x-internal-secret': internalSecret,
+                        },
+                        body: JSON.stringify(data),
+                      })
+                      if (res.ok) return
+                      lastError = new Error(`HTTP ${res.status}`)
+                      console.error('[vercel.ts] record-token-usage non-200', {
+                        url,
+                        status: res.status,
+                      })
+                    } catch (err) {
+                      lastError = err
+                      console.error('[vercel.ts] record-token-usage fetch failed', {
+                        url,
+                        error: err instanceof Error ? err.message : String(err),
+                      })
+                    }
+                  }
+                  console.error('[vercel.ts] record-token-usage all origins failed', {
+                    origins: candidateOrigins,
+                    error: lastError instanceof Error ? lastError.message : String(lastError),
+                  })
+                })
+                .catch((err) => {
+                  console.error('[vercel.ts] record-token-usage unexpected error', {
+                    error: err instanceof Error ? err.message : String(err),
+                  })
+                })
             },
           }
         : undefined
