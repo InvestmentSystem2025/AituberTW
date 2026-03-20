@@ -27,6 +27,18 @@ interface DashboardData {
   trend: Array<{ date: string; total_tokens: number }>
 }
 
+// ── Billing constants (mirror tokenUsageService.ts) ──────────────────────────
+const INPUT_PRICE_PER_MILLION = 0.40
+const OUTPUT_PRICE_PER_MILLION = 1.60
+const TWD_PER_USD = 32
+
+function calcCostTwd(paidInput: number, paidOutput: number): number {
+  const usd =
+    (paidInput / 1_000_000) * INPUT_PRICE_PER_MILLION +
+    (paidOutput / 1_000_000) * OUTPUT_PRICE_PER_MILLION
+  return Math.round(usd * TWD_PER_USD * 10000) / 10000
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
@@ -385,7 +397,19 @@ export default function TokenUsageDashboard() {
   const monthly = data!.monthly
   const daily = data!.daily
   const trend = data!.trend
-  const monthlyTotal = monthly.free_tokens + monthly.paid_tokens
+
+  // ── 本月含今日合算（今日即時數據 + 歷史聚合）──────────────────────────────
+  // monthly.*  = token_usage_monthly（昨日以前的聚合，每日 00:00 cron 更新）
+  // daily.*    = 今日即時數據（Redis total + logs breakdown）
+  // 顯示「本月」時必須把今日加回去，否則今日資料在隔天 cron 前不會反映
+  const combined = {
+    total:       (monthly.free_tokens + monthly.paid_tokens) + daily.total_tokens,
+    free:        monthly.free_tokens        + daily.free_tokens,
+    paidInput:   monthly.paid_input_tokens  + daily.paid_input_tokens,
+    paidOutput:  monthly.paid_output_tokens + daily.paid_output_tokens,
+    paid:        monthly.paid_tokens        + daily.paid_tokens,
+    costTwd:     monthly.estimated_cost_twd + calcCostTwd(daily.paid_input_tokens, daily.paid_output_tokens),
+  }
 
   return (
     <div className="space-y-6">
@@ -408,36 +432,60 @@ export default function TokenUsageDashboard() {
         </button>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <KpiCard
-          title="本月總使用量"
-          value={formatTokens(monthlyTotal)}
-          subtitle={`免費 ${formatTokens(monthly.free_tokens)} / 付費 ${formatTokens(monthly.paid_tokens)}`}
-          accent="blue"
-          icon={<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>}
-        />
-        <KpiCard
-          title="本月免費用量"
-          value={formatTokens(monthly.free_tokens)}
-          subtitle="每日額度 2.5M tokens（全局）"
-          accent="green"
-          icon={<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" /></svg>}
-        />
-        <KpiCard
-          title="本月預估費用"
-          value={formatCurrency(monthly.estimated_cost_twd)}
-          subtitle={`Input ${formatTokens(monthly.paid_input_tokens)} / Output ${formatTokens(monthly.paid_output_tokens)}`}
-          accent="amber"
-          icon={<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
-        />
-        <KpiCard
-          title="今日使用量"
-          value={formatTokens(daily.total_tokens)}
-          subtitle={`免費 ${formatTokens(daily.free_tokens)} / 付費 ${formatTokens(daily.paid_tokens)}`}
-          accent="rose"
-          icon={<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>}
-        />
+      {/* 本月 KPI Cards（歷史聚合 + 今日即時，共 3 cards） */}
+      <div>
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">本月累計（含今日）</p>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <KpiCard
+            title="本月總使用量"
+            value={formatTokens(combined.total)}
+            subtitle={`免費 ${formatTokens(combined.free)} / 付費 ${formatTokens(combined.paid)}`}
+            accent="blue"
+            icon={<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>}
+          />
+          <KpiCard
+            title="本月免費用量"
+            value={formatTokens(combined.free)}
+            subtitle="每日額度 2.5M tokens（全局）"
+            accent="green"
+            icon={<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" /></svg>}
+          />
+          <KpiCard
+            title="本月預估費用"
+            value={formatCurrency(combined.costTwd)}
+            subtitle={`Input ${formatTokens(combined.paidInput)} / Output ${formatTokens(combined.paidOutput)}`}
+            accent="amber"
+            icon={<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
+          />
+        </div>
+      </div>
+
+      {/* 今日 KPI Cards（3 cards） */}
+      <div>
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">今日即時</p>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <KpiCard
+            title="今日總使用量"
+            value={formatTokens(daily.total_tokens)}
+            subtitle={`免費 ${formatTokens(daily.free_tokens)} / 付費 ${formatTokens(daily.paid_tokens)}`}
+            accent="blue"
+            icon={<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>}
+          />
+          <KpiCard
+            title="今日免費使用量"
+            value={formatTokens(daily.free_tokens)}
+            subtitle="每日全局免費額度 2.5M tokens"
+            accent="green"
+            icon={<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
+          />
+          <KpiCard
+            title="今日付費使用量"
+            value={formatTokens(daily.paid_tokens)}
+            subtitle={`Input: ${formatTokens(daily.paid_input_tokens)} / Output: ${formatTokens(daily.paid_output_tokens)}`}
+            accent="rose"
+            icon={<svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" /></svg>}
+          />
+        </div>
       </div>
 
       {/* Trend Chart */}
@@ -450,13 +498,13 @@ export default function TokenUsageDashboard() {
         )}
       </div>
 
-      {/* Breakdown Cards */}
+      {/* Breakdown Cards（本月含今日） */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-sm font-semibold text-gray-700 mb-4">本月 免費 vs 付費</h3>
+          <h3 className="text-sm font-semibold text-gray-700 mb-4">本月 免費 vs 付費（含今日）</h3>
           <div className="space-y-4">
-            <BreakdownBar label="免費用量" value={monthly.free_tokens} total={monthlyTotal} color="bg-emerald-400" />
-            <BreakdownBar label="付費用量" value={monthly.paid_tokens} total={monthlyTotal} color="bg-amber-400" />
+            <BreakdownBar label="免費用量" value={combined.free} total={combined.total} color="bg-emerald-400" />
+            <BreakdownBar label="付費用量" value={combined.paid} total={combined.total} color="bg-amber-400" />
           </div>
           <div className="mt-4 pt-4 border-t border-gray-100 flex justify-between text-xs text-gray-500">
             <span>計費價格</span>
@@ -465,13 +513,13 @@ export default function TokenUsageDashboard() {
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-sm font-semibold text-gray-700 mb-4">本月付費 Input vs Output</h3>
-          {monthly.paid_tokens === 0 ? (
+          <h3 className="text-sm font-semibold text-gray-700 mb-4">本月付費 Input vs Output（含今日）</h3>
+          {combined.paid === 0 ? (
             <p className="text-sm text-gray-400 py-6 text-center">本月尚無付費使用</p>
           ) : (
             <div className="space-y-4">
-              <BreakdownBar label="Input tokens" value={monthly.paid_input_tokens} total={monthly.paid_tokens} color="bg-blue-400" />
-              <BreakdownBar label="Output tokens" value={monthly.paid_output_tokens} total={monthly.paid_tokens} color="bg-violet-400" />
+              <BreakdownBar label="Input tokens" value={combined.paidInput} total={combined.paid} color="bg-blue-400" />
+              <BreakdownBar label="Output tokens" value={combined.paidOutput} total={combined.paid} color="bg-violet-400" />
             </div>
           )}
           <div className="mt-4 pt-4 border-t border-gray-100 space-y-1">
