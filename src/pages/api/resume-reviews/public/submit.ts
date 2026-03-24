@@ -125,6 +125,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    const mustNotMatched = evaluated.criteriaResults.filter((x) => x.label === 'MUST' && !x.matched)
+    const ngMatched = evaluated.criteriaResults.filter((x) => x.label === 'NG' && x.matched)
+    const isPassed = mustNotMatched.length === 0 && ngMatched.length === 0
+    const failReasonParts: string[] = []
+    if (mustNotMatched.length > 0) failReasonParts.push(`必須條件未滿足：${mustNotMatched.map((x) => x.name).join('、')}`)
+    if (ngMatched.length > 0) failReasonParts.push(`命中 NG 條件：${ngMatched.map((x) => x.name).join('、')}`)
+    const decisionText = isPassed ? '審查通過' : '審查不通過'
+    const mergedSummary = [decisionText, evaluated.summary, failReasonParts.join('；')].filter(Boolean).join(' | ')
+
     const { error: resultErr } = await supa.from('resume_review_results').insert({
       review_request_id: requestRow.id,
       company_id: requestRow.company_id,
@@ -133,7 +142,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       candidate_email: String(me.email || '').toLowerCase(),
       criteria_results: evaluated.criteriaResults,
       fit_score: evaluated.fitScore,
-      summary: evaluated.summary,
+      summary: mergedSummary,
     })
     if (resultErr) return res.status(400).json({ error: 'SUBMIT_FAILED' })
 

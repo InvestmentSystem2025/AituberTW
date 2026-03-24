@@ -212,8 +212,11 @@ export default function CompanyAdminPage() {
     showForm: false
   })
   const [newJOQ, setNewJOQ] = useState({ job_opening_id: '', question_bank_id: '', questions: [] as string[], showForm: false })
-  const [newIV, setNewIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'AI' as 'AI' | 'HUMAN' | 'MIXED' })
-  const [newReviewStandard, setNewReviewStandard] = useState({ job_opening_id: '', name: '', label: 'MUST' as 'MUST' | 'PLUS' | 'NG' })
+  const [newIV, setNewIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'HUMAN' as 'AI' | 'HUMAN' | 'MIXED' })
+  const [newReviewStandardJobOpeningId, setNewReviewStandardJobOpeningId] = useState('')
+  const [reviewStandardDrafts, setReviewStandardDrafts] = useState<Array<{ name: string; label: 'MUST' | 'PLUS' | 'NG' }>>([
+    { name: '', label: 'MUST' },
+  ])
   const [newReviewRequest, setNewReviewRequest] = useState({ job_opening_id: '', candidate_email: '' })
   const [reviewResultFilterJobOpeningId, setReviewResultFilterJobOpeningId] = useState('')
   const [isGeneratingJOQAI, setIsGeneratingJOQAI] = useState(false)
@@ -222,7 +225,7 @@ export default function CompanyAdminPage() {
   const [editAI, setEditAI] = useState({ name: '', model_name: 'yuki.vrm', model_config: '{}' })
   const [editQB, setEditQB] = useState({ name: '', source: 'USER' as 'USER' | 'AI', questions: [] as string[] })
   const [editJOQ, setEditJOQ] = useState({ job_opening_id: '', question_bank_id: '', questions: [] as string[] })
-  const [editIV, setEditIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'AI' as 'AI' | 'HUMAN' | 'MIXED' })
+  const [editIV, setEditIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'HUMAN' as 'AI' | 'HUMAN' | 'MIXED' })
 
   // Debug switch (works in dev/prod): localStorage.setItem('debugInterviewCollapse','1')
   const shouldDebugInterviewCollapse = () => {
@@ -905,35 +908,47 @@ ${criteriaText}
       return
     }
     
-    setNewIV({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'AI' }); 
+    setNewIV({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'HUMAN' }); 
     await Promise.all([loadIVs(token), loadInterviewQuota(token)])
   }
-  const createReviewStandard = async (e: React.FormEvent) => {
+  const createReviewStandards = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newReviewStandard.job_opening_id || !newReviewStandard.name.trim()) {
-      alert('請先選擇職種並輸入標準名稱')
+    if (!newReviewStandardJobOpeningId) {
+      alert('請先選擇職種')
       return
     }
-    const sortOrder =
-      reviewStandards.filter((x) => x.job_opening_id === newReviewStandard.job_opening_id).length + 1
-    const r = await fetch('/api/resume-review-standards/create', {
-      method: 'POST',
-      headers: headers(token, { 'Content-Type': 'application/json' }),
-      body: JSON.stringify({
-        company_id: companyId,
-        job_opening_id: newReviewStandard.job_opening_id,
-        name: newReviewStandard.name.trim(),
-        label: newReviewStandard.label,
-        sort_order: sortOrder,
-      }),
-    })
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({}))
-      alert(j.error || '建立審查標準失敗')
+    const validDrafts = reviewStandardDrafts
+      .map((x) => ({ ...x, name: x.name.trim() }))
+      .filter((x) => x.name.length > 0)
+    if (validDrafts.length === 0) {
+      alert('請至少輸入一個標準名稱')
       return
     }
-    setNewReviewStandard({ ...newReviewStandard, name: '' })
-    await loadReviewStandards(token, newReviewStandard.job_opening_id)
+    const baseSortOrder =
+      reviewStandards.filter((x) => x.job_opening_id === newReviewStandardJobOpeningId).length + 1
+
+    for (let i = 0; i < validDrafts.length; i++) {
+      const draft = validDrafts[i]
+      const r = await fetch('/api/resume-review-standards/create', {
+        method: 'POST',
+        headers: headers(token, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          company_id: companyId,
+          job_opening_id: newReviewStandardJobOpeningId,
+          name: draft.name,
+          label: draft.label,
+          sort_order: baseSortOrder + i,
+        }),
+      })
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}))
+        alert(j.error || '建立審查標準失敗')
+        return
+      }
+    }
+
+    setReviewStandardDrafts([{ name: '', label: 'MUST' }])
+    await loadReviewStandards(token, newReviewStandardJobOpeningId)
   }
   const updateReviewStandard = async (item: ResumeReviewStandard, patch: Partial<ResumeReviewStandard>) => {
     const r = await fetch('/api/resume-review-standards/update', {
@@ -1423,7 +1438,7 @@ ${criteriaText}
       end_time: item.end_time ? toLocalDatetimeInput(item.end_time) : '',
       profiles_id: item.profiles_id || '',
       candidate_email: item.candidate_email || '',
-      review_type: ((item as any).review_type as 'AI' | 'HUMAN' | 'MIXED') || 'AI',
+      review_type: ((item as any).review_type as 'AI' | 'HUMAN' | 'MIXED') || 'HUMAN',
     })
     setEditingIV(item.id)
   }
@@ -2139,14 +2154,17 @@ ${criteriaText}
             style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}
           >
             <input placeholder="職種名稱" value={newJob.job_title} onChange={(e) => setNewJob({ ...newJob, job_title: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
-            <input
-              type="number"
-              min="1"
-              placeholder="招募目標人數（target_hires）"
-              value={newJob.target_hires}
-              onChange={(e) => setNewJob({ ...newJob, target_hires: Math.max(1, Number(e.target.value) || 1) })}
-              style={{ padding: 8, border: '2px solid #000' }}
-            />
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontWeight: 'bold' }}>招募目標人數：</label>
+              <input
+                type="number"
+                min="1"
+                placeholder="請輸入招募目標人數"
+                value={newJob.target_hires}
+                onChange={(e) => setNewJob({ ...newJob, target_hires: Math.max(1, Number(e.target.value) || 1) })}
+                style={{ padding: 8, border: '2px solid #000', width: '100%' }}
+              />
+            </div>
 
             <select value={newJob.result_notification_method} onChange={(e) => setNewJob({ ...newJob, result_notification_method: e.target.value as 'immediate' | 'later' })} style={{ padding: 8, border: '2px solid #000' }}>
               <option value="immediate">即時通知</option>
@@ -2499,13 +2517,16 @@ ${criteriaText}
                 {editingJob === j.id ? (
                   <div style={{ display: 'grid', gap: 12 }}>
                     <input value={editJob.job_title} onChange={(e) => setEditJob({ ...editJob, job_title: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
-                    <input
-                      type="number"
-                      min="1"
-                      value={editJob.target_hires}
-                      onChange={(e) => setEditJob({ ...editJob, target_hires: Math.max(1, Number(e.target.value) || 1) })}
-                      style={{ padding: 8, border: '2px solid #000' }}
-                    />
+                    <div>
+                      <label style={{ display: 'block', marginBottom: 4, fontWeight: 'bold' }}>招募目標人數：</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={editJob.target_hires}
+                        onChange={(e) => setEditJob({ ...editJob, target_hires: Math.max(1, Number(e.target.value) || 1) })}
+                        style={{ padding: 8, border: '2px solid #000', width: '100%' }}
+                      />
+                    </div>
                     <select value={editJob.result_notification_method} onChange={(e) => setEditJob({ ...editJob, result_notification_method: e.target.value as 'immediate' | 'later' })} style={{ padding: 8, border: '2px solid #000' }}>
                       <option value="immediate">即時通知</option>
                       <option value="later">後續通知</option>
@@ -3350,7 +3371,7 @@ ${criteriaText}
               新增面試
             </button>
             {interviewQuota.remaining <= 0 && (
-              <div style={{ color: '#b00000', fontSize: '0.9em' }}>面試免費配額已用完（第 4 次會被後端拒絕）</div>
+              <div style={{ color: '#b00000', fontSize: '0.9em' }}>面試免費配額已用完</div>
             )}
           </form>
           <ul 
@@ -4077,18 +4098,69 @@ ${criteriaText}
 
           {resumeReviewTab === 'standards' && (
             <div>
-              <form onSubmit={createReviewStandard} style={{ display: 'grid', gap: 10, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
-                <select value={newReviewStandard.job_opening_id} onChange={(e) => { setNewReviewStandard({ ...newReviewStandard, job_opening_id: e.target.value }); void loadReviewStandards(token, e.target.value) }} style={{ padding: 8, border: '2px solid #000' }}>
+              <form onSubmit={createReviewStandards} style={{ display: 'grid', gap: 10, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
+                <select
+                  value={newReviewStandardJobOpeningId}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setNewReviewStandardJobOpeningId(v)
+                    void loadReviewStandards(token, v)
+                  }}
+                  style={{ padding: 8, border: '2px solid #000' }}
+                >
                   <option value="">-- 選擇職種 --</option>
                   {jobs.map((j) => <option key={j.id} value={j.id}>{j.job_title}</option>)}
                 </select>
-                <input placeholder="標準名稱（例：React 實務）" value={newReviewStandard.name} onChange={(e) => setNewReviewStandard({ ...newReviewStandard, name: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
-                <select value={newReviewStandard.label} onChange={(e) => setNewReviewStandard({ ...newReviewStandard, label: e.target.value as any })} style={{ padding: 8, border: '2px solid #000' }}>
-                  <option value="MUST">必須 (MUST)</option>
-                  <option value="PLUS">加分 (PLUS)</option>
-                  <option value="NG">NG</option>
-                </select>
-                <button type="submit" style={{ padding: '8px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4 }}>新增標準</button>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {reviewStandardDrafts.map((draft, idx) => (
+                    <div key={`draft-${idx}`} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <input
+                        placeholder={`標準名稱 #${idx + 1}（例：React 實務）`}
+                        value={draft.name}
+                        onChange={(e) =>
+                          setReviewStandardDrafts((prev) =>
+                            prev.map((x, i) => (i === idx ? { ...x, name: e.target.value } : x))
+                          )
+                        }
+                        style={{ padding: 8, border: '2px solid #000', flex: 1 }}
+                      />
+                      <select
+                        value={draft.label}
+                        onChange={(e) =>
+                          setReviewStandardDrafts((prev) =>
+                            prev.map((x, i) => (i === idx ? { ...x, label: e.target.value as 'MUST' | 'PLUS' | 'NG' } : x))
+                          )
+                        }
+                        style={{ padding: 8, border: '2px solid #000', width: 130 }}
+                      >
+                        <option value="MUST">必須</option>
+                        <option value="PLUS">加分</option>
+                        <option value="NG">NG</option>
+                      </select>
+                      {reviewStandardDrafts.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setReviewStandardDrafts((prev) => prev.filter((_, i) => i !== idx))}
+                          style={{ padding: '8px 10px', background: '#f44336', color: 'white', border: 'none', borderRadius: 4 }}
+                        >
+                          刪除
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => setReviewStandardDrafts((prev) => [...prev, { name: '', label: 'MUST' }])}
+                    style={{ padding: '8px 12px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 4 }}
+                  >
+                    新增標準+
+                  </button>
+                  <button type="submit" style={{ padding: '8px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4 }}>
+                    儲存標準
+                  </button>
+                </div>
               </form>
               <ul style={{ marginTop: 12 }}>
                 {reviewStandards.map((s) => (
@@ -4138,6 +4210,25 @@ ${criteriaText}
               <ul>
                 {reviewResults.map((x: any) => (
                   <li key={x.review_result_id} style={{ padding: 10, border: '2px solid #000', borderRadius: 6, marginBottom: 8, background: '#e6f2ff' }}>
+                    {(() => {
+                      const criteria = Array.isArray(x.criteria_results) ? x.criteria_results : []
+                      const mustNotMatched = criteria.filter((c: any) => c?.label === 'MUST' && !c?.matched)
+                      const ngMatched = criteria.filter((c: any) => c?.label === 'NG' && !!c?.matched)
+                      const isPassed = mustNotMatched.length === 0 && ngMatched.length === 0
+                      const failReasons: string[] = []
+                      if (mustNotMatched.length > 0) {
+                        failReasons.push(`必須條件未滿足：${mustNotMatched.map((c: any) => c.name).join('、')}`)
+                      }
+                      if (ngMatched.length > 0) {
+                        failReasons.push(`命中 NG 條件：${ngMatched.map((c: any) => c.name).join('、')}`)
+                      }
+                      return (
+                        <div style={{ marginBottom: 8, padding: 8, borderRadius: 6, background: isPassed ? '#dcfce7' : '#fee2e2', color: isPassed ? '#166534' : '#991b1b' }}>
+                          <b>{isPassed ? '審查通過' : '審查不通過'}</b>
+                          {!isPassed && failReasons.length > 0 && <div style={{ marginTop: 4 }}>原因：{failReasons.join('；')}</div>}
+                        </div>
+                      )
+                    })()}
                     <div><b>USER-ID：</b>{x.candidate_profile_id || 'null'}</div>
                     <div><b>Email：</b>{x.candidate_email}</div>
                     <div><b>職種：</b>{x.job_title || x.job_opening_id}</div>
