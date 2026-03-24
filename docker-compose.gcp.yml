@@ -25,6 +25,37 @@ services:
     command: redis-server --appendonly yes
     # 不對外暴露 port（僅 Docker 內網使用）
 
+  # OCR 服務（履歷辨識）
+  ocr-service:
+    build:
+      context: ./mcp-server/ocr-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - FLASK_ENV=production
+    volumes:
+      - ./mcp-server/uploads:/app/uploads
+
+  # MCP 服務（OCR / 履歷工具）
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - MAX_FILE_SIZE=50mb
+      - ALLOWED_FILE_TYPES=.pdf,.doc,.docx,.txt
+      - OCR_SERVICE_URL=http://ocr-service:5000
+      - MSW_AUTOMATION_BASE_URL=http://host.docker.internal:5001
+    depends_on:
+      - ocr-service
+    volumes:
+      - ./mcp-server/uploads:/app/uploads
+      - ./mcp-server/data:/app/data
+
   # Next.js app (production)
   app:
     build: .
@@ -42,6 +73,8 @@ services:
       - NODE_OPTIONS=--require ./dd-init.js
       # Browser-side key is referenced by the frontend bundle.
       - NEXT_PUBLIC_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      # GCP 內網服務位址（若有對外反代，可在 .env 覆蓋）
+      - NEXT_PUBLIC_MCP_SERVER_URL=${NEXT_PUBLIC_MCP_SERVER_URL:-http://mcp-server:3001}
       # Server-side internal routing to Kong inside docker network
       - SUPABASE_INTERNAL_URL=http://supabase-kong:8000
       - REDIS_URL=redis://redis:6379
@@ -49,6 +82,7 @@ services:
     depends_on:
       - supabase-kong
       - redis
+      - mcp-server
 
   # ----------------------------
   # Supabase (self-hosted)

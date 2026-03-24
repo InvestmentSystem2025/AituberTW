@@ -68,17 +68,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ? '人類評價：拒絕'
       : '人類評價：保留'
 
-  const { error } = await supa
+  const { error } = await supa.rpc('set_interview_result_with_capacity', {
+    p_interviews_id: interviews_id,
+    p_interview_result: interview_result,
+  })
+
+  if (error) {
+    if ((error.message || '').includes('CAPACITY_REACHED')) {
+      return res.status(400).json({ error: 'CAPACITY_REACHED' })
+    }
+    return res.status(400).json({ error: 'EVALUATE_FAILED', details: error.message })
+  }
+
+  await supa
     .from('interview_sessions')
     .update({
-      interview_result,
       result_reason: reason,
     })
     .eq('id', session.id)
-
-  if (error) {
-    return res.status(400).json({ error: 'EVALUATE_FAILED', details: error.message })
-  }
 
   return res.status(200).json({ ok: true })
 }

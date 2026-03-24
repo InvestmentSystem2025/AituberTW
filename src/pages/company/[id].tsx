@@ -45,7 +45,23 @@ function clearTutorialState() {
 
 type Member = { profile_id: string; company_role: 'admin' | 'recruiter' | 'viewer'; email?: string }
 type AIInterviewer = { id: string; name: string; model_name: string; model_config?: any }
-type JobOpening = { id: string; job_title: string; use_ai_generate_question?: boolean; result_notification_method?: 'immediate' | 'later'; evaluation_policy?: any }
+type JobOpening = {
+  id: string
+  job_title: string
+  use_ai_generate_question?: boolean
+  result_notification_method?: 'immediate' | 'later'
+  evaluation_policy?: any
+  target_hires?: number
+  hired_count?: number
+}
+type ResumeReviewStandard = {
+  id: string
+  company_id: string
+  job_opening_id: string
+  name: string
+  label: 'MUST' | 'PLUS' | 'NG'
+  sort_order: number
+}
 type Question = { id: string; name?: string; source: 'AI' | 'USER'; detail?: any }
 type JOQ = { id: string; job_opening_id: string; question_bank_id?: string | null; detail?: any; sort_order?: number; is_active?: boolean }
 type Interview = { 
@@ -76,7 +92,8 @@ export default function CompanyAdminPage() {
   const router = useRouter()
   const companyId = String(router.query.id || '')
   const [token, setToken] = useState('')
-  const [tab, setTab] = useState<'members' | 'ai' | 'jobs' | 'qbank' | 'joq' | 'interviews'>('members')
+  const [tab, setTab] = useState<'members' | 'ai' | 'jobs' | 'qbank' | 'joq' | 'interviews' | 'resumeReview'>('members')
+  const [resumeReviewTab, setResumeReviewTab] = useState<'standards' | 'create' | 'results'>('standards')
   const [tutorial, setTutorial] = useState<RecruiterTutorialState>({ active: false, step: 0, companyId: null })
   const tutorialHydratedStepRef = useRef<number | null>(null)
 
@@ -90,6 +107,9 @@ export default function CompanyAdminPage() {
   const [qb, setQb] = useState<Question[]>([])
   const [joq, setJoq] = useState<JOQ[]>([])
   const [ivs, setIvs] = useState<Interview[]>([])
+  const [interviewQuota, setInterviewQuota] = useState({ used_count: 0, free_quota: 3, remaining: 3 })
+  const [reviewStandards, setReviewStandards] = useState<ResumeReviewStandard[]>([])
+  const [reviewResults, setReviewResults] = useState<any[]>([])
 
   // editing states
   const [editingAI, setEditingAI] = useState<string | null>(null)
@@ -157,6 +177,7 @@ export default function CompanyAdminPage() {
     job_title: '', 
     use_ai_generate_question: false, 
     result_notification_method: 'immediate' as 'immediate' | 'later',
+    target_hires: 1,
     enableCustomCriteria: false,
     evalPolicy: {
       overall_threshold: '',
@@ -169,6 +190,7 @@ export default function CompanyAdminPage() {
     job_title: '', 
     use_ai_generate_question: false, 
     result_notification_method: 'immediate' as 'immediate' | 'later',
+    target_hires: 1,
     enableCustomCriteria: false,
     evalPolicy: {
       overall_threshold: '',
@@ -191,6 +213,9 @@ export default function CompanyAdminPage() {
   })
   const [newJOQ, setNewJOQ] = useState({ job_opening_id: '', question_bank_id: '', questions: [] as string[], showForm: false })
   const [newIV, setNewIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'AI' as 'AI' | 'HUMAN' | 'MIXED' })
+  const [newReviewStandard, setNewReviewStandard] = useState({ job_opening_id: '', name: '', label: 'MUST' as 'MUST' | 'PLUS' | 'NG' })
+  const [newReviewRequest, setNewReviewRequest] = useState({ job_opening_id: '', candidate_email: '' })
+  const [reviewResultFilterJobOpeningId, setReviewResultFilterJobOpeningId] = useState('')
   const [isGeneratingJOQAI, setIsGeneratingJOQAI] = useState(false)
 
   // edit forms (starts with empty)
@@ -295,7 +320,10 @@ export default function CompanyAdminPage() {
           loadJobs(t),
           loadQB(t),
           loadJOQ(t),
-          loadIVs(t)
+          loadIVs(t),
+          loadInterviewQuota(t),
+          loadReviewStandards(t),
+          loadReviewResults(t)
         ])
         }
       } catch (err) {
@@ -376,6 +404,31 @@ export default function CompanyAdminPage() {
     })
     setAlreadyFeedbackByInterviewId(map)
   }
+  const loadInterviewQuota = async (t: string) => {
+    const r = await fetch(`/api/company/interview-quota/get?company_id=${companyId}`, { headers: headers(t) })
+    const j = await r.json().catch(() => ({}))
+    if (r.ok && j?.ok) {
+      setInterviewQuota({
+        used_count: Number(j.used_count || 0),
+        free_quota: Number(j.free_quota || 3),
+        remaining: Number(j.remaining || 0),
+      })
+    }
+  }
+  const loadReviewStandards = async (t: string, jobOpeningId?: string) => {
+    const q = new URLSearchParams({ company_id: companyId })
+    if (jobOpeningId) q.set('job_opening_id', jobOpeningId)
+    const r = await fetch(`/api/resume-review-standards/list?${q.toString()}`, { headers: headers(t) })
+    const j = await r.json().catch(() => ({}))
+    setReviewStandards(j.items || [])
+  }
+  const loadReviewResults = async (t: string, jobOpeningId?: string) => {
+    const q = new URLSearchParams({ company_id: companyId, limit: '50', offset: '0' })
+    if (jobOpeningId) q.set('job_opening_id', jobOpeningId)
+    const r = await fetch(`/api/resume-reviews/list?${q.toString()}`, { headers: headers(t) })
+    const j = await r.json().catch(() => ({}))
+    setReviewResults(j.items || [])
+  }
 
   // actions (minimal creates)
   const addMember = async (e: React.FormEvent) => {
@@ -424,6 +477,7 @@ export default function CompanyAdminPage() {
         job_title: newJob.job_title,
         use_ai_generate_question: newJob.use_ai_generate_question,
         result_notification_method: newJob.result_notification_method,
+        target_hires: Math.max(1, Number(newJob.target_hires) || 1),
         evaluation_policy
       }) 
     })
@@ -530,6 +584,7 @@ export default function CompanyAdminPage() {
       job_title: '', 
       use_ai_generate_question: false, 
       result_notification_method: 'immediate',
+      target_hires: 1,
       enableCustomCriteria: false,
       evalPolicy: {
         overall_threshold: '',
@@ -837,6 +892,12 @@ ${criteriaText}
         errorMsg = '用戶 ID 與 Email 只能填寫其中一項，且至少需要填寫其中一項'
       } else if (result.error === 'PROFILE_ID_NOT_FOUND') {
         errorMsg = '找不到該用戶 ID，請確認 ID 是否正確'
+      } else if (result.error === 'CAPACITY_REACHED') {
+        errorMsg = '此職種已達招募目標人數，無法再建立面試'
+      } else if (result.error === 'INTERVIEW_QUOTA_EXCEEDED') {
+        errorMsg = '公司面試免費配額已用完（3/3）'
+      } else if (result.error === 'CANDIDATE_NOT_JOBSEEKER') {
+        errorMsg = '候選人必須是 jobSeeker，請更換候選人'
       } else if (result.error === 'CREATE_FAILED') {
         errorMsg = '建立失敗，請確認輸入的資料是否正確'
       }
@@ -845,7 +906,98 @@ ${criteriaText}
     }
     
     setNewIV({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'AI' }); 
-    await loadIVs(token)
+    await Promise.all([loadIVs(token), loadInterviewQuota(token)])
+  }
+  const createReviewStandard = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newReviewStandard.job_opening_id || !newReviewStandard.name.trim()) {
+      alert('請先選擇職種並輸入標準名稱')
+      return
+    }
+    const sortOrder =
+      reviewStandards.filter((x) => x.job_opening_id === newReviewStandard.job_opening_id).length + 1
+    const r = await fetch('/api/resume-review-standards/create', {
+      method: 'POST',
+      headers: headers(token, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        company_id: companyId,
+        job_opening_id: newReviewStandard.job_opening_id,
+        name: newReviewStandard.name.trim(),
+        label: newReviewStandard.label,
+        sort_order: sortOrder,
+      }),
+    })
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}))
+      alert(j.error || '建立審查標準失敗')
+      return
+    }
+    setNewReviewStandard({ ...newReviewStandard, name: '' })
+    await loadReviewStandards(token, newReviewStandard.job_opening_id)
+  }
+  const updateReviewStandard = async (item: ResumeReviewStandard, patch: Partial<ResumeReviewStandard>) => {
+    const r = await fetch('/api/resume-review-standards/update', {
+      method: 'POST',
+      headers: headers(token, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        id: item.id,
+        company_id: companyId,
+        name: patch.name ?? item.name,
+        label: patch.label ?? item.label,
+        sort_order: patch.sort_order ?? item.sort_order,
+      }),
+    })
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}))
+      alert(j.error || '更新審查標準失敗')
+      return
+    }
+    await loadReviewStandards(token, item.job_opening_id)
+  }
+  const removeReviewStandard = async (item: ResumeReviewStandard) => {
+    const r = await fetch('/api/resume-review-standards/delete', {
+      method: 'POST',
+      headers: headers(token, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ id: item.id, company_id: companyId }),
+    })
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}))
+      alert(j.error || '刪除審查標準失敗')
+      return
+    }
+    await loadReviewStandards(token, item.job_opening_id)
+  }
+  const createResumeReviewRequest = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newReviewRequest.job_opening_id || !newReviewRequest.candidate_email.trim()) {
+      alert('請輸入職種與候選人 Email')
+      return
+    }
+    const r = await fetch('/api/resume-reviews/create', {
+      method: 'POST',
+      headers: headers(token, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        company_id: companyId,
+        job_opening_id: newReviewRequest.job_opening_id,
+        candidate_email: newReviewRequest.candidate_email.trim(),
+      }),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      if (j.error === 'MISSING_REVIEW_STANDARD') {
+        alert('此職種尚未設定審查標準，請先到「審查標準」新增')
+        return
+      }
+      if (j.error === 'CAPACITY_REACHED') {
+        alert('此職種已達招募目標人數，無法再建立履歷審查')
+        return
+      }
+      alert(j.error || '建立履歷審查失敗')
+      return
+    }
+    alert('履歷審查邀請已建立並寄送')
+    setNewReviewRequest({ ...newReviewRequest, candidate_email: '' })
+    await loadReviewResults(token)
   }
   const evalIV = async (id: string, result: 'hired' | 'rejected') => {
     if (reviewingLoading) return
@@ -863,7 +1015,7 @@ ${criteriaText}
       }
       alert(result === 'hired' ? '已標記為錄取' : '已標記為拒絕')
       setReviewingIV(null)
-      await loadIVs(token)
+      await Promise.all([loadIVs(token), loadJobs(token)])
     } catch (err) {
       console.error('評價失敗:', err)
       alert('評價失敗，請稍後再試')
@@ -904,6 +1056,7 @@ ${criteriaText}
         job_title: editJob.job_title,
         use_ai_generate_question: editJob.use_ai_generate_question,
         result_notification_method: editJob.result_notification_method,
+        target_hires: Math.max(1, Number(editJob.target_hires) || 1),
         evaluation_policy 
       }) 
     })
@@ -1187,6 +1340,7 @@ ${criteriaText}
       job_title: item.job_title,
       use_ai_generate_question: item.use_ai_generate_question || false,
       result_notification_method: item.result_notification_method || 'immediate',
+      target_hires: Math.max(1, Number(item.target_hires) || 1),
       enableCustomCriteria,
       evalPolicy,
       customCriteria
@@ -1838,6 +1992,7 @@ ${criteriaText}
           {tabBtn('qbank', '共用題庫', 'company_qbank_tab')}
         {tabBtn('joq', '職種個別題庫', 'company_joq_tab')}
         {tabBtn('interviews', '面試管理')}
+        {tabBtn('resumeReview', '履歷審查')}
         </div>
         <button onClick={handleTokenRefresh} style={{ padding: '8px 16px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer' }}>
           刷新登入
@@ -1984,6 +2139,14 @@ ${criteriaText}
             style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}
           >
             <input placeholder="職種名稱" value={newJob.job_title} onChange={(e) => setNewJob({ ...newJob, job_title: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
+            <input
+              type="number"
+              min="1"
+              placeholder="招募目標人數（target_hires）"
+              value={newJob.target_hires}
+              onChange={(e) => setNewJob({ ...newJob, target_hires: Math.max(1, Number(e.target.value) || 1) })}
+              style={{ padding: 8, border: '2px solid #000' }}
+            />
 
             <select value={newJob.result_notification_method} onChange={(e) => setNewJob({ ...newJob, result_notification_method: e.target.value as 'immediate' | 'later' })} style={{ padding: 8, border: '2px solid #000' }}>
               <option value="immediate">即時通知</option>
@@ -2336,6 +2499,13 @@ ${criteriaText}
                 {editingJob === j.id ? (
                   <div style={{ display: 'grid', gap: 12 }}>
                     <input value={editJob.job_title} onChange={(e) => setEditJob({ ...editJob, job_title: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
+                    <input
+                      type="number"
+                      min="1"
+                      value={editJob.target_hires}
+                      onChange={(e) => setEditJob({ ...editJob, target_hires: Math.max(1, Number(e.target.value) || 1) })}
+                      style={{ padding: 8, border: '2px solid #000' }}
+                    />
                     <select value={editJob.result_notification_method} onChange={(e) => setEditJob({ ...editJob, result_notification_method: e.target.value as 'immediate' | 'later' })} style={{ padding: 8, border: '2px solid #000' }}>
                       <option value="immediate">即時通知</option>
                       <option value="later">後續通知</option>
@@ -2680,6 +2850,7 @@ ${criteriaText}
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 'bold' }}>{j.job_title}</div>
                       <div style={{ fontSize: '0.9em', color: '#666' }}>AI問題: {j.use_ai_generate_question ? '是' : '否'} / 通知: {j.result_notification_method === 'immediate' ? '即時通知' : j.result_notification_method === 'later' ? '後續通知' : j.result_notification_method}</div>
+                      <div style={{ fontSize: '0.9em', color: '#111' }}>錄取進度：{j.hired_count || 0} / {j.target_hires || 1}</div>
                     </div>
                     <button onClick={() => startEditJob(j)} style={{ padding: '6px 12px', background: '#2196F3', color: 'white' }}>編輯</button>
                     <button onClick={() => deleteJob(j.id)} style={{ padding: '6px 12px', background: '#f44336', color: 'white' }}>刪除</button>
@@ -3098,6 +3269,9 @@ ${criteriaText}
 
       {tab === 'interviews' && (
         <div>
+          <div style={{ marginBottom: 12, padding: 12, border: '2px solid #000', borderRadius: 8, background: '#fff7e6' }}>
+            公司面試配額剩餘：{Math.max(0, interviewQuota.remaining)} / {interviewQuota.free_quota}
+          </div>
           <form onSubmit={addIV} style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
             <div>
               <label style={{ display: 'block', marginBottom: 4, fontWeight: 'bold' }}>選擇職種：</label>
@@ -3161,7 +3335,23 @@ ${criteriaText}
                 <option value="MIXED">混合（保留，未來可同時使用 AI 與人類）</option>
               </select>
             </div>
-            <button type="submit" style={{ padding: '8px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4 }}>新增面試</button>
+            <button
+              type="submit"
+              disabled={interviewQuota.remaining <= 0}
+              style={{
+                padding: '8px 12px',
+                background: interviewQuota.remaining <= 0 ? '#9ca3af' : '#4CAF50',
+                color: 'white',
+                border: 'none',
+                borderRadius: 4,
+                cursor: interviewQuota.remaining <= 0 ? 'not-allowed' : 'pointer',
+              }}
+            >
+              新增面試
+            </button>
+            {interviewQuota.remaining <= 0 && (
+              <div style={{ color: '#b00000', fontSize: '0.9em' }}>面試免費配額已用完（第 4 次會被後端拒絕）</div>
+            )}
           </form>
           <ul 
             style={{ marginTop: 12 }}
@@ -3874,6 +4064,108 @@ ${criteriaText}
             })}
             {ivs.length === 0 && <div style={{ padding: 12, border: '2px dashed #000' }}>尚無面試</div>}
           </ul>
+        </div>
+      )}
+
+      {tab === 'resumeReview' && (
+        <div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <button onClick={() => setResumeReviewTab('standards')} style={{ padding: '6px 10px', background: resumeReviewTab === 'standards' ? '#2563eb' : '#e5e7eb', color: resumeReviewTab === 'standards' ? '#fff' : '#111' }}>審查標準</button>
+            <button onClick={() => setResumeReviewTab('create')} style={{ padding: '6px 10px', background: resumeReviewTab === 'create' ? '#2563eb' : '#e5e7eb', color: resumeReviewTab === 'create' ? '#fff' : '#111' }}>建立審查</button>
+            <button onClick={() => setResumeReviewTab('results')} style={{ padding: '6px 10px', background: resumeReviewTab === 'results' ? '#2563eb' : '#e5e7eb', color: resumeReviewTab === 'results' ? '#fff' : '#111' }}>審查結果</button>
+          </div>
+
+          {resumeReviewTab === 'standards' && (
+            <div>
+              <form onSubmit={createReviewStandard} style={{ display: 'grid', gap: 10, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
+                <select value={newReviewStandard.job_opening_id} onChange={(e) => { setNewReviewStandard({ ...newReviewStandard, job_opening_id: e.target.value }); void loadReviewStandards(token, e.target.value) }} style={{ padding: 8, border: '2px solid #000' }}>
+                  <option value="">-- 選擇職種 --</option>
+                  {jobs.map((j) => <option key={j.id} value={j.id}>{j.job_title}</option>)}
+                </select>
+                <input placeholder="標準名稱（例：React 實務）" value={newReviewStandard.name} onChange={(e) => setNewReviewStandard({ ...newReviewStandard, name: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
+                <select value={newReviewStandard.label} onChange={(e) => setNewReviewStandard({ ...newReviewStandard, label: e.target.value as any })} style={{ padding: 8, border: '2px solid #000' }}>
+                  <option value="MUST">必須 (MUST)</option>
+                  <option value="PLUS">加分 (PLUS)</option>
+                  <option value="NG">NG</option>
+                </select>
+                <button type="submit" style={{ padding: '8px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4 }}>新增標準</button>
+              </form>
+              <ul style={{ marginTop: 12 }}>
+                {reviewStandards.map((s) => (
+                  <li key={s.id} style={{ padding: 10, border: '2px solid #000', borderRadius: 6, marginBottom: 8, background: '#e6f2ff', display: 'grid', gap: 8 }}>
+                    <div>職種：{jobs.find((j) => j.id === s.job_opening_id)?.job_title || s.job_opening_id}</div>
+                    <input value={s.name} onChange={(e) => setReviewStandards((prev) => prev.map((x) => (x.id === s.id ? { ...x, name: e.target.value } : x)))} style={{ padding: 8, border: '2px solid #000' }} />
+                    <select value={s.label} onChange={(e) => setReviewStandards((prev) => prev.map((x) => (x.id === s.id ? { ...x, label: e.target.value as any } : x)))} style={{ padding: 8, border: '2px solid #000' }}>
+                      <option value="MUST">MUST</option>
+                      <option value="PLUS">PLUS</option>
+                      <option value="NG">NG</option>
+                    </select>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={() => updateReviewStandard(s, {})} style={{ padding: '6px 12px', background: '#2196F3', color: 'white' }}>儲存</button>
+                      <button onClick={() => removeReviewStandard(s)} style={{ padding: '6px 12px', background: '#f44336', color: 'white' }}>刪除</button>
+                    </div>
+                  </li>
+                ))}
+                {reviewStandards.length === 0 && <div style={{ padding: 12, border: '2px dashed #000' }}>尚無審查標準</div>}
+              </ul>
+            </div>
+          )}
+
+          {resumeReviewTab === 'create' && (
+            <form onSubmit={createResumeReviewRequest} style={{ display: 'grid', gap: 10, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
+              <select value={newReviewRequest.job_opening_id} onChange={(e) => setNewReviewRequest({ ...newReviewRequest, job_opening_id: e.target.value })} style={{ padding: 8, border: '2px solid #000' }}>
+                <option value="">-- 選擇職種 --</option>
+                {jobs.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {j.job_title}（{j.hired_count || 0}/{j.target_hires || 1}）
+                  </option>
+                ))}
+              </select>
+              <input placeholder="候選人 Email" value={newReviewRequest.candidate_email} onChange={(e) => setNewReviewRequest({ ...newReviewRequest, candidate_email: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
+              <button type="submit" style={{ padding: '8px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4 }}>發送履歷審查邀請</button>
+            </form>
+          )}
+
+          {resumeReviewTab === 'results' && (
+            <div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <select value={reviewResultFilterJobOpeningId} onChange={async (e) => { const v = e.target.value; setReviewResultFilterJobOpeningId(v); await loadReviewResults(token, v || undefined) }} style={{ padding: 8, border: '2px solid #000' }}>
+                  <option value="">全部職種</option>
+                  {jobs.map((j) => <option key={j.id} value={j.id}>{j.job_title}</option>)}
+                </select>
+                <button onClick={() => loadReviewResults(token, reviewResultFilterJobOpeningId || undefined)} style={{ padding: '8px 12px' }}>重新整理</button>
+              </div>
+              <ul>
+                {reviewResults.map((x: any) => (
+                  <li key={x.review_result_id} style={{ padding: 10, border: '2px solid #000', borderRadius: 6, marginBottom: 8, background: '#e6f2ff' }}>
+                    <div><b>USER-ID：</b>{x.candidate_profile_id || 'null'}</div>
+                    <div><b>Email：</b>{x.candidate_email}</div>
+                    <div><b>職種：</b>{x.job_title || x.job_opening_id}</div>
+                    <div><b>fit_score：</b>{x.fit_score}%</div>
+                    <div><b>summary：</b>{x.summary || '-'}</div>
+                    <div>
+                      <b>criteria：</b>
+                      <div style={{ marginTop: 6, display: 'grid', gap: 6 }}>
+                        {Array.isArray(x.criteria_results) && x.criteria_results.length > 0 ? (
+                          x.criteria_results.map((c: any, idx: number) => (
+                            <div key={`${x.review_result_id}-${idx}`} style={{ padding: 8, border: '1px solid #999', borderRadius: 6, background: '#fff' }}>
+                              <div><b>{c.name}</b> [{c.label}] - {c.matched ? '符合' : '不符合'}</div>
+                              <div>score: {typeof c.score === 'number' ? `${c.score}%` : '-'}</div>
+                              <div style={{ color: '#374151' }}>reason: {c.reasoning || '-'}</div>
+                            </div>
+                          ))
+                        ) : (
+                          <div>-</div>
+                        )}
+                      </div>
+                    </div>
+                    <div><b>時間：</b>{x.created_at}</div>
+                  </li>
+                ))}
+                {reviewResults.length === 0 && <div style={{ padding: 12, border: '2px dashed #000' }}>尚無審查結果</div>}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </div>

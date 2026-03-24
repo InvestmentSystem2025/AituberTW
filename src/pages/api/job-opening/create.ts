@@ -5,7 +5,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST') return res.status(405).end()
   const authUserId = await getAuthUserIdFromRequest(req)
   if (!authUserId) return res.status(401).json({ error: 'UNAUTHORIZED' })
-  const { company_id, job_title, use_ai_generate_question, result_notification_method, evaluation_policy } = req.body || {}
+  const {
+    company_id,
+    job_title,
+    use_ai_generate_question,
+    result_notification_method,
+    evaluation_policy,
+    target_hires,
+  } = req.body || {}
   if (!company_id || !job_title) return res.status(400).json({ error: 'MISSING_FIELDS' })
 
   const supa = getServiceClient()
@@ -29,7 +36,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     job_title,
     use_ai_generate_question: !!use_ai_generate_question,
     result_notification_method: result_notification_method || 'immediate',
-    evaluation_policy: policy
+    evaluation_policy: policy,
+    target_hires: Math.max(1, Number(target_hires) || 1),
   }).select('id').single()
   
   if (error) return res.status(400).json({ error: 'CREATE_FAILED' })

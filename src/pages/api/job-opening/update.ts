@@ -5,7 +5,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST' && req.method !== 'PUT' && req.method !== 'PATCH') return res.status(405).end()
   const authUserId = await getAuthUserIdFromRequest(req)
   if (!authUserId) return res.status(401).json({ error: 'UNAUTHORIZED' })
-  const { id, company_id, job_title, use_ai_generate_question, result_notification_method, evaluation_policy } = req.body || {}
+  const { id, company_id, job_title, use_ai_generate_question, result_notification_method, evaluation_policy, target_hires } = req.body || {}
   if (!id || !company_id) return res.status(400).json({ error: 'MISSING_FIELDS' })
 
   const supa = getServiceClient()
@@ -29,6 +29,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (typeof use_ai_generate_question === 'boolean') payload.use_ai_generate_question = use_ai_generate_question
   if (typeof result_notification_method === 'string') payload.result_notification_method = result_notification_method
   if (policy !== undefined) payload.evaluation_policy = policy
+  if (target_hires !== undefined) {
+    const n = Number(target_hires)
+    if (!Number.isFinite(n) || n < 1) return res.status(400).json({ error: 'INVALID_TARGET_HIRES' })
+    payload.target_hires = Math.floor(n)
+  }
 
   const { error } = await supa.from('job_opening').update(payload).eq('id', id).eq('company_id', company_id)
   if (error) return res.status(400).json({ error: 'UPDATE_FAILED' })

@@ -15,6 +15,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const ctx = createAuthContext(req)
   const authUserId = await ctx.getAuthUserId()
   if (!authUserId) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' })
+  const profile = await ctx.getProfile()
+  if (!profile?.id) return res.status(400).json({ ok: false, error: 'PROFILE_NOT_FOUND' })
+  if (profile.role !== 'jobSeeker') {
+    return res.status(403).json({ ok: false, error: 'CANDIDATE_NOT_JOBSEEKER' })
+  }
 
   const interviews_id = String(req.body?.interviews_id || '').trim()
   if (!interviews_id) return res.status(400).json({ ok: false, error: 'MISSING_INTERVIEWS_ID' })
@@ -38,6 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       return res.status(403).json({ ok: false, error: 'INTERVIEW_NOT_STARTABLE', message: MSG_INTERVIEW_NOT_STARTABLE })
     }
     if (msg.includes('FORBIDDEN')) return res.status(403).json({ ok: false, error: 'FORBIDDEN' })
+    if (msg.includes('CANDIDATE_NOT_JOBSEEKER')) return res.status(403).json({ ok: false, error: 'CANDIDATE_NOT_JOBSEEKER' })
     if (msg.includes('PROFILE_NOT_FOUND')) return res.status(400).json({ ok: false, error: 'PROFILE_NOT_FOUND' })
     if (msg.includes('INTERVIEW_NOT_FOUND')) return res.status(404).json({ ok: false, error: 'INTERVIEW_NOT_FOUND' })
     return res.status(400).json({ ok: false, error: 'START_SESSION_FAILED' })

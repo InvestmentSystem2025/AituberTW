@@ -16,7 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { data, error } = await supa
     .from('job_opening')
-    .select('id, job_title, use_ai_generate_question, result_notification_method, evaluation_policy, created_at')
+    .select('id, job_title, use_ai_generate_question, result_notification_method, evaluation_policy, target_hires, hired_count, created_at')
     .eq('company_id', company_id)
   if (error) return res.status(200).json({ items: [] })
   return res.status(200).json({ items: data || [] })

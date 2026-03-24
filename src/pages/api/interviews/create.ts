@@ -27,24 +27,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  const payload: any = { company_id, job_opening_id, start_time }
-  if (end_time) payload.end_time = end_time
-  if (profiles_id) payload.profiles_id = profiles_id
-  if (candidate_email) payload.candidate_email = String(candidate_email).toLowerCase()
-  // 評價方式：預設為 AI，可選 HUMAN 或 MIXED
-  if (review_type && ['AI', 'HUMAN', 'MIXED'].includes(review_type)) {
-    payload.review_type = review_type
+  const { data: rpcData, error: rpcErr } = await supa.rpc('create_interview_with_quota', {
+    p_company_id: company_id,
+    p_job_opening_id: job_opening_id,
+    p_start_time: start_time,
+    p_end_time: end_time || null,
+    p_profiles_id: profiles_id || null,
+    p_candidate_email: candidate_email ? String(candidate_email).toLowerCase() : null,
+    p_review_type: review_type && ['AI', 'HUMAN', 'MIXED'].includes(review_type) ? review_type : 'AI',
+    p_created_by_profile_id: me.id,
+  })
+
+  if (rpcErr) {
+    const msg = rpcErr.message || ''
+    if (msg.includes('CAPACITY_REACHED')) return res.status(400).json({ error: 'CAPACITY_REACHED' })
+    if (msg.includes('INTERVIEW_QUOTA_EXCEEDED')) return res.status(400).json({ error: 'INTERVIEW_QUOTA_EXCEEDED' })
+    if (msg.includes('CANDIDATE_NOT_JOBSEEKER')) return res.status(400).json({ error: 'CANDIDATE_NOT_JOBSEEKER' })
+    if (msg.includes('PROFILE_ID_NOT_FOUND')) return res.status(400).json({ error: 'PROFILE_ID_NOT_FOUND' })
+    if (msg.includes('XOR_PROFILE_EMAIL')) return res.status(400).json({ error: 'XOR_PROFILE_EMAIL' })
+    console.error('Interview create rpc error:', rpcErr)
+    return res.status(400).json({ error: 'CREATE_FAILED' })
   }
 
-  const { data: inserted, error } = await supa
-    .from('interviews')
-    .insert(payload)
-    .select('id, company_id, job_opening_id, start_time, candidate_email, profiles_id')
-    .single()
-
-  if (error) {
-    console.error('Interview create error:', error)
-    return res.status(400).json({ error: 'CREATE_FAILED' })
+  const inserted = {
+    id: rpcData?.id,
+    company_id: rpcData?.company_id,
+    job_opening_id: rpcData?.job_opening_id,
+    start_time: rpcData?.start_time,
+    candidate_email: rpcData?.candidate_email,
+    profiles_id: rpcData?.profiles_id,
   }
 
   try {

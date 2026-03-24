@@ -1,0 +1,92 @@
+---
+description: Default engineering rules for performance, scalability, aesthetics, and CSP-safe implementation
+alwaysApply: true
+---
+
+# Performance + Security + UI Quality Defaults
+
+Treat performance, scalability, and security as default requirements when implementing features. Do not leave them as post-optimization tasks.
+
+## Core priorities
+
+1. Correctness first, then efficiency; optimize hot paths proactively.
+2. Preserve and improve UI/UX consistency (no unnecessary visual regression).
+3. Keep CSP/SSR safety by default in Next.js (no inline style/script; avoid browser-only imports on SSR paths).
+
+## Data access rules
+
+- Avoid repeated reads for the same entity in one request. Fetch required fields once and reuse within the request lifecycle.
+- Prevent N+1 on lists/batches. Prefer join, batch query, `IN` query, preload, or aggregation.
+- Centralize auth/profile/membership/quota/permission lookups in middleware, auth context, or service layer (not duplicated per handler).
+- For high-frequency, low-change data (app settings, feature flags, model metadata, role mapping), use short TTL cache by default.
+- When adding hot queries, evaluate index needs for `WHERE` / `ORDER BY` / `JOIN` columns and report recommendations.
+
+## Cache strategy defaults
+
+- Request-scope reuse: cache for request lifetime.
+- Cross-request hot data: short TTL cache.
+- Default TTL when unspecified:
+  - config-like data: 300s
+  - mutable but delay-tolerant data: 60s
+- Cache keys must include tenant/user/locale/role/feature dimensions when relevant.
+- Cache must not break permission boundaries or leak cross-tenant data.
+- For data requiring fast freshness, add invalidate-on-write (not TTL-only).
+
+## External calls and heavy compute
+
+- Deduplicate repeated external calls (LLM/API/vector/file reads) within the same logical flow.
+- Reuse expensive objects (`client`, parser, schema, SDK instances) instead of recreating on hot paths.
+- Avoid repeated large JSON serialize/parse cycles in high-frequency routes.
+- For expensive deterministic computation, apply memoization/cache with clear invalidation semantics.
+
+## Next.js + frontend specifics
+
+- If the same data is fetched in Server Component, Client Component, and API route, consolidate to shared service access and remove duplicate fetches.
+- For page/dashboard/history/admin-like screens, explicitly check duplicated user/profile/membership reads and per-row related-data queries.
+- Keep UI aesthetically consistent with existing design; changes must be intentional and cohesive.
+- Under strict CSP, prefer Tailwind classes and SVG attributes; avoid inline `style` and inline script patterns.
+
+## CSP + SSR guardrails (merged)
+
+This project enforces strict CSP and SSR safety by default:
+
+1. Never use inline styles/scripts in app code.
+2. Never import browser-only libraries at module scope in SSR-rendered paths.
+3. Prefer pure SVG rendering for dynamic visual elements/charts.
+4. Avoid third-party chart libraries that inject runtime `<style>` or inline `style=`.
+
+```tsx
+// ❌ blocked by CSP
+<div style={{ width: '60%' }} />
+
+// ✅ CSP-safe alternatives
+<div className="w-1/2" />
+<svg viewBox="0 0 200 8" className="w-full">
+  <rect x={0} y={0} width={pct * 2} height={8} className="fill-emerald-400" rx={4} />
+</svg>
+```
+
+```tsx
+// ❌ may crash SSR
+// import { LineChart } from 'recharts'
+
+// ✅ load browser-only UI with client-only dynamic import at page/parent level
+const MyChart = dynamic(() => import('@/components/MyChart'), { ssr: false })
+```
+
+## Delivery requirements for every code change
+
+When returning implementation results, include:
+
+1. 功能修改內容
+2. 效能防護（what was deduped/cached/batched/centralized）
+3. 潛在風險點（including cache consistency, stale data, permission boundary, and hotspots）
+
+Also, if new DB queries were introduced, state:
+
+- where the query is called
+- estimated call frequency
+- hotspot risk
+- whether index/cache/preload/batch is needed
+
+If no optimization was applied, explicitly explain why it is currently unnecessary.
