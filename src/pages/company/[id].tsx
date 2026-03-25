@@ -4162,24 +4162,44 @@ ${criteriaText}
                   </button>
                 </div>
               </form>
-              <ul style={{ marginTop: 12 }}>
-                {reviewStandards.map((s) => (
-                  <li key={s.id} style={{ padding: 10, border: '2px solid #000', borderRadius: 6, marginBottom: 8, background: '#e6f2ff', display: 'grid', gap: 8 }}>
-                    <div>職種：{jobs.find((j) => j.id === s.job_opening_id)?.job_title || s.job_opening_id}</div>
-                    <input value={s.name} onChange={(e) => setReviewStandards((prev) => prev.map((x) => (x.id === s.id ? { ...x, name: e.target.value } : x)))} style={{ padding: 8, border: '2px solid #000' }} />
-                    <select value={s.label} onChange={(e) => setReviewStandards((prev) => prev.map((x) => (x.id === s.id ? { ...x, label: e.target.value as any } : x)))} style={{ padding: 8, border: '2px solid #000' }}>
-                      <option value="MUST">MUST</option>
-                      <option value="PLUS">PLUS</option>
-                      <option value="NG">NG</option>
-                    </select>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button onClick={() => updateReviewStandard(s, {})} style={{ padding: '6px 12px', background: '#2196F3', color: 'white' }}>儲存</button>
-                      <button onClick={() => removeReviewStandard(s)} style={{ padding: '6px 12px', background: '#f44336', color: 'white' }}>刪除</button>
-                    </div>
-                  </li>
+              <div style={{ marginTop: 12, display: 'grid', gap: 10 }}>
+                {Object.entries(
+                  reviewStandards.reduce((acc, s) => {
+                    const key = s.job_opening_id
+                    if (!acc[key]) acc[key] = []
+                    acc[key].push(s)
+                    return acc
+                  }, {} as Record<string, ResumeReviewStandard[]>)
+                ).map(([jobOpeningId, items]) => (
+                  <div key={jobOpeningId} style={{ padding: 10, border: '2px solid #000', borderRadius: 6, background: '#e6f2ff', display: 'grid', gap: 8 }}>
+                    <div style={{ fontWeight: 'bold' }}>職種：{jobs.find((j) => j.id === jobOpeningId)?.job_title || jobOpeningId}</div>
+                    {items
+                      .slice()
+                      .sort((a, b) => a.sort_order - b.sort_order)
+                      .map((s) => (
+                        <div key={s.id} style={{ display: 'flex', gap: 8, alignItems: 'center', background: '#fff', border: '1px solid #999', borderRadius: 6, padding: 8 }}>
+                          <input
+                            value={s.name}
+                            onChange={(e) => setReviewStandards((prev) => prev.map((x) => (x.id === s.id ? { ...x, name: e.target.value } : x)))}
+                            style={{ padding: 8, border: '2px solid #000', flex: 1 }}
+                          />
+                          <select
+                            value={s.label}
+                            onChange={(e) => setReviewStandards((prev) => prev.map((x) => (x.id === s.id ? { ...x, label: e.target.value as any } : x)))}
+                            style={{ padding: 8, border: '2px solid #000', width: 120 }}
+                          >
+                            <option value="MUST">MUST</option>
+                            <option value="PLUS">PLUS</option>
+                            <option value="NG">NG</option>
+                          </select>
+                          <button onClick={() => updateReviewStandard(s, {})} style={{ padding: '6px 12px', background: '#2196F3', color: 'white' }}>儲存</button>
+                          <button onClick={() => removeReviewStandard(s)} style={{ padding: '6px 12px', background: '#f44336', color: 'white' }}>刪除</button>
+                        </div>
+                      ))}
+                  </div>
                 ))}
                 {reviewStandards.length === 0 && <div style={{ padding: 12, border: '2px dashed #000' }}>尚無審查標準</div>}
-              </ul>
+              </div>
             </div>
           )}
 

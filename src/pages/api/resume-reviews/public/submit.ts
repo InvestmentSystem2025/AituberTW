@@ -14,35 +14,72 @@ async function parseMultipart(req: NextApiRequest): Promise<{ fields: formidable
   return form.parse(req).then(([fields, files]) => ({ fields, files }))
 }
 
-async function uploadAndExtractResume(filePath: string, originalName: string, mimeType: string): Promise<{ resumeInfo: any; rawText: string }> {
-  const mcpServerUrl = String(process.env.NEXT_PUBLIC_MCP_SERVER_URL || '').replace(/\/+$/, '')
-  if (!mcpServerUrl) throw new Error('MCP_SERVER_URL_NOT_CONFIGURED')
-
-  const content = await fs.promises.readFile(filePath)
-  const formData = new FormData()
-  formData.append('file', new Blob([content], { type: mimeType || 'application/octet-stream' }), originalName || 'resume.pdf')
-
-  const uploadResp = await fetch(`${mcpServerUrl}/api/files/upload`, { method: 'POST', body: formData as any })
-  if (!uploadResp.ok) throw new Error('MCP_UPLOAD_FAILED')
-  const uploadJson: any = await uploadResp.json()
-  const fileName = uploadJson?.file?.filename
-  if (!fileName) throw new Error('MCP_UPLOAD_FILE_MISSING')
-
-  const extractResp = await fetch(`${mcpServerUrl}/api/mcp/tool`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      tool: 'extract_resume_info',
-      arguments: { filePath: fileName },
-    }),
-  })
-  if (!extractResp.ok) throw new Error('MCP_EXTRACT_FAILED')
-  const extractJson: any = await extractResp.json()
-  const result = extractJson?.result || extractJson
-  return {
-    resumeInfo: result?.resumeInfo || {},
-    rawText: String(result?.rawText || ''),
+function resolveMcpServerCandidates(): string[] {
+  const candidates = [
+    process.env.MCP_SERVER_URL,
+    process.env.NEXT_PUBLIC_MCP_SERVER_URL,
+    process.env.MCP_INTERNAL_URL,
+    'http://mcp-server:3001',
+    'http://mcp-server-dev:3001',
+    'http://localhost:3001',
+  ]
+  const dedup = new Set<string>()
+  for (const c of candidates) {
+    const v = String(c || '').trim().replace(/\/+$/, '')
+    if (v) dedup.add(v)
   }
+  return Array.from(dedup)
+}
+
+async function uploadAndExtractResume(filePath: string, originalName: string, mimeType: string): Promise<{ resumeInfo: any; rawText: string }> {
+  const content = await fs.promises.readFile(filePath)
+
+  const candidates = resolveMcpServerCandidates()
+  if (candidates.length === 0) {
+    throw new Error('MCP_SERVER_URL_NOT_CONFIGURED')
+  }
+
+  const errors: string[] = []
+  for (const mcpServerUrl of candidates) {
+    try {
+      const formData = new FormData()
+      formData.append('file', new Blob([content], { type: mimeType || 'application/octet-stream' }), originalName || 'resume.pdf')
+      const uploadResp = await fetch(`${mcpServerUrl}/api/files/upload`, { method: 'POST', body: formData as any })
+      if (!uploadResp.ok) {
+        errors.push(`${mcpServerUrl}:UPLOAD_${uploadResp.status}`)
+        continue
+      }
+      const uploadJson: any = await uploadResp.json()
+      const fileName = uploadJson?.file?.filename
+      if (!fileName) {
+        errors.push(`${mcpServerUrl}:MCP_UPLOAD_FILE_MISSING`)
+        continue
+      }
+
+      const extractResp = await fetch(`${mcpServerUrl}/api/mcp/tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tool: 'extract_resume_info',
+          arguments: { filePath: fileName },
+        }),
+      })
+      if (!extractResp.ok) {
+        errors.push(`${mcpServerUrl}:EXTRACT_${extractResp.status}`)
+        continue
+      }
+      const extractJson: any = await extractResp.json()
+      const result = extractJson?.result || extractJson
+      return {
+        resumeInfo: result?.resumeInfo || {},
+        rawText: String(result?.rawText || ''),
+      }
+    } catch (err: any) {
+      errors.push(`${mcpServerUrl}:${String(err?.message || 'UNKNOWN')}`)
+    }
+  }
+
+  throw new Error(`MCP_EXTRACT_FAILED_ALL:${errors.join('|')}`)
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -154,6 +191,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ok: true })
   } catch (err) {
     console.error('[resume-reviews/public/submit] failed:', err)
-    return res.status(500).json({ error: 'RESUME_PROCESS_FAILED' })
+    return res.status(500).json({
+      error: 'RESUME_PROCESS_FAILED',
+      message: String((err as any)?.message || 'UNKNOWN'),
+    })
   }
 }

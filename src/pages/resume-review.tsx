@@ -5,7 +5,6 @@ import { supabase } from '@/lib/supabaseClient'
 type PublicReviewPayload = {
   company?: { company_name?: string }
   job_opening?: { job_title?: string }
-  standards?: Array<{ name: string; label: 'MUST' | 'PLUS' | 'NG'; sort_order: number }>
 }
 
 export default function ResumeReviewPage() {
@@ -113,16 +112,6 @@ export default function ResumeReviewPage() {
         <h2 style={{ marginTop: 0 }}>履歷審查</h2>
         <div>公司：{data?.company?.company_name || '-'}</div>
         <div>職缺：{data?.job_opening?.job_title || '-'}</div>
-        <div style={{ marginTop: 10, marginBottom: 10 }}>
-          <div style={{ fontWeight: 'bold' }}>審查標準</div>
-          <ul>
-            {(data?.standards || []).map((s) => (
-              <li key={`${s.sort_order}-${s.name}`}>
-                [{s.label}] {s.name}
-              </li>
-            ))}
-          </ul>
-        </div>
 
         <input type="file" accept=".pdf,.doc,.docx,.txt" onChange={(e) => setFile(e.target.files?.[0] || null)} />
         <div style={{ marginTop: 12 }}>
