@@ -110,6 +110,8 @@ export default function CompanyAdminPage() {
   const [interviewQuota, setInterviewQuota] = useState({ used_count: 0, free_quota: 3, remaining: 3 })
   const [reviewStandards, setReviewStandards] = useState<ResumeReviewStandard[]>([])
   const [reviewResults, setReviewResults] = useState<any[]>([])
+  const [copiedReviewResultState, setCopiedReviewResultState] = useState<Record<string, 'show' | 'fade'>>({})
+  const copiedReviewResultTimersRef = useRef<Record<string, { fade?: any; clear?: any }>>({})
 
   // editing states
   const [editingAI, setEditingAI] = useState<string | null>(null)
@@ -235,6 +237,17 @@ export default function CompanyAdminPage() {
       return false
     }
   }
+
+  useEffect(() => {
+    return () => {
+      const timers = copiedReviewResultTimersRef.current || {}
+      Object.values(timers).forEach((t) => {
+        if (t?.fade) clearTimeout(t.fade)
+        if (t?.clear) clearTimeout(t.clear)
+      })
+      copiedReviewResultTimersRef.current = {}
+    }
+  }, [])
 
   // helper: 將資料庫時間字串轉為 <input type="datetime-local"> 需要的本地時間格式（避免被轉成 UTC 提前 8 小時）
   const toLocalDatetimeInput = (value?: string | null): string => {
@@ -4256,6 +4269,7 @@ ${criteriaText}
                         type="button"
                         disabled={!x.candidate_profile_id}
                         onClick={async () => {
+                          const key = String(x.review_result_id || x.candidate_profile_id || '')
                           const v = String(x.candidate_profile_id || '')
                           if (!v) return
                           try {
@@ -4271,6 +4285,25 @@ ${criteriaText}
                             document.execCommand('copy')
                             document.body.removeChild(ta)
                           }
+
+                          if (key) {
+                            const prev = copiedReviewResultTimersRef.current[key]
+                            if (prev?.fade) clearTimeout(prev.fade)
+                            if (prev?.clear) clearTimeout(prev.clear)
+
+                            setCopiedReviewResultState((s) => ({ ...s, [key]: 'show' }))
+                            const fade = setTimeout(() => {
+                              setCopiedReviewResultState((s) => ({ ...s, [key]: 'fade' }))
+                            }, 800)
+                            const clear = setTimeout(() => {
+                              setCopiedReviewResultState((s) => {
+                                const next = { ...s }
+                                delete next[key]
+                                return next
+                              })
+                            }, 1800)
+                            copiedReviewResultTimersRef.current[key] = { fade, clear }
+                          }
                         }}
                         style={{
                           padding: '4px 10px',
@@ -4284,6 +4317,23 @@ ${criteriaText}
                       >
                         複製
                       </button>
+                      {(() => {
+                        const key = String(x.review_result_id || x.candidate_profile_id || '')
+                        const state = key ? copiedReviewResultState[key] : null
+                        if (!state) return null
+                        return (
+                          <span
+                            style={{
+                              fontSize: '0.9em',
+                              color: '#166534',
+                              opacity: state === 'fade' ? 0 : 1,
+                              transition: 'opacity 800ms ease',
+                            }}
+                          >
+                            複製成功
+                          </span>
+                        )
+                      })()}
                     </div>
                     <div><b>Email：</b>{x.candidate_email}</div>
                     <div><b>職種：</b>{x.job_title || x.job_opening_id}</div>
