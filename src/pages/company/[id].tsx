@@ -4249,7 +4249,42 @@ ${criteriaText}
                         </div>
                       )
                     })()}
-                    <div><b>USER-ID：</b>{x.candidate_profile_id || 'null'}</div>
+                    <div style={{ fontWeight: 'bold', marginBottom: 6 }}>姓名：{x.candidate_name || '-'}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                      <div><b>USER-ID：</b>{x.candidate_profile_id || 'null'}</div>
+                      <button
+                        type="button"
+                        disabled={!x.candidate_profile_id}
+                        onClick={async () => {
+                          const v = String(x.candidate_profile_id || '')
+                          if (!v) return
+                          try {
+                            await navigator.clipboard.writeText(v)
+                          } catch (err) {
+                            // Fallback for browsers/environments without clipboard permission.
+                            const ta = document.createElement('textarea')
+                            ta.value = v
+                            ta.style.position = 'fixed'
+                            ta.style.left = '-9999px'
+                            document.body.appendChild(ta)
+                            ta.select()
+                            document.execCommand('copy')
+                            document.body.removeChild(ta)
+                          }
+                        }}
+                        style={{
+                          padding: '4px 10px',
+                          background: x.candidate_profile_id ? '#111827' : '#9ca3af',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: 6,
+                          cursor: x.candidate_profile_id ? 'pointer' : 'not-allowed',
+                          opacity: x.candidate_profile_id ? 1 : 0.7,
+                        }}
+                      >
+                        複製
+                      </button>
+                    </div>
                     <div><b>Email：</b>{x.candidate_email}</div>
                     <div><b>職種：</b>{x.job_title || x.job_opening_id}</div>
                     <div><b>fit_score：</b>{x.fit_score}%</div>
