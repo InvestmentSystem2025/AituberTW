@@ -4,6 +4,7 @@ import { generateInvitationToken, normalizeEmail } from '@/lib/resumeReview'
 import { sendResumeReviewInvitationEmail } from '@/lib/resumeReviewNotifications'
 
 const EXPIRES_DAYS = 7
+const INVITATION_LIMIT_PER_CANDIDATE = 3
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -57,7 +58,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .select('id')
     .single()
 
-  if (error || !data?.id) return res.status(400).json({ error: 'CREATE_FAILED' })
+  if (error || !data?.id) {
+    const msg = String(error?.message || '')
+    if (msg.includes('INVITATION_LIMIT_EXCEEDED')) {
+      return res.status(400).json({
+        error: 'INVITATION_LIMIT_EXCEEDED',
+        message: `同一候選人於同職缺的履歷審查邀請最多 ${INVITATION_LIMIT_PER_CANDIDATE} 次`,
+      })
+    }
+    return res.status(400).json({ error: 'CREATE_FAILED' })
+  }
 
   try {
     await sendResumeReviewInvitationEmail({

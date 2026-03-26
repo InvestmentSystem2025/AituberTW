@@ -2546,12 +2546,51 @@ ON CONFLICT (company_id) DO NOTHING;
 
 CREATE INDEX IF NOT EXISTS idx_resume_review_requests_company_job_status_created
   ON public.resume_review_requests(company_id, job_opening_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_resume_review_requests_company_job_candidate
+  ON public.resume_review_requests(company_id, job_opening_id, lower(candidate_email));
 CREATE INDEX IF NOT EXISTS idx_resume_review_results_company_job_created
   ON public.resume_review_results(company_id, job_opening_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_job_opening_company_capacity
   ON public.job_opening(company_id, target_hires, hired_count);
 CREATE INDEX IF NOT EXISTS idx_company_interview_quota_company
   ON public.company_interview_quota(company_id);
+
+CREATE OR REPLACE FUNCTION public.fn_resume_review_request_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_count integer;
+  v_lock_key text;
+BEGIN
+  NEW.candidate_email := lower(btrim(coalesce(NEW.candidate_email, '')));
+  IF NEW.candidate_email = '' THEN
+    RAISE EXCEPTION 'INVALID_CANDIDATE_EMAIL';
+  END IF;
+
+  -- 序列化同 company/job/candidate 的插入，避免並發請求繞過上限
+  v_lock_key := concat_ws(':', NEW.company_id::text, NEW.job_opening_id::text, NEW.candidate_email);
+  PERFORM pg_advisory_xact_lock(hashtext(v_lock_key));
+
+  SELECT count(*)::integer INTO v_count
+  FROM public.resume_review_requests r
+  WHERE r.company_id = NEW.company_id
+    AND r.job_opening_id = NEW.job_opening_id
+    AND lower(r.candidate_email) = NEW.candidate_email;
+
+  IF v_count >= 3 THEN
+    RAISE EXCEPTION 'INVITATION_LIMIT_EXCEEDED';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_resume_review_request_guard ON public.resume_review_requests;
+CREATE TRIGGER trg_resume_review_request_guard
+BEFORE INSERT ON public.resume_review_requests
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_resume_review_request_guard();
 
 CREATE OR REPLACE FUNCTION public.consume_company_interview_quota(p_company_id uuid)
 RETURNS jsonb

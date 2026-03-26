@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import formidable from 'formidable'
 import fs from 'fs'
 import { getAuthUserIdFromRequest, getServiceClient } from '@/lib/supabaseServer'
-import { evaluateResumeAgainstStandards, hashInvitationToken } from '@/lib/resumeReview'
+import { evaluateResumeAgainstStandards, hashInvitationToken, normalizeEmail } from '@/lib/resumeReview'
 import { runOpenAiResumeReview } from '@/lib/resumeReviewAi'
 
 export const config = {
@@ -104,7 +104,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const tokenHash = hashInvitationToken(rawToken)
   const { data: requestRow } = await supa
     .from('resume_review_requests')
-    .select('id, company_id, job_opening_id, status, token_expires_at')
+    .select('id, company_id, job_opening_id, candidate_email, status, token_expires_at')
     .eq('invitation_token', tokenHash)
     .maybeSingle()
 
@@ -115,6 +115,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (!['invited', 'opened'].includes(String(requestRow.status))) {
     return res.status(400).json({ error: 'TOKEN_NOT_AVAILABLE' })
+  }
+
+  // 防止連結被轉傳後由其他 jobSeeker 代投：提交者 email 必須與邀請目標 email 一致
+  const requestCandidateEmail = normalizeEmail(String(requestRow.candidate_email || ''))
+  const meEmail = normalizeEmail(String(me.email || ''))
+  if (!requestCandidateEmail || !meEmail || requestCandidateEmail !== meEmail) {
+    return res.status(403).json({ error: 'FORBIDDEN_TOKEN_OWNER_MISMATCH' })
   }
 
   const file = (files.file as formidable.File[] | undefined)?.[0]

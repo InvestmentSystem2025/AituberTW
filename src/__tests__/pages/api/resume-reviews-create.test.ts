@@ -11,10 +11,16 @@ jest.mock('@/lib/resumeReviewNotifications', () => ({
 
 const { createAuthContext } = jest.requireMock('@/lib/authContext')
 
-function buildCtx(options?: { standards?: boolean; capacityReached?: boolean; member?: boolean }) {
+function buildCtx(options?: {
+  standards?: boolean
+  capacityReached?: boolean
+  member?: boolean
+  invitationLimitExceeded?: boolean
+}) {
   const standards = options?.standards ?? true
   const capacityReached = options?.capacityReached ?? false
   const member = options?.member ?? true
+  const invitationLimitExceeded = options?.invitationLimitExceeded ?? false
 
   return {
     getProfile: jest.fn().mockResolvedValue({ id: 'p1' }),
@@ -39,7 +45,11 @@ function buildCtx(options?: { standards?: boolean; capacityReached?: boolean; me
             if (table === 'company') return { data: { company_name: 'ACME' } }
             return { data: null }
           }),
-          single: jest.fn(async () => ({ data: { id: 'req1' } })),
+          single: jest.fn(async () =>
+            invitationLimitExceeded
+              ? { data: null, error: { message: 'INVITATION_LIMIT_EXCEEDED' } }
+              : { data: { id: 'req1' }, error: null }
+          ),
           insert: jest.fn(() => chain),
         }
         if (table === 'resume_review_standards') {
@@ -78,5 +88,16 @@ describe('/api/resume-reviews/create', () => {
     await handler(req as any, res as any)
     expect(res._getStatusCode()).toBe(400)
     expect(JSON.parse(res._getData())).toEqual({ error: 'CAPACITY_REACHED' })
+  })
+
+  it('rejects when invitation limit exceeded', async () => {
+    createAuthContext.mockReturnValue(buildCtx({ invitationLimitExceeded: true }))
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: { company_id: 'c1', job_opening_id: 'j1', candidate_email: 'a@b.com' },
+    })
+    await handler(req as any, res as any)
+    expect(res._getStatusCode()).toBe(400)
+    expect(JSON.parse(res._getData())).toMatchObject({ error: 'INVITATION_LIMIT_EXCEEDED' })
   })
 })

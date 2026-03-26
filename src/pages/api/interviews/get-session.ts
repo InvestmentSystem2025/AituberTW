@@ -1,18 +1,26 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { getServiceClient, getAuthUserIdFromRequest } from '@/lib/supabaseServer'
+import { createAuthContext } from '@/lib/authContext'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end()
 
-  const authUserId = await getAuthUserIdFromRequest(req)
+  const ctx = createAuthContext(req)
+  const authUserId = await ctx.getAuthUserId()
   if (!authUserId) return res.status(401).json({ error: 'UNAUTHORIZED' })
+
+  let me: Awaited<ReturnType<typeof ctx.requireProfile>>
+  try {
+    me = await ctx.requireProfile()
+  } catch {
+    return res.status(400).json({ error: 'PROFILE_NOT_FOUND' })
+  }
 
   const interview_id = String(req.query.interview_id || '')
   if (!interview_id) return res.status(400).json({ error: 'MISSING_INTERVIEW_ID' })
 
-  const supa = getServiceClient()
+  const supa = ctx.supa
 
-  // 基本權限檢查：確認當前用戶對該 interview 有權限（與 get.ts 相同邏輯的簡化版）
+  // 讀取 interview 基本資料（後續需做完整授權檢查）
   const { data: interview } = await supa
     .from('interviews')
     .select('id, company_id, profiles_id, candidate_email')
@@ -20,6 +28,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .single()
 
   if (!interview) return res.status(404).json({ error: 'INTERVIEW_NOT_FOUND' })
+
+  // 完整授權檢查：
+  // - jobSeeker：只能讀自己的 interview（profiles_id 或 candidate_email 匹配）
+  // - recruiter/viewer：必須是同公司成員
+  if (me.role === 'jobSeeker') {
+    const myEmail = String(me.email || '').toLowerCase()
+    const interviewEmail = String(interview.candidate_email || '').toLowerCase()
+    const byProfile = interview.profiles_id && interview.profiles_id === me.id
+    const byEmail = !!interview.candidate_email && myEmail.length > 0 && myEmail === interviewEmail
+    if (!byProfile && !byEmail) {
+      return res.status(403).json({ error: 'FORBIDDEN' })
+    }
+  } else {
+    const { data: scope } = await supa
+      .from('company_members')
+      .select('id')
+      .eq('company_id', interview.company_id)
+      .eq('profile_id', me.id)
+      .maybeSingle()
+    if (!scope) return res.status(403).json({ error: 'FORBIDDEN' })
+  }
 
   // 取得最新的 session（或唯一一筆）
   const { data: session, error } = await supa
