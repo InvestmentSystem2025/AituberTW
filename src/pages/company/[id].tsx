@@ -108,6 +108,12 @@ export default function CompanyAdminPage() {
   const [joq, setJoq] = useState<JOQ[]>([])
   const [ivs, setIvs] = useState<Interview[]>([])
   const [interviewQuota, setInterviewQuota] = useState({ used_count: 0, free_quota: 3, remaining: 3 })
+  const [resumeReviewInviteQuota, setResumeReviewInviteQuota] = useState({
+    used_count: 0,
+    free_quota: 3,
+    remaining: 3,
+  })
+  const [isResumeReviewInviteQuotaLoading, setIsResumeReviewInviteQuotaLoading] = useState(false)
   const [reviewStandards, setReviewStandards] = useState<ResumeReviewStandard[]>([])
   const [reviewResults, setReviewResults] = useState<any[]>([])
   const [copiedReviewResultState, setCopiedReviewResultState] = useState<Record<string, 'show' | 'fade'>>({})
@@ -445,6 +451,46 @@ export default function CompanyAdminPage() {
     const j = await r.json().catch(() => ({}))
     setReviewResults(j.items || [])
   }
+  const loadResumeReviewInviteQuota = async (t: string, jobOpeningId: string, candidateEmail: string) => {
+    const q = new URLSearchParams({
+      company_id: companyId,
+      job_opening_id: jobOpeningId,
+      candidate_email: candidateEmail,
+    })
+    setIsResumeReviewInviteQuotaLoading(true)
+    try {
+      const r = await fetch(`/api/resume-reviews/invitation-quota/get?${q.toString()}`, {
+        headers: headers(t),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (r.ok && j?.ok) {
+        setResumeReviewInviteQuota({
+          used_count: Number(j.used_count || 0),
+          free_quota: Number(j.free_quota || 3),
+          remaining: Number(j.remaining || 0),
+        })
+      }
+    } finally {
+      setIsResumeReviewInviteQuotaLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!token || !companyId) return
+    if (tab !== 'resumeReview' || resumeReviewTab !== 'create') return
+
+    const jobOpeningId = String(newReviewRequest.job_opening_id || '')
+    const candidateEmail = String(newReviewRequest.candidate_email || '').trim().toLowerCase()
+    if (!jobOpeningId || !candidateEmail) {
+      setResumeReviewInviteQuota({ used_count: 0, free_quota: 3, remaining: 3 })
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadResumeReviewInviteQuota(token, jobOpeningId, candidateEmail)
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [token, companyId, tab, resumeReviewTab, newReviewRequest.job_opening_id, newReviewRequest.candidate_email])
 
   // actions (minimal creates)
   const addMember = async (e: React.FormEvent) => {
@@ -1020,12 +1066,17 @@ ${criteriaText}
         alert('此職種已達招募目標人數，無法再建立履歷審查')
         return
       }
+      if (j.error === 'INVITATION_LIMIT_EXCEEDED') {
+        alert('同一候選人於同職缺的履歷審查邀請最多 3 次')
+        await loadResumeReviewInviteQuota(token, newReviewRequest.job_opening_id, newReviewRequest.candidate_email.trim().toLowerCase())
+        return
+      }
       alert(j.error || '建立履歷審查失敗')
       return
     }
     alert('履歷審查邀請已建立並寄送')
     setNewReviewRequest({ ...newReviewRequest, candidate_email: '' })
-    await loadReviewResults(token)
+    await Promise.all([loadReviewResults(token), loadResumeReviewInviteQuota(token, newReviewRequest.job_opening_id, newReviewRequest.candidate_email.trim().toLowerCase())])
   }
   const evalIV = async (id: string, result: 'hired' | 'rejected') => {
     if (reviewingLoading) return
@@ -4227,6 +4278,13 @@ ${criteriaText}
                 ))}
               </select>
               <input placeholder="候選人 Email" value={newReviewRequest.candidate_email} onChange={(e) => setNewReviewRequest({ ...newReviewRequest, candidate_email: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
+              <div style={{ marginBottom: 2, padding: 12, border: '2px solid #000', borderRadius: 8, background: '#fff7e6' }}>
+                履歷審查邀請剩餘：
+                {newReviewRequest.job_opening_id && newReviewRequest.candidate_email.trim()
+                  ? ` ${Math.max(0, resumeReviewInviteQuota.remaining)} / ${resumeReviewInviteQuota.free_quota}`
+                  : ' 請先選擇職種並輸入候選人 Email'}
+                {isResumeReviewInviteQuotaLoading && <span style={{ marginLeft: 8, color: '#666' }}>讀取中...</span>}
+              </div>
               <button type="submit" style={{ padding: '8px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4 }}>發送履歷審查邀請</button>
             </form>
           )}
