@@ -109,9 +109,9 @@ export default function CompanyAdminPage() {
   const [ivs, setIvs] = useState<Interview[]>([])
   const [interviewQuota, setInterviewQuota] = useState({ used_count: 0, free_quota: 3, remaining: 3 })
   const [resumeReviewInviteQuota, setResumeReviewInviteQuota] = useState({
-    used_count: 0,
+    used_count: null as number | null,
     free_quota: 3,
-    remaining: 3,
+    remaining: null as number | null,
   })
   const [isResumeReviewInviteQuotaLoading, setIsResumeReviewInviteQuotaLoading] = useState(false)
   const [reviewStandards, setReviewStandards] = useState<ResumeReviewStandard[]>([])
@@ -345,7 +345,8 @@ export default function CompanyAdminPage() {
           loadIVs(t),
           loadInterviewQuota(t),
           loadReviewStandards(t),
-          loadReviewResults(t)
+          loadReviewResults(t),
+          loadResumeReviewInviteQuota(t, companyId)
         ])
         }
       } catch (err) {
@@ -451,11 +452,9 @@ export default function CompanyAdminPage() {
     const j = await r.json().catch(() => ({}))
     setReviewResults(j.items || [])
   }
-  const loadResumeReviewInviteQuota = async (t: string, jobOpeningId: string, candidateEmail: string) => {
+  const loadResumeReviewInviteQuota = async (t: string, companyIdForQuery: string) => {
     const q = new URLSearchParams({
-      company_id: companyId,
-      job_opening_id: jobOpeningId,
-      candidate_email: candidateEmail,
+      company_id: companyIdForQuery,
     })
     setIsResumeReviewInviteQuotaLoading(true)
     try {
@@ -467,7 +466,7 @@ export default function CompanyAdminPage() {
         setResumeReviewInviteQuota({
           used_count: Number(j.used_count || 0),
           free_quota: Number(j.free_quota || 3),
-          remaining: Number(j.remaining || 0),
+          remaining: Number(j.remaining ?? 0),
         })
       }
     } finally {
@@ -479,18 +478,13 @@ export default function CompanyAdminPage() {
     if (!token || !companyId) return
     if (tab !== 'resumeReview' || resumeReviewTab !== 'create') return
 
-    const jobOpeningId = String(newReviewRequest.job_opening_id || '')
-    const candidateEmail = String(newReviewRequest.candidate_email || '').trim().toLowerCase()
-    if (!jobOpeningId || !candidateEmail) {
-      setResumeReviewInviteQuota({ used_count: 0, free_quota: 3, remaining: 3 })
-      return
-    }
-
     const timer = window.setTimeout(() => {
-      void loadResumeReviewInviteQuota(token, jobOpeningId, candidateEmail)
+      // 如果初始化已經載入成功，切換回 Tab 時就不要再閃動讀取狀態。
+      if (resumeReviewInviteQuota.remaining != null && !isResumeReviewInviteQuotaLoading) return
+      void loadResumeReviewInviteQuota(token, companyId)
     }, 300)
     return () => window.clearTimeout(timer)
-  }, [token, companyId, tab, resumeReviewTab, newReviewRequest.job_opening_id, newReviewRequest.candidate_email])
+  }, [token, companyId, tab, resumeReviewTab, resumeReviewInviteQuota.remaining, isResumeReviewInviteQuotaLoading])
 
   // actions (minimal creates)
   const addMember = async (e: React.FormEvent) => {
@@ -1067,8 +1061,8 @@ ${criteriaText}
         return
       }
       if (j.error === 'INVITATION_LIMIT_EXCEEDED') {
-        alert('同一候選人於同職缺的履歷審查邀請最多 3 次')
-        await loadResumeReviewInviteQuota(token, newReviewRequest.job_opening_id, newReviewRequest.candidate_email.trim().toLowerCase())
+        alert('此公司最多免費使用 3 次履歷審查功能')
+        await loadResumeReviewInviteQuota(token, companyId)
         return
       }
       alert(j.error || '建立履歷審查失敗')
@@ -1076,7 +1070,7 @@ ${criteriaText}
     }
     alert('履歷審查邀請已建立並寄送')
     setNewReviewRequest({ ...newReviewRequest, candidate_email: '' })
-    await Promise.all([loadReviewResults(token), loadResumeReviewInviteQuota(token, newReviewRequest.job_opening_id, newReviewRequest.candidate_email.trim().toLowerCase())])
+    await Promise.all([loadReviewResults(token), loadResumeReviewInviteQuota(token, companyId)])
   }
   const evalIV = async (id: string, result: 'hired' | 'rejected') => {
     if (reviewingLoading) return
@@ -4278,11 +4272,8 @@ ${criteriaText}
                 ))}
               </select>
               <input placeholder="候選人 Email" value={newReviewRequest.candidate_email} onChange={(e) => setNewReviewRequest({ ...newReviewRequest, candidate_email: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
-              <div style={{ marginBottom: 2, padding: 12, border: '2px solid #000', borderRadius: 8, background: '#fff7e6' }}>
-                履歷審查邀請剩餘：
-                {newReviewRequest.job_opening_id && newReviewRequest.candidate_email.trim()
-                  ? ` ${Math.max(0, resumeReviewInviteQuota.remaining)} / ${resumeReviewInviteQuota.free_quota}`
-                  : ' 請先選擇職種並輸入候選人 Email'}
+              <div style={{ marginBottom: 12, padding: 12, border: '2px solid #000', borderRadius: 8, background: '#fff7e6' }}>
+                履歷審查邀請剩餘： {resumeReviewInviteQuota.remaining == null ? '讀取中' : Math.max(0, resumeReviewInviteQuota.remaining)} / {resumeReviewInviteQuota.free_quota}
                 {isResumeReviewInviteQuotaLoading && <span style={{ marginLeft: 8, color: '#666' }}>讀取中...</span>}
               </div>
               <button type="submit" style={{ padding: '8px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4 }}>發送履歷審查邀請</button>
