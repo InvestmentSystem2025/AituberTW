@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createAuthContext } from '@/lib/authContext'
 
-const COMPANY_INVITATION_LIMIT = 3
+const COMPANY_INVITATION_LIMIT = 9999
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end()
@@ -19,7 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const isMember = await ctx.isCompanyMember(company_id)
   if (!isMember) return res.status(403).json({ error: 'FORBIDDEN' })
 
-  // 公司層級 hard guard：同一 company 總共最多 3 次
+  // 公司層級 hard guard：同一 company 總共最多 9999 次（測試用）
   const { count } = await ctx.supa
     .from('resume_review_requests')
     .select('id', { count: 'exact', head: true })
