@@ -3349,7 +3349,7 @@ ${criteriaText}
       {tab === 'interviews' && (
         <div>
           <div style={{ marginBottom: 12, padding: 12, border: '2px solid #000', borderRadius: 8, background: '#fff7e6' }}>
-            公司面試配額剩餘：{Math.max(0, interviewQuota.remaining)} / {interviewQuota.free_quota}
+            公司面試配額剩餘：{Math.max(0, interviewQuota.free_quota - interviewQuota.used_count)} / {interviewQuota.free_quota}
           </div>
           <form onSubmit={addIV} style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
             <div>
@@ -4273,7 +4273,7 @@ ${criteriaText}
               </select>
               <input placeholder="候選人 Email" value={newReviewRequest.candidate_email} onChange={(e) => setNewReviewRequest({ ...newReviewRequest, candidate_email: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
               <div style={{ marginBottom: 12, padding: 12, border: '2px solid #000', borderRadius: 8, background: '#fff7e6' }}>
-                履歷審查邀請剩餘： {resumeReviewInviteQuota.remaining == null ? '讀取中' : Math.max(0, resumeReviewInviteQuota.remaining)} / {resumeReviewInviteQuota.free_quota}
+                履歷審查邀請剩餘： {resumeReviewInviteQuota.used_count == null ? '讀取中' : Math.max(0, resumeReviewInviteQuota.free_quota - resumeReviewInviteQuota.used_count)} / {resumeReviewInviteQuota.free_quota}
                 {isResumeReviewInviteQuotaLoading && <span style={{ marginLeft: 8, color: '#666' }}>讀取中...</span>}
               </div>
               <button type="submit" style={{ padding: '8px 12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: 4 }}>發送履歷審查邀請</button>
