@@ -90,3 +90,7 @@ Also, if new DB queries were introduced, state:
 - whether index/cache/preload/batch is needed
 
 If no optimization was applied, explicitly explain why it is currently unnecessary.
+
+## VM command default (OS safety)
+When providing commands intended to be run on a VM or remote Linux environment, default to **Linux command format** unless the user explicitly specifies Windows/PowerShell.
+This includes using `/` path separators and avoiding Windows `.\`-style relative paths.
