@@ -227,6 +227,7 @@ export default function CompanyAdminPage() {
   ])
   const [newReviewRequest, setNewReviewRequest] = useState({ job_opening_id: '', candidate_email: '', remarks: '' })
   const [reviewResultFilterJobOpeningId, setReviewResultFilterJobOpeningId] = useState('')
+  const [deletingReviewResultId, setDeletingReviewResultId] = useState<string | null>(null)
   const [isGeneratingJOQAI, setIsGeneratingJOQAI] = useState(false)
 
   // edit forms (starts with empty)
@@ -1072,6 +1073,44 @@ ${criteriaText}
     alert('履歷審查邀請已建立並寄送')
     setNewReviewRequest({ ...newReviewRequest, candidate_email: '', remarks: '' })
     await Promise.all([loadReviewResults(token), loadResumeReviewInviteQuota(token, companyId)])
+  }
+  const removeReviewResult = async (item: any) => {
+    const reviewResultId = String(item?.review_result_id || '')
+    if (!reviewResultId) return
+
+    const candidateLabel = item?.candidate_name || item?.candidate_email || '此筆資料'
+    const confirmed = window.confirm(`確定要刪除「${candidateLabel}」的審查結果嗎？`)
+    if (!confirmed) return
+
+    setDeletingReviewResultId(reviewResultId)
+    try {
+      const r = await fetch('/api/resume-reviews/delete', {
+        method: 'POST',
+        headers: headers(token, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          review_result_id: reviewResultId,
+          company_id: companyId,
+        }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        if (r.status === 401 || r.status === 403) {
+          await handleTokenRefresh()
+          return
+        }
+        if (j.error === 'NOT_FOUND') {
+          alert('此審查結果已不存在，將重新整理列表')
+          await loadReviewResults(token, reviewResultFilterJobOpeningId || undefined)
+          return
+        }
+        alert(j.error || '刪除審查結果失敗')
+        return
+      }
+
+      setReviewResults((prev) => prev.filter((x: any) => String(x.review_result_id) !== reviewResultId))
+    } finally {
+      setDeletingReviewResultId(null)
+    }
   }
   const evalIV = async (id: string, result: 'hired' | 'rejected') => {
     if (reviewingLoading) return
@@ -4302,7 +4341,25 @@ ${criteriaText}
               </div>
               <ul>
                 {reviewResults.map((x: any) => (
-                  <li key={x.review_result_id} style={{ padding: 10, border: '2px solid #000', borderRadius: 6, marginBottom: 8, background: '#e6f2ff' }}>
+                  <li key={x.review_result_id} style={{ position: 'relative', padding: '40px 10px 10px', border: '2px solid #000', borderRadius: 6, marginBottom: 8, background: '#e6f2ff' }}>
+                    <button
+                      type="button"
+                      onClick={() => removeReviewResult(x)}
+                      disabled={deletingReviewResultId === String(x.review_result_id)}
+                      style={{
+                        position: 'absolute',
+                        top: 8,
+                        right: 8,
+                        padding: '4px 10px',
+                        background: deletingReviewResultId === String(x.review_result_id) ? '#fca5a5' : '#dc2626',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 6,
+                        cursor: deletingReviewResultId === String(x.review_result_id) ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {deletingReviewResultId === String(x.review_result_id) ? '刪除中...' : '刪除此審查結果'}
+                    </button>
                     {(() => {
                       const criteria = Array.isArray(x.criteria_results) ? x.criteria_results : []
                       const mustNotMatched = criteria.filter((c: any) => c?.label === 'MUST' && !c?.matched)
