@@ -103,15 +103,21 @@ Required steps:
 
 1. **Identify migration files**  
    Check newly added files under `supabase/migrations/` (example: `20260330_resume_review_requests_remarks.sql`).
-2. **Apply migration on local DB**  
-   Execute SQL against local Postgres/Supabase DB:
-   - `docker exec -i supabase-db psql -U postgres -d postgres < supabase/migrations/<migration-file>.sql`
-3. **Apply migration on VM DB after pull**  
-   On VM, after `git pull`, execute the same migration SQL against VM DB:
-   - `docker exec -i supabase-db psql -U postgres -d postgres < supabase/migrations/<migration-file>.sql`
-4. **Verify schema change in each environment**  
+2. **Prefer docker compose service execution (mandatory default)**  
+   Use compose service name `supabase-db` (stable) instead of container name (which may change by project prefix).
+3. **If multiple compose files exist, explicitly choose one**  
+   Do not rely on implicit default file selection when both local and VM compose files exist.
+   - Local example: `docker compose -f docker-compose.yml exec -T supabase-db ...`
+   - VM/GCP example: `docker compose -f docker-compose.gcp.yml exec -T supabase-db ...`
+4. **Apply migration on local DB**  
+   - `docker compose -f docker-compose.yml exec -T supabase-db psql -U postgres -d postgres -f /dev/stdin < supabase/migrations/<migration-file>.sql`
+5. **Apply migration on VM DB after pull**  
+   - `docker compose -f docker-compose.gcp.yml exec -T supabase-db psql -U postgres -d postgres -f /dev/stdin < supabase/migrations/<migration-file>.sql`
+6. **Verify schema change in each environment**  
    Example verification:
-   - `docker exec -i supabase-db psql -U postgres -d postgres -c "\d+ public.resume_review_requests"`
+   - `docker compose -f <compose-file>.yml exec -T supabase-db psql -U postgres -d postgres -c "\d+ public.resume_review_requests"`
    - Confirm expected column/index/constraint exists.
-5. **Idempotency + rollback awareness**  
+7. **Fallback only when compose context is unavailable**  
+   If compose execution is not possible, then detect container name and use `docker exec`.
+8. **Idempotency + rollback awareness**  
    Prefer idempotent SQL (`IF EXISTS` / `IF NOT EXISTS`) and always include a rollback strategy in PR notes for destructive changes.
