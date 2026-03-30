@@ -11,10 +11,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const me = await ctx.getProfile()
   if (!me?.id) return res.status(401).json({ error: 'UNAUTHORIZED' })
 
-  const { company_id, job_opening_id, candidate_email } = req.body || {}
+  const { company_id, job_opening_id, candidate_email, remarks } = req.body || {}
   if (!company_id || !job_opening_id || !candidate_email) {
     return res.status(400).json({ error: 'MISSING_FIELDS' })
   }
+
+  const remarksTrimmed =
+    typeof remarks === 'string' ? remarks.trim().slice(0, 2000) : ''
 
   const isMember = await ctx.isCompanyMember(String(company_id))
   if (!isMember) return res.status(403).json({ error: 'FORBIDDEN' })
@@ -52,6 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       token_expires_at: expiresAt.toISOString(),
       invited_by_profile_id: me.id,
       status: 'invited',
+      ...(remarksTrimmed ? { remarks: remarksTrimmed } : {}),
     })
     .select('id')
     .single()

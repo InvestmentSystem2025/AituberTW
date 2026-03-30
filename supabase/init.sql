@@ -2503,6 +2503,7 @@ CREATE TABLE IF NOT EXISTS public.resume_review_requests (
   token_expires_at TIMESTAMPTZ NOT NULL,
   invited_by_profile_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
   status TEXT NOT NULL CHECK (status IN ('invited', 'opened', 'submitted', 'expired', 'cancelled')),
+  remarks TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

@@ -21,7 +21,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let q = ctx.supa
     .from('resume_review_results')
     .select(
-      'id, candidate_profile_id, candidate_email, job_opening_id, fit_score, criteria_results, summary, created_at, job_opening:job_opening_id(job_title)',
+      'id, candidate_profile_id, candidate_email, job_opening_id, fit_score, criteria_results, summary, created_at, review_request_id, resume_review_requests(remarks), job_opening:job_opening_id(job_title)',
       { count: 'exact' },
     )
     .eq('company_id', company_id)
@@ -64,6 +64,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const items = (rawItems as any[]).map((r) => {
     const candidateProfileId = r?.candidate_profile_id || null
     const candidateName = candidateProfileId ? profileNameById.get(String(candidateProfileId)) || null : null
+    const reqRemarks = r?.resume_review_requests
+    const remarks =
+      typeof reqRemarks === 'object' && reqRemarks !== null && !Array.isArray(reqRemarks)
+        ? String((reqRemarks as { remarks?: string }).remarks || '')
+        : Array.isArray(reqRemarks) && reqRemarks[0]
+          ? String((reqRemarks[0] as { remarks?: string }).remarks || '')
+          : ''
     return {
       review_result_id: r.id,
       candidate_profile_id: candidateProfileId,
@@ -74,6 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       fit_score: r.fit_score,
       criteria_results: r.criteria_results,
       summary: r.summary || '',
+      remarks,
       created_at: r.created_at,
     }
   })

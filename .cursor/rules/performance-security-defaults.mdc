@@ -94,3 +94,24 @@ If no optimization was applied, explicitly explain why it is currently unnecessa
 ## VM command default (OS safety)
 When providing commands intended to be run on a VM or remote Linux environment, default to **Linux command format** unless the user explicitly specifies Windows/PowerShell.
 This includes using `/` path separators and avoiding Windows `.\`-style relative paths.
+
+## Supabase migration execution (required on both local + VM)
+
+When a new file is added under `supabase/migrations/`, it is **not enough** to only push/pull code. The SQL must be executed against the target database environment.
+
+Required steps:
+
+1. **Identify migration files**  
+   Check newly added files under `supabase/migrations/` (example: `20260330_resume_review_requests_remarks.sql`).
+2. **Apply migration on local DB**  
+   Execute SQL against local Postgres/Supabase DB:
+   - `docker exec -i supabase-db psql -U postgres -d postgres < supabase/migrations/<migration-file>.sql`
+3. **Apply migration on VM DB after pull**  
+   On VM, after `git pull`, execute the same migration SQL against VM DB:
+   - `docker exec -i supabase-db psql -U postgres -d postgres < supabase/migrations/<migration-file>.sql`
+4. **Verify schema change in each environment**  
+   Example verification:
+   - `docker exec -i supabase-db psql -U postgres -d postgres -c "\d+ public.resume_review_requests"`
+   - Confirm expected column/index/constraint exists.
+5. **Idempotency + rollback awareness**  
+   Prefer idempotent SQL (`IF EXISTS` / `IF NOT EXISTS`) and always include a rollback strategy in PR notes for destructive changes.

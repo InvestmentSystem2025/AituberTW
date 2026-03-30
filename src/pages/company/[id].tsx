@@ -225,7 +225,7 @@ export default function CompanyAdminPage() {
   const [reviewStandardDrafts, setReviewStandardDrafts] = useState<Array<{ name: string; label: 'MUST' | 'PLUS' | 'NG' }>>([
     { name: '', label: 'MUST' },
   ])
-  const [newReviewRequest, setNewReviewRequest] = useState({ job_opening_id: '', candidate_email: '' })
+  const [newReviewRequest, setNewReviewRequest] = useState({ job_opening_id: '', candidate_email: '', remarks: '' })
   const [reviewResultFilterJobOpeningId, setReviewResultFilterJobOpeningId] = useState('')
   const [isGeneratingJOQAI, setIsGeneratingJOQAI] = useState(false)
 
@@ -1048,6 +1048,7 @@ ${criteriaText}
         company_id: companyId,
         job_opening_id: newReviewRequest.job_opening_id,
         candidate_email: newReviewRequest.candidate_email.trim(),
+        ...(newReviewRequest.remarks.trim() ? { remarks: newReviewRequest.remarks.trim() } : {}),
       }),
     })
     const j = await r.json().catch(() => ({}))
@@ -1069,7 +1070,7 @@ ${criteriaText}
       return
     }
     alert('履歷審查邀請已建立並寄送')
-    setNewReviewRequest({ ...newReviewRequest, candidate_email: '' })
+    setNewReviewRequest({ ...newReviewRequest, candidate_email: '', remarks: '' })
     await Promise.all([loadReviewResults(token), loadResumeReviewInviteQuota(token, companyId)])
   }
   const evalIV = async (id: string, result: 'hired' | 'rejected') => {
@@ -4272,6 +4273,16 @@ ${criteriaText}
                 ))}
               </select>
               <input placeholder="候選人 Email" value={newReviewRequest.candidate_email} onChange={(e) => setNewReviewRequest({ ...newReviewRequest, candidate_email: e.target.value })} style={{ padding: 8, border: '2px solid #000' }} />
+              <div>
+                <label style={{ display: 'block', marginBottom: 4, fontWeight: 'bold' }}>備註（選填）：</label>
+                <textarea
+                  placeholder="僅供內部參考，不會顯示給候選人"
+                  rows={3}
+                  value={newReviewRequest.remarks}
+                  onChange={(e) => setNewReviewRequest({ ...newReviewRequest, remarks: e.target.value })}
+                  style={{ padding: 8, border: '2px solid #000', width: '100%', boxSizing: 'border-box' }}
+                />
+              </div>
               <div style={{ marginBottom: 12, padding: 12, border: '2px solid #000', borderRadius: 8, background: '#fff7e6' }}>
                 履歷審查邀請剩餘： {resumeReviewInviteQuota.used_count == null ? '讀取中' : Math.max(0, resumeReviewInviteQuota.free_quota - resumeReviewInviteQuota.used_count)} / {resumeReviewInviteQuota.free_quota}
                 {isResumeReviewInviteQuotaLoading && <span style={{ marginLeft: 8, color: '#666' }}>讀取中...</span>}
@@ -4385,6 +4396,7 @@ ${criteriaText}
                       })()}
                     </div>
                     <div><b>Email：</b>{x.candidate_email}</div>
+                    <div><b>備註：</b>{x.remarks?.trim() ? x.remarks : '—'}</div>
                     <div><b>職種：</b>{x.job_title || x.job_opening_id}</div>
                     <div><b>fit_score：</b>{x.fit_score}%</div>
                     <div><b>summary：</b>{x.summary || '-'}</div>
