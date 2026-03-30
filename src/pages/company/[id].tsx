@@ -363,22 +363,32 @@ export default function CompanyAdminPage() {
     return tk ? { 'x-supabase-token': tk, ...extra } : { ...extra }
   }
 
+  const authRecoveringRef = useRef(false)
+  const AUTH_EXPIRED_MESSAGE = '您的認證已過期，請按 F5 重新整理後再試'
+
+  const isUnauthorizedResponse = (r?: Response, payload?: any) => {
+    const statusUnauthorized = !!r && (r.status === 401 || r.status === 403)
+    const code = String(payload?.error || '').toUpperCase()
+    return statusUnauthorized || code === 'UNAUTHORIZED'
+  }
+
   // 刷新 token 函數
   const handleTokenRefresh = async () => {
+    if (authRecoveringRef.current) return
+    authRecoveringRef.current = true
     try {
       const { data, error } = await supabase.auth.refreshSession()
       if (!error && data.session) {
         setToken(data.session.access_token)
-        alert('已自動刷新登入狀態，請重試')
         window.location.reload()
       } else {
-        alert('登入已過期，正在跳轉到登入頁面...')
-        router.push('/me')
+        alert(AUTH_EXPIRED_MESSAGE)
       }
     } catch (err) {
       console.error('刷新 token 失敗:', err)
-      alert('登入已過期，請重新登入')
-      router.push('/me')
+      alert(AUTH_EXPIRED_MESSAGE)
+    } finally {
+      authRecoveringRef.current = false
     }
   }
 
@@ -996,6 +1006,10 @@ ${criteriaText}
       })
       if (!r.ok) {
         const j = await r.json().catch(() => ({}))
+        if (isUnauthorizedResponse(r, j)) {
+          await handleTokenRefresh()
+          return
+        }
         alert(j.error || '建立審查標準失敗')
         return
       }
@@ -1018,6 +1032,10 @@ ${criteriaText}
     })
     if (!r.ok) {
       const j = await r.json().catch(() => ({}))
+      if (isUnauthorizedResponse(r, j)) {
+        await handleTokenRefresh()
+        return
+      }
       alert(j.error || '更新審查標準失敗')
       return
     }
@@ -1031,6 +1049,10 @@ ${criteriaText}
     })
     if (!r.ok) {
       const j = await r.json().catch(() => ({}))
+      if (isUnauthorizedResponse(r, j)) {
+        await handleTokenRefresh()
+        return
+      }
       alert(j.error || '刪除審查標準失敗')
       return
     }
@@ -1054,6 +1076,10 @@ ${criteriaText}
     })
     const j = await r.json().catch(() => ({}))
     if (!r.ok) {
+      if (isUnauthorizedResponse(r, j)) {
+        await handleTokenRefresh()
+        return
+      }
       if (j.error === 'MISSING_REVIEW_STANDARD') {
         alert('此職種尚未設定審查標準，請先到「審查標準」新增')
         return
@@ -1094,7 +1120,7 @@ ${criteriaText}
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) {
-        if (r.status === 401 || r.status === 403) {
+        if (isUnauthorizedResponse(r, j)) {
           await handleTokenRefresh()
           return
         }
@@ -1123,6 +1149,10 @@ ${criteriaText}
       })
       const j = await r.json().catch(() => ({} as any))
       if (!r.ok) {
+        if (isUnauthorizedResponse(r, j)) {
+          await handleTokenRefresh()
+          return
+        }
         alert(j.error || '評價失敗')
         return
       }
@@ -1176,6 +1206,10 @@ ${criteriaText}
     
     if (!r.ok) {
       const errorData = await r.json()
+      if (isUnauthorizedResponse(r, errorData)) {
+        await handleTokenRefresh()
+        return
+      }
       alert(errorData.error || '更新職種失敗')
       return
     }
@@ -1352,6 +1386,10 @@ ${criteriaText}
     
     if (!r.ok) {
       const result = await r.json()
+      if (isUnauthorizedResponse(r, result)) {
+        await handleTokenRefresh()
+        return
+      }
       alert(result.error === 'XOR_PROFILE_EMAIL' ? '用戶 ID 與 Email 只能填寫其中一項' : result.error === 'PROFILE_ID_NOT_FOUND' ? '找不到該用戶 ID' : '更新失敗')
       return
     }
