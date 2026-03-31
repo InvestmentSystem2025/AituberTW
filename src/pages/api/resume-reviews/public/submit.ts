@@ -141,6 +141,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       criteriaResults: Array<{ name: string; label: 'MUST' | 'PLUS' | 'NG'; matched: boolean; score?: number; reasoning?: string }>
       fitScore: number
       summary: string
+      specialAttention: string[]
     }
 
     try {
@@ -153,6 +154,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         criteriaResults: aiReviewed.criteria_results,
         fitScore: aiReviewed.fit_score,
         summary: aiReviewed.summary,
+        specialAttention: aiReviewed.special_attention,
       }
     } catch (aiErr) {
       // fallback: 若 OpenAI 暫時不可用，仍可回退到規則比對避免流程中斷
@@ -166,6 +168,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })),
         fitScore: fallback.fitScore,
         summary: fallback.summary,
+        specialAttention: [],
       }
     }
 
@@ -176,7 +179,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (mustNotMatched.length > 0) failReasonParts.push(`必須條件未滿足：${mustNotMatched.map((x) => x.name).join('、')}`)
     if (ngMatched.length > 0) failReasonParts.push(`命中 NG 條件：${ngMatched.map((x) => x.name).join('、')}`)
     const decisionText = isPassed ? '審查通過' : '審查不通過'
-    const mergedSummary = [decisionText, evaluated.summary, failReasonParts.join('；')].filter(Boolean).join(' | ')
+    const specialAttentionText = evaluated.specialAttention
+      .map((x) => String(x || '').trim())
+      .filter(Boolean)
+      .slice(0, 5)
+      .join('；')
+    const mergedSummary = [
+      decisionText,
+      evaluated.summary,
+      failReasonParts.join('；'),
+      specialAttentionText ? `【特別注意】${specialAttentionText}` : '',
+    ]
+      .filter(Boolean)
+      .join(' | ')
 
     const { error: resultErr } = await supa.from('resume_review_results').insert({
       review_request_id: requestRow.id,

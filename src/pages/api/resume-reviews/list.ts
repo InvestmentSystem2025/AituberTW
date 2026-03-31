@@ -2,6 +2,24 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createAuthContext } from '@/lib/authContext'
 import { getServiceClient } from '@/lib/supabaseServer'
 
+function splitSummaryAndSpecialAttention(rawSummary: string): { summary: string; special_attention: string[] } {
+  const source = String(rawSummary || '')
+  const marker = '【特別注意】'
+  const markerIdx = source.indexOf(marker)
+  if (markerIdx < 0) {
+    return { summary: source, special_attention: [] }
+  }
+
+  const summary = source.slice(0, markerIdx).replace(/\s+\|\s*$/, '').trim()
+  const specialRaw = source.slice(markerIdx + marker.length).trim()
+  const special_attention = specialRaw
+    .split(/[；;|\n]/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .slice(0, 5)
+  return { summary, special_attention }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end()
 
@@ -71,6 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : Array.isArray(reqRemarks) && reqRemarks[0]
           ? String((reqRemarks[0] as { remarks?: string }).remarks || '')
           : ''
+    const parsedSummary = splitSummaryAndSpecialAttention(String(r.summary || ''))
     return {
       review_result_id: r.id,
       candidate_profile_id: candidateProfileId,
@@ -80,7 +99,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       job_title: r.job_opening?.job_title || '',
       fit_score: r.fit_score,
       criteria_results: r.criteria_results,
-      summary: r.summary || '',
+      summary: parsedSummary.summary,
+      special_attention: parsedSummary.special_attention,
       remarks,
       created_at: r.created_at,
     }

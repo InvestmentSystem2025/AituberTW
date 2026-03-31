@@ -12,6 +12,7 @@ type AiReviewOutput = {
   fit_score: number
   summary: string
   criteria_results: AiCriteriaResult[]
+  special_attention: string[]
 }
 
 function clampScore(v: number): number {
@@ -43,6 +44,12 @@ function normalizeAiOutput(raw: any, standards: ResumeReviewStandard[]): AiRevie
     fit_score: clampScore(Number(raw?.fit_score)),
     summary: String(raw?.summary || '').slice(0, 2000),
     criteria_results,
+    special_attention: Array.isArray(raw?.special_attention)
+      ? raw.special_attention
+          .map((x: any) => String(x || '').trim())
+          .filter(Boolean)
+          .slice(0, 5)
+      : [],
   }
 }
 
@@ -90,13 +97,16 @@ export async function runOpenAiResumeReview(args: {
     '      "score": number(0-100),',
     '      "reasoning": "判斷理由（盡量引用履歷內容）"',
     '    }',
-    '  ]',
+    '  ],',
+    '  "special_attention": ["需要特別注意的事項（病氣、家族因素、就業限制等）"]',
     '}',
     '',
     '規則：',
     '1) criteria_results 需要涵蓋所有標準名稱，不可漏掉。',
     '2) label=NG 若命中應降低 fit_score。',
     '3) fit_score 是整體適配度百分比。',
+    '4) 若履歷提到病氣、家族照護/家庭重大因素、長期請假限制等，必須寫入 special_attention（可多項）。若沒有就輸出空陣列。',
+    '5) 關於「業務經驗年數」：若招聘方已明示自己的計分標準，優先遵守招聘方標準；若未明示，使用預設加分規則：1-3年=50分、3-5年=75分、5年以上=100分（少於1年可視為25分）。此規則應反映在相關 criteria 的 score 與 reasoning。',
   ].join('\n')
 
   const resp = await fetch('https://api.openai.com/v1/chat/completions', {

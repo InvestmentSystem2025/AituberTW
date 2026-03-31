@@ -4496,6 +4496,12 @@ ${criteriaText}
                     <div><b>fit_score：</b>{x.fit_score}%</div>
                     <div><b>summary：</b>{x.summary || '-'}</div>
                     <div>
+                      <b>特別注意：</b>
+                      {Array.isArray(x.special_attention) && x.special_attention.length > 0
+                        ? x.special_attention.join('；')
+                        : '—'}
+                    </div>
+                    <div>
                       <b>criteria：</b>
                       <div style={{ marginTop: 6, display: 'grid', gap: 6 }}>
                         {Array.isArray(x.criteria_results) && x.criteria_results.length > 0 ? (
