@@ -1,6 +1,17 @@
 import crypto from 'crypto'
 
-export type ResumeReviewLabel = 'MUST' | 'PLUS' | 'NG'
+export type ResumeReviewLabel = 'MUST' | 'PLUS' | 'MINUS' | 'NG'
+
+/** 審查標準類型（後台／下拉選單顯示用） */
+export const RESUME_REVIEW_LABEL_ZH: Record<ResumeReviewLabel, string> = {
+  MUST: '必須',
+  PLUS: '加分',
+  MINUS: '減分',
+  NG: '禁止(有符合就不通過)',
+}
+
+/** 下拉選單選項順序 */
+export const RESUME_REVIEW_LABEL_ORDER: readonly ResumeReviewLabel[] = ['MUST', 'PLUS', 'MINUS', 'NG']
 
 export type ResumeReviewStandard = {
   name: string
@@ -63,17 +74,20 @@ export function evaluateResumeAgainstStandards(
 
   const mustItems = criteriaResults.filter((x) => x.label === 'MUST')
   const plusItems = criteriaResults.filter((x) => x.label === 'PLUS')
+  const minusItems = criteriaResults.filter((x) => x.label === 'MINUS')
   const ngItems = criteriaResults.filter((x) => x.label === 'NG')
 
   const mustMatched = mustItems.filter((x) => x.matched).length
   const plusMatched = plusItems.filter((x) => x.matched).length
+  const minusMatched = minusItems.filter((x) => x.matched).length
   const ngMatched = ngItems.filter((x) => x.matched).length
 
   const mustScore = mustItems.length > 0 ? (mustMatched / mustItems.length) * 70 : 70
   const plusScore = plusItems.length > 0 ? (plusMatched / plusItems.length) * 30 : 0
   const ngPenalty = ngMatched * 20
-  const fitScore = Math.max(0, Math.min(100, Number((mustScore + plusScore - ngPenalty).toFixed(2))))
+  const minusPenalty = minusMatched * 15
+  const fitScore = Math.max(0, Math.min(100, Number((mustScore + plusScore - ngPenalty - minusPenalty).toFixed(2))))
 
-  const summary = `MUST ${mustMatched}/${mustItems.length || 0}, PLUS ${plusMatched}/${plusItems.length || 0}, NG ${ngMatched}/${ngItems.length || 0}`
+  const summary = `MUST ${mustMatched}/${mustItems.length || 0}, PLUS ${plusMatched}/${plusItems.length || 0}, MINUS ${minusMatched}/${minusItems.length || 0}, NG ${ngMatched}/${ngItems.length || 0}`
   return { criteriaResults, fitScore, summary }
 }

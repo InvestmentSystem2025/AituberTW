@@ -2,22 +2,45 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createAuthContext } from '@/lib/authContext'
 import { getServiceClient } from '@/lib/supabaseServer'
 
-function splitSummaryAndSpecialAttention(rawSummary: string): { summary: string; special_attention: string[] } {
+function splitSummaryMeta(rawSummary: string): {
+  summary: string
+  special_attention: string[]
+  non_job_experience: string[]
+} {
   const source = String(rawSummary || '')
-  const marker = '【特別注意】'
-  const markerIdx = source.indexOf(marker)
-  if (markerIdx < 0) {
-    return { summary: source, special_attention: [] }
+  const markerRegex = /【(特別注意|非職務上經歷)】/g
+  const matches = Array.from(source.matchAll(markerRegex))
+  if (matches.length === 0) {
+    return { summary: source, special_attention: [], non_job_experience: [] }
   }
 
-  const summary = source.slice(0, markerIdx).replace(/\s+\|\s*$/, '').trim()
-  const specialRaw = source.slice(markerIdx + marker.length).trim()
-  const special_attention = specialRaw
-    .split(/[；;|\n]/)
-    .map((x) => x.trim())
-    .filter(Boolean)
-    .slice(0, 5)
-  return { summary, special_attention }
+  const summary = source.slice(0, matches[0].index || 0).replace(/\s+\|\s*$/, '').trim()
+  const special_attention: string[] = []
+  const non_job_experience: string[] = []
+
+  for (let i = 0; i < matches.length; i++) {
+    const current = matches[i]
+    const markerName = String(current[1] || '')
+    const bodyStart = (current.index || 0) + current[0].length
+    const bodyEnd = i + 1 < matches.length ? (matches[i + 1].index || source.length) : source.length
+    const bodyText = source.slice(bodyStart, bodyEnd).trim().replace(/^\|\s*/, '')
+    const items = bodyText
+      .split(/[；;|\n]/)
+      .map((x) => x.trim())
+      .filter(Boolean)
+
+    if (markerName === '特別注意') {
+      special_attention.push(...items)
+    } else if (markerName === '非職務上經歷') {
+      non_job_experience.push(...items)
+    }
+  }
+
+  return {
+    summary,
+    special_attention: special_attention.slice(0, 5),
+    non_job_experience: non_job_experience.slice(0, 8),
+  }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -89,7 +112,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : Array.isArray(reqRemarks) && reqRemarks[0]
           ? String((reqRemarks[0] as { remarks?: string }).remarks || '')
           : ''
-    const parsedSummary = splitSummaryAndSpecialAttention(String(r.summary || ''))
+    const parsedSummary = splitSummaryMeta(String(r.summary || ''))
     return {
       review_result_id: r.id,
       candidate_profile_id: candidateProfileId,
@@ -101,6 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       criteria_results: r.criteria_results,
       summary: parsedSummary.summary,
       special_attention: parsedSummary.special_attention,
+      non_job_experience: parsedSummary.non_job_experience,
       remarks,
       created_at: r.created_at,
     }

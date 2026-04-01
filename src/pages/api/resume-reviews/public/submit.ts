@@ -138,10 +138,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const extracted = await uploadAndExtractResume(file.filepath, file.originalFilename || 'resume.pdf', file.mimetype || 'application/pdf')
     let evaluated: {
-      criteriaResults: Array<{ name: string; label: 'MUST' | 'PLUS' | 'NG'; matched: boolean; score?: number; reasoning?: string }>
+      criteriaResults: Array<{ name: string; label: 'MUST' | 'PLUS' | 'MINUS' | 'NG'; matched: boolean; score?: number; reasoning?: string }>
       fitScore: number
       summary: string
       specialAttention: string[]
+      nonJobExperience: string[]
     }
 
     try {
@@ -155,6 +156,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         fitScore: aiReviewed.fit_score,
         summary: aiReviewed.summary,
         specialAttention: aiReviewed.special_attention,
+        nonJobExperience: aiReviewed.non_job_experience,
       }
     } catch (aiErr) {
       // fallback: 若 OpenAI 暫時不可用，仍可回退到規則比對避免流程中斷
@@ -169,6 +171,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         fitScore: fallback.fitScore,
         summary: fallback.summary,
         specialAttention: [],
+        nonJobExperience: [],
       }
     }
 
@@ -177,18 +180,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const isPassed = mustNotMatched.length === 0 && ngMatched.length === 0
     const failReasonParts: string[] = []
     if (mustNotMatched.length > 0) failReasonParts.push(`必須條件未滿足：${mustNotMatched.map((x) => x.name).join('、')}`)
-    if (ngMatched.length > 0) failReasonParts.push(`命中 NG 條件：${ngMatched.map((x) => x.name).join('、')}`)
+    if (ngMatched.length > 0) failReasonParts.push(`命中禁止條件：${ngMatched.map((x) => x.name).join('、')}`)
     const decisionText = isPassed ? '審查通過' : '審查不通過'
     const specialAttentionText = evaluated.specialAttention
       .map((x) => String(x || '').trim())
       .filter(Boolean)
       .slice(0, 5)
       .join('；')
+    const nonJobExperienceText = evaluated.nonJobExperience
+      .map((x) => String(x || '').trim())
+      .filter(Boolean)
+      .slice(0, 8)
+      .join('；')
     const mergedSummary = [
       decisionText,
       evaluated.summary,
       failReasonParts.join('；'),
       specialAttentionText ? `【特別注意】${specialAttentionText}` : '',
+      nonJobExperienceText ? `【非職務上經歷】${nonJobExperienceText}` : '',
     ]
       .filter(Boolean)
       .join(' | ')

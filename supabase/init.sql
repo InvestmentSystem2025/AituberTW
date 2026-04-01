@@ -2488,7 +2488,7 @@ CREATE TABLE IF NOT EXISTS public.resume_review_standards (
   company_id UUID NOT NULL REFERENCES public.company(id) ON DELETE CASCADE,
   job_opening_id UUID NOT NULL REFERENCES public.job_opening(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
-  label TEXT NOT NULL CHECK (label IN ('MUST', 'PLUS', 'NG')),
+  label TEXT NOT NULL CHECK (label IN ('MUST', 'PLUS', 'MINUS', 'NG')),
   sort_order INTEGER NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (job_opening_id, name)

@@ -4,6 +4,8 @@ import { supabase } from '@/lib/supabaseClient'
 import settingsStore from '@/features/stores/settings'
 import type { AIService } from '@/features/constants/settings'
 import { GuidedOverlay } from '@/components/tutorial/GuidedOverlay'
+import type { ResumeReviewLabel } from '@/lib/resumeReview'
+import { RESUME_REVIEW_LABEL_ORDER, RESUME_REVIEW_LABEL_ZH } from '@/lib/resumeReview'
 
 type RecruiterTutorialState = {
   active: boolean
@@ -59,7 +61,7 @@ type ResumeReviewStandard = {
   company_id: string
   job_opening_id: string
   name: string
-  label: 'MUST' | 'PLUS' | 'NG'
+  label: ResumeReviewLabel
   sort_order: number
 }
 type Question = { id: string; name?: string; source: 'AI' | 'USER'; detail?: any }
@@ -222,7 +224,7 @@ export default function CompanyAdminPage() {
   const [newJOQ, setNewJOQ] = useState({ job_opening_id: '', question_bank_id: '', questions: [] as string[], showForm: false })
   const [newIV, setNewIV] = useState({ job_opening_id: '', start_time: '', end_time: '', profiles_id: '', candidate_email: '', review_type: 'HUMAN' as 'AI' | 'HUMAN' | 'MIXED' })
   const [newReviewStandardJobOpeningId, setNewReviewStandardJobOpeningId] = useState('')
-  const [reviewStandardDrafts, setReviewStandardDrafts] = useState<Array<{ name: string; label: 'MUST' | 'PLUS' | 'NG' }>>([
+  const [reviewStandardDrafts, setReviewStandardDrafts] = useState<Array<{ name: string; label: ResumeReviewLabel }>>([
     { name: '', label: 'MUST' },
   ])
   const [newReviewRequest, setNewReviewRequest] = useState({ job_opening_id: '', candidate_email: '', remarks: '' })
@@ -4264,14 +4266,16 @@ ${criteriaText}
                         value={draft.label}
                         onChange={(e) =>
                           setReviewStandardDrafts((prev) =>
-                            prev.map((x, i) => (i === idx ? { ...x, label: e.target.value as 'MUST' | 'PLUS' | 'NG' } : x))
+                            prev.map((x, i) => (i === idx ? { ...x, label: e.target.value as ResumeReviewLabel } : x))
                           )
                         }
-                        style={{ padding: 8, border: '2px solid #000', width: 130 }}
+                        style={{ padding: 8, border: '2px solid #000', minWidth: 220, maxWidth: 280 }}
                       >
-                        <option value="MUST">必須</option>
-                        <option value="PLUS">加分</option>
-                        <option value="NG">NG</option>
+                        {RESUME_REVIEW_LABEL_ORDER.map((lv) => (
+                          <option key={lv} value={lv}>
+                            {RESUME_REVIEW_LABEL_ZH[lv]}
+                          </option>
+                        ))}
                       </select>
                       {reviewStandardDrafts.length > 1 && (
                         <button
@@ -4322,11 +4326,13 @@ ${criteriaText}
                           <select
                             value={s.label}
                             onChange={(e) => setReviewStandards((prev) => prev.map((x) => (x.id === s.id ? { ...x, label: e.target.value as any } : x)))}
-                            style={{ padding: 8, border: '2px solid #000', width: 120 }}
+                            style={{ padding: 8, border: '2px solid #000', minWidth: 220, maxWidth: 280 }}
                           >
-                            <option value="MUST">MUST</option>
-                            <option value="PLUS">PLUS</option>
-                            <option value="NG">NG</option>
+                            {RESUME_REVIEW_LABEL_ORDER.map((lv) => (
+                              <option key={lv} value={lv}>
+                                {RESUME_REVIEW_LABEL_ZH[lv]}
+                              </option>
+                            ))}
                           </select>
                           <button onClick={() => updateReviewStandard(s, {})} style={{ padding: '6px 12px', background: '#2196F3', color: 'white' }}>儲存</button>
                           <button onClick={() => removeReviewStandard(s)} style={{ padding: '6px 12px', background: '#f44336', color: 'white' }}>刪除</button>
@@ -4408,7 +4414,7 @@ ${criteriaText}
                         failReasons.push(`必須條件未滿足：${mustNotMatched.map((c: any) => c.name).join('、')}`)
                       }
                       if (ngMatched.length > 0) {
-                        failReasons.push(`命中 NG 條件：${ngMatched.map((c: any) => c.name).join('、')}`)
+                        failReasons.push(`命中禁止條件：${ngMatched.map((c: any) => c.name).join('、')}`)
                       }
                       return (
                         <div style={{ marginBottom: 8, padding: 8, borderRadius: 6, background: isPassed ? '#dcfce7' : '#fee2e2', color: isPassed ? '#166534' : '#991b1b' }}>
@@ -4502,12 +4508,21 @@ ${criteriaText}
                         : '—'}
                     </div>
                     <div>
+                      <b>非職務上經歷：</b>
+                      {Array.isArray(x.non_job_experience) && x.non_job_experience.length > 0
+                        ? x.non_job_experience.join('；')
+                        : '—'}
+                    </div>
+                    <div>
                       <b>criteria：</b>
                       <div style={{ marginTop: 6, display: 'grid', gap: 6 }}>
                         {Array.isArray(x.criteria_results) && x.criteria_results.length > 0 ? (
                           x.criteria_results.map((c: any, idx: number) => (
                             <div key={`${x.review_result_id}-${idx}`} style={{ padding: 8, border: '1px solid #999', borderRadius: 6, background: '#fff' }}>
-                              <div><b>{c.name}</b> [{c.label}] - {c.matched ? '符合' : '不符合'}</div>
+                              <div>
+                                <b>{c.name}</b> [{RESUME_REVIEW_LABEL_ZH[c.label as ResumeReviewLabel] ?? c.label}] -{' '}
+                                {c.matched ? '符合' : '不符合'}
+                              </div>
                               <div>score: {typeof c.score === 'number' ? `${c.score}%` : '-'}</div>
                               <div style={{ color: '#374151' }}>reason: {c.reasoning || '-'}</div>
                             </div>

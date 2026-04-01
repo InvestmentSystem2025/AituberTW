@@ -2,7 +2,7 @@ import type { ResumeReviewStandard } from '@/lib/resumeReview'
 
 type AiCriteriaResult = {
   name: string
-  label: 'MUST' | 'PLUS' | 'NG'
+  label: 'MUST' | 'PLUS' | 'MINUS' | 'NG'
   matched: boolean
   score: number
   reasoning: string
@@ -13,6 +13,7 @@ type AiReviewOutput = {
   summary: string
   criteria_results: AiCriteriaResult[]
   special_attention: string[]
+  non_job_experience: string[]
 }
 
 function clampScore(v: number): number {
@@ -49,6 +50,12 @@ function normalizeAiOutput(raw: any, standards: ResumeReviewStandard[]): AiRevie
           .map((x: any) => String(x || '').trim())
           .filter(Boolean)
           .slice(0, 5)
+      : [],
+    non_job_experience: Array.isArray(raw?.non_job_experience)
+      ? raw.non_job_experience
+          .map((x: any) => String(x || '').trim())
+          .filter(Boolean)
+          .slice(0, 8)
       : [],
   }
 }
@@ -99,14 +106,18 @@ export async function runOpenAiResumeReview(args: {
     '    }',
     '  ],',
     '  "special_attention": ["需要特別注意的事項（疾病、家族因素、就業限制等）"]',
+    '  "non_job_experience": ["與職缺相關但非正式職務經歷（如專案、證書、社群貢獻）"]',
     '}',
     '',
     '規則：',
     '1) criteria_results 需要涵蓋所有標準名稱，不可漏掉。',
-    '2) label=NG 若命中應降低 fit_score。',
-    '3) fit_score 是整體適配度百分比。',
-    '4) 若履歷提到疾病、家族照護/家庭重大因素，長期請假限制等、或是履歷中明顯有以上問題的跡象，必須寫入 special_attention（可多項）。若沒有就輸出空陣列。',
-    '5) 關於「業務經驗年數」：若招聘方已明示自己的計分標準，優先遵守招聘方標準；若未明示，使用預設加分規則：1-3年=50分、3-5年=75分、5年以上=100分（少於1年可視為25分）。此規則應反映在相關 criteria 的 score 與 reasoning。',
+    '2) label=NG（禁止）若命中 matched=true 則審查不通過。',
+    '3) label=MINUS（減分）若命中 matched=true 應明顯拉低 fit_score 與該項 score（表示不利因素），但不單獨構成審查不通過。',
+    '4) fit_score 是整體適配度百分比。',
+    '5) 若履歷提到疾病、家族照護/家庭重大因素，長期請假限制等、或是履歷中明顯有以上問題的跡象，必須寫入 special_attention（可多項）。若沒有就輸出空陣列。',
+    '6) 關於「業務經驗年數」：若招聘方已明示自己的計分標準，優先遵守招聘方標準；若未明示，使用預設加分規則：1-3年=50分、3-5年=60分、5年以上=70分（少於1年可視為25分）。此規則應反映在相關 criteria 的 score 與 reasoning。',
+    '7) 針對職務經驗的判斷（例如 Web 服務開發/室內設計師/），職務相關分數只計入同職務或同產業的實務經驗。(例如:若僅有一般程式經驗、但無 Web 服務公司實務經驗（含團隊開發規則、社內聯絡規則等），必需在該職務相關 criteria 給 0 分。',
+    '8) 履歷中的相關專案、證書、自學作品、社群貢獻等「非正式職務經歷」請整理到 non_job_experience（可多項）。這些可做輔助評語，但不得直接等同正式職務年資。',
   ].join('\n')
 
   const resp = await fetch('https://api.openai.com/v1/chat/completions', {
