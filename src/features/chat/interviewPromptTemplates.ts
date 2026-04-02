@@ -3,27 +3,31 @@
  */
 
 // 性格判斷題目列表（會在正式職務相關問題之前先詢問）
+// 每題設計可同時提供多個模型（Big Five / Schwartz / DISC / 核心特質）的判斷訊號
 export const PERSONALITY_QUESTION_LIST: string[] = [
-  // 外向 / 內向
+  // ── 外向性（Big Five: Extraversion）/ DISC: I vs S ──
   '在朋友聚會或家庭聚餐時，你通常會主動帶話題、認識新朋友，還是比較習慣安靜地聽大家聊天、只跟熟悉的人互動？請舉一個最近的情況說明。',
 
-  // 盡責 / 隨性
+  // ── 盡責性（Big Five: Conscientiousness）/ 核心特質: 責任感 / DISC: C ──
   '如果你同時有幾件重要的事情要在一兩週內完成（例如：考試準備、工作任務、家人交代的事情），你通常會怎麼安排時間與順序？請分享一個你覺得安排得不錯的經驗。',
 
-  // 細心 / 粗心
-  //'請分享一次你在日常生活、學校或工作中，因為特別細心（或一時不夠細心）而對結果造成明顯影響的經驗，包括當時發生了什麼事、你如何發現、最後怎麼處理。',
+  // ── 誠實性/責任感（核心特質: Integrity）/ Big Five: Conscientiousness ──
+  '如果你答應了今天要完成某件事，但中途遇到突發狀況或阻礙，你通常會怎麼處理？請舉一個最近的例子說明。',
 
-  // 主動 / 被動
-  //'想一想最近一段時間，你有沒有主動提出過什麼想法或改變（例如：改善某個流程、提出活動構想、幫忙解決一個沒人負責的問題）？請描述你當時怎麼發現這個需求、是怎麼行動的。',
+  // ── 動機/主動性（核心特質: Motivation）/ Big Five: Openness / Schwartz: growth vs money ──
+  '請分享一次你主動發現一個問題，並提出或實際去推動改善的經驗——不一定是大事，日常生活或工作中的情況都算。當時是什麼讓你決定要行動？',
 
-  // 學習與成長心態
-  //'請分享一次你面對一個「一開始不太熟悉或有點怕」的領域（例如：新工具、新工作內容、新科目），你是怎麼學習、怎麼克服不熟悉感的？最後結果如何？',
+  // ── 智能/理解力（核心特質: Intelligence）/ Big Five: Openness / DISC: C ──
+  '當主管或客戶給你一個比較模糊的指示，例如「把這個做得更好用一點」，你通常會怎麼去理解它、確認方向，然後開始執行？可以舉個例子嗎？',
 
-  // 抗壓與情緒穩定
-  //'請回想一次你壓力特別大的時候（例如：時間很趕、事情很多、家裡和工作/學校同時都有狀況），你當時的情緒狀態如何？你用了哪些方法讓自己撐過去或調整狀態？',
+  // ── 再現性/穩定性（核心特質: Consistency）/ Big Five: Neuroticism / DISC: S ──
+  '你有沒有注意到自己在某些狀態下表現特別好，某些時候比較難發揮？是什麼因素對你的狀態影響最大？你通常會怎麼調整？',
 
-  // 合作與溝通方式
-  //'請分享一次你和其他人一起完成某件事情的經驗（可以是工作、社團、專題、活動等），你在其中扮演的角色是什麼？過程中有沒有發生意見不一致，你是怎麼處理的？'
+  // ── Schwartz 價值觀（金錢 vs 成長 vs 穩定 vs 權力）/ 離職風險評估 ──
+  '假設你目前有兩個工作機會：一個薪水明顯較高但工作內容比較固定；另一個薪水普通但學習空間大、有更多自主發揮的空間。你會怎麼選擇？為什麼？',
+
+  // ── 協調性/合作（Big Five: Agreeableness）/ DISC: S vs D ──
+  '請分享一次你和別人在做事方式上有明顯分歧，而你認為自己的方法比較好的情況。你當時是怎麼處理的？最後結果如何？',
 ];
 
 export const INTERVIEW_PROMPT_TEMPLATES = {
@@ -97,18 +101,12 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
 
 **人格判斷輸出規則（只在要結束面試時必須加入完整內容）：**
 - 每一次評分 JSON 都必須包含 "personality" 這個欄位，非結束面試時一律輸出 "personality": null,禁止省略此欄位。
-- 只有在「要結束整場面試的最後一次回應」時，才可以把 "personality" 從 null 改成一個 JSON 物件，且必須包含以下七個面向的判斷：
-  "personality": { 
-    "extraversion": "偏外向 / 偏內向 / 介於中間，並說明依據（根據人格判斷用問題列表中的外向/內向相關問題）",
-    "conscientiousness": "非常盡責 / 普通 / 較隨性，並說明依據（根據人格判斷用問題列表中的盡責/隨性相關問題）",
-    "detail_attentiveness": "偏細心 / 偏粗心 / 介於中間，並說明依據（根據人格判斷用問題列表中的細心/粗心相關問題）",
-    "proactivity": "偏主動 / 偏被動 / 介於中間，並說明依據（根據人格判斷用問題列表中的主動/被動相關問題）",
-    "learning_mindset": "學習與成長心態的傾向與說明（根據人格判斷用問題列表中的學習與成長心態相關問題）",
-    "stress_resilience": "抗壓與情緒穩定的傾向與說明（根據人格判斷用問題列表中的抗壓與情緒穩定相關問題）",
-    "collaboration": "合作與溝通方式的傾向與說明（根據人格判斷用問題列表中的合作與溝通方式相關問題）",
-    "summaryText": "用5-6句完整總結面試者整體性格特徵與工作風格"
-  }
-
+- 只有在「要結束整場面試的最後一次回應」時，才可以把 "personality" 從 null 改成一個 JSON 物件。
+- 人格判斷必須以「面試回答的具體行為證據」為依據；若某維度資訊不足，在 reason/interpretation 中標示「信心不足」，並輸出保守的中間分數（50分左右）。
+- 分數為 0–100 整數，label 對應：85–100=高、70–84=中高、50–69=中、35–49=中低、0–34=低。
+- 禁止做醫療、臨床或絕對化結論；所有判斷基於「根據回答推測」。
+- personality 物件必須符合以下完整結構（單行 JSON，所有 key 都必須出現）：
+  "personality": {"personality_summary":{"overview":"2-3句整體人格總結","strengths":["優點1","優點2"],"risks":["風險1"],"confidence":"high或medium或low"},"core_traits":{"integrity":{"score":整數0到100,"label":"高/中高/中/中低/低","reason":"依據摘要","confidence":"high或medium或low"},"intelligence":{"score":整數0到100,"label":"高/中高/中/中低/低","reason":"依據摘要","confidence":"high或medium或low"},"motivation":{"score":整數0到100,"label":"高/中高/中/中低/低","reason":"依據摘要","confidence":"high或medium或low"},"consistency":{"score":整數0到100,"label":"高/中高/中/中低/低","reason":"依據摘要","confidence":"high或medium或low"}},"schwartz_values":{"money":整數0到100,"growth":整數0到100,"stability":整數0到100,"power":整數0到100,"interpretation":"最高傾向解讀與離職風險說明"},"big_five":{"openness":整數0到100,"conscientiousness":整數0到100,"extraversion":整數0到100,"agreeableness":整數0到100,"neuroticism":整數0到100,"interpretation":"職種適性與主要性格解讀"},"disc":{"d":整數0到100,"i":整數0到100,"s":整數0到100,"c":整數0到100,"primary_type":"D或I或S或C","secondary_type":"D或I或S或C","interpretation":"團隊定位與行為模式說明"},"turnover_risk":{"level":"high或medium或low","reason":"離職風險說明"},"summaryText":"5-6句整體性格與工作風格總結"}
 **評分標準：**
 {scoringCriteria}
 

@@ -6,6 +6,7 @@ import type { AIService } from '@/features/constants/settings'
 import { GuidedOverlay } from '@/components/tutorial/GuidedOverlay'
 import type { ResumeReviewLabel } from '@/lib/resumeReview'
 import { RESUME_REVIEW_LABEL_ORDER, RESUME_REVIEW_LABEL_ZH } from '@/lib/resumeReview'
+import { PersonalityAnalysisPanel } from '@/components/interview/PersonalityAnalysisPanel'
 
 type RecruiterTutorialState = {
   active: boolean
@@ -3955,34 +3956,12 @@ ${criteriaText}
                                                 )}
 
                                                 {hasPersonality && (
-                                                  <div style={{ marginTop: 4 }}>
-                                                    <span style={{ fontWeight: 'bold' }}>人格分析：</span>
-                                                    <div style={{ marginLeft: 12 }}>
-                                                      {t.personality.summaryText && (
-                                                        <div>總結：{t.personality.summaryText}</div>
-                                                      )}
-                                                      {t.personality.extraversion && (
-                                                        <div>外向傾向：{t.personality.extraversion}</div>
-                                                      )}
-                                                      {t.personality.conscientiousness && (
-                                                        <div>盡責程度：{t.personality.conscientiousness}</div>
-                                                      )}
-                                                      {t.personality.detail_attentiveness && (
-                                                        <div>細心程度：{t.personality.detail_attentiveness}</div>
-                                                      )}
-                                                      {t.personality.proactivity && (
-                                                        <div>主動性：{t.personality.proactivity}</div>
-                                                      )}
-                                                      {t.personality.learning_mindset && (
-                                                        <div>學習與成長心態：{t.personality.learning_mindset}</div>
-                                                      )}
-                                                      {t.personality.stress_resilience && (
-                                                        <div>抗壓與情緒穩定：{t.personality.stress_resilience}</div>
-                                                      )}
-                                                      {t.personality.collaboration && (
-                                                        <div>合作與溝通方式：{t.personality.collaboration}</div>
-                                                      )}
-                                                    </div>
+                                                  <div style={{ marginTop: 8 }}>
+                                                    <div style={{ fontWeight: 'bold', marginBottom: 6 }}>人格分析：</div>
+                                                    <PersonalityAnalysisPanel
+                                                      personality={t.personality}
+                                                      compact
+                                                    />
                                                   </div>
                                                 )}
                                               </div>

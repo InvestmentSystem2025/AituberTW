@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { InterviewResult, AnswerScore, ScoreLevel, getScoreLevel, SCORE_LEVEL_DESCRIPTIONS, SCORE_LEVEL_COLORS, PersonalitySummary } from '@/types/interviewScoring'
 import { supabase } from '@/lib/supabaseClient'
+import { PersonalityAnalysisPanel } from '@/components/interview/PersonalityAnalysisPanel'
 
 interface Answer {
   question: {
@@ -291,58 +292,9 @@ export const InterviewResults: React.FC<InterviewResultsProps> = ({
 
           {/* 人格分析結果 */}
           {personalitySummary && (
-            <div className="mb-6 p-6 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg border">
-              <h2 className="text-xl font-semibold text-gray-800 mb-3">人格分析</h2>
-              <div className="space-y-2 text-sm text-gray-700">
-                {personalitySummary.extraversion && (
-                  <div>
-                    <span className="font-medium">外向傾向：</span>
-                    <span>{personalitySummary.extraversion}</span>
-                  </div>
-                )}
-                {personalitySummary.conscientiousness && (
-                  <div>
-                    <span className="font-medium">盡責程度：</span>
-                    <span>{personalitySummary.conscientiousness}</span>
-                  </div>
-                )}
-                {personalitySummary.detail_attentiveness && (
-                  <div>
-                    <span className="font-medium">細心程度：</span>
-                    <span>{personalitySummary.detail_attentiveness}</span>
-                  </div>
-                )}
-                {personalitySummary.proactivity && (
-                  <div>
-                    <span className="font-medium">主動性：</span>
-                    <span>{personalitySummary.proactivity}</span>
-                  </div>
-                )}
-                {personalitySummary.learning_mindset && (
-                  <div>
-                    <span className="font-medium">學習與成長心態：</span>
-                    <span>{personalitySummary.learning_mindset}</span>
-                  </div>
-                )}
-                {personalitySummary.stress_resilience && (
-                  <div>
-                    <span className="font-medium">抗壓與情緒穩定：</span>
-                    <span>{personalitySummary.stress_resilience}</span>
-                  </div>
-                )}
-                {personalitySummary.collaboration && (
-                  <div>
-                    <span className="font-medium">合作與溝通方式：</span>
-                    <span>{personalitySummary.collaboration}</span>
-                  </div>
-                )}
-                {personalitySummary.summaryText && (
-                  <div>
-                    <span className="font-medium">整體總結：</span>
-                    <span>{personalitySummary.summaryText}</span>
-                  </div>
-                )}
-              </div>
+            <div className="mb-6">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">人格分析</h2>
+              <PersonalityAnalysisPanel personality={personalitySummary} />
             </div>
           )}
           

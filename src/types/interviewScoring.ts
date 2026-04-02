@@ -5,16 +5,86 @@
 // 評分維度 - 支持動態評估項目（key -> score）
 export type ScoringCriteria = Record<string, number>
 
+// 核心特質單項（0-100 分 + 標籤 + 依據）
+export interface CoreTraitResult {
+  score: number             // 0–100
+  label: string             // 高 / 中高 / 中 / 中低 / 低
+  reason: string            // 判斷依據摘要
+  confidence?: 'high' | 'medium' | 'low'
+}
+
+// Schwartz 價值理論
+export interface SchwartzValues {
+  money: number             // 金錢導向 0–100
+  growth: number            // 成長導向 0–100
+  stability: number         // 穩定導向 0–100
+  power: number             // 權力/影響力導向 0–100
+  interpretation: string    // 整體解讀與離職風險說明
+}
+
+// Big Five 性格模型
+export interface BigFiveResult {
+  openness: number          // 開放性 0–100
+  conscientiousness: number // 盡責性 0–100
+  extraversion: number      // 外向性 0–100
+  agreeableness: number     // 協調性 0–100
+  neuroticism: number       // 神經質傾向 0–100
+  interpretation: string    // 職種適性與招募解讀
+}
+
+// DISC 行為模式
+export interface DISCResult {
+  d: number                 // 主導型 0–100
+  i: number                 // 影響型 0–100
+  s: number                 // 穩定型 0–100
+  c: number                 // 謹慎型 0–100
+  primary_type: 'D' | 'I' | 'S' | 'C'
+  secondary_type: 'D' | 'I' | 'S' | 'C'
+  interpretation: string    // 團隊定位與行為模式說明
+}
+
+// 離職風險
+export interface TurnoverRisk {
+  level: 'high' | 'medium' | 'low'
+  reason: string
+}
+
 // 人格判斷結果（由 AI 在最後一題輸出）
 export interface PersonalitySummary {
+  // ── 舊版欄位（向後相容） ──────────────────────────────
   extraversion?: string              // 外向/內向 傾向與說明
   conscientiousness?: string         // 盡責/隨性 傾向與說明
   detail_attentiveness?: string      // 細心/粗心 傾向與說明
   proactivity?: string               // 主動/被動 傾向與說明
   learning_mindset?: string          // 學習與成長心態 傾向與說明
-  stress_resilience?: string          // 抗壓與情緒穩定 傾向與說明
+  stress_resilience?: string         // 抗壓與情緒穩定 傾向與說明
   collaboration?: string             // 合作與溝通方式 傾向與說明
-  summaryText?: string               // 1-3 句整體性格總結
+  summaryText?: string               // 整體性格總結（5-6 句）
+
+  // ── 新版擴充：人格總覽 ───────────────────────────────
+  personality_summary?: {
+    overview: string
+    strengths: string[]
+    risks: string[]
+    confidence: 'high' | 'medium' | 'low'
+  }
+
+  // ── 新版擴充：四大核心特質 ───────────────────────────
+  core_traits?: {
+    integrity?: CoreTraitResult     // 誠實性/責任感
+    intelligence?: CoreTraitResult  // 智能/理解力
+    motivation?: CoreTraitResult    // 動機
+    consistency?: CoreTraitResult   // 再現性/穩定性
+  }
+
+  // ── 新版擴充：三大分析模型 ───────────────────────────
+  schwartz_values?: SchwartzValues
+  big_five?: BigFiveResult
+  disc?: DISCResult
+
+  // ── 新版擴充：離職風險 ───────────────────────────────
+  turnover_risk?: TurnoverRisk
+
   // 預留其他欄位，方便日後擴充
   [key: string]: any
 }
