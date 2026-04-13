@@ -83,7 +83,7 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
 **第二部分：評分信息（結束面試時需含最終人格判斷）**
 請輸出嚴格的單行 JSON（不換行、不加註解），基本格式如下：
 評分格式（必須是合法 JSON，鍵名與字串值都要加雙引號）：
-[SCORE_START]{"questionId":"Q1","questionText":"（必須與 currentQuestionText 完全一致）","answerText":"（逐字複製上一則回答全文；若有換行請用 \\n；字串內雙引號需跳脫為 \\\"）","nextAction":"followup",,"deductions":{"content_integrity":[{"points":1.5,"detail":"答非所問"}]},"additions":{"professional_depth":[{"points":1,"detail":"能說明 trade-off 並給出具體例子"}]}"scores":{"content_integrity":0,"logical_clarity":0,"professional_depth":0,"communication":0,"personal_attributes":0},"aiFeedback":"你的回饋內容","personality":null}[SCORE_END]
+[SCORE_START]{"questionId":"Q1","questionText":"（必須與 currentQuestionText 完全一致）","answerText":"（逐字複製上一則回答全文；若有換行請用 \\n；字串內雙引號需跳脫為 \\\"）","nextAction":"followup","deductions":{"content_integrity":[{"points":1.5,"detail":"答非所問"}]},"additions":{"professional_depth":[{"points":1,"detail":"能說明 trade-off 並給出具體例子"}]},"scores":{"content_integrity":0,"logical_clarity":0,"professional_depth":0,"communication":0,"personal_attributes":0},"aiFeedback":"你的回饋內容","personality":null}[SCORE_END]
 其中：
 - "questionText" 一定要對應「剛剛已經問過並且正在評分的那一題完整題目」，不能填成「下一題要問的題目」或任何說明文字。
 - 本回合的"questionText" 必須與【當前題目完整文字：{currentQuestionText}】完全一致。
@@ -97,11 +97,10 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
 - 若你判斷需要追問，設定 "nextAction":"followup"，並把追問句直接寫在 [CONTENT_START]...[CONTENT_END] 內（只問一次）。
   **此模式下嚴格禁止輸出 {nextQuestionText}。**
 - 若回答已充分，設定 "nextAction":"next"。此時你必須在 [CONTENT_START]...[CONTENT_END] 內問下一題。
-- 若要結束，設定 "nextAction":"end"，並依重要規則 8 結束面試（回覆內必須包含「面試到此結束」）。
+- 若要結束，設定 "nextAction":"end"，並輸出人格判斷欄位personality的內容，並結束面試（回覆內必須包含「面試到此結束」）。
 
 **人格判斷輸出規則（只在要結束面試時必須加入完整內容）：**
-- 每一次評分 JSON 都必須包含 "personality" 這個欄位，非結束面試時一律輸出 "personality": null,禁止省略此欄位。
-- 只有在「要結束整場面試的最後一次回應」時，才可以把 "personality" 從 null 改成一個 JSON 物件。
+- 每一次評分 JSON 都必須包含 "personality" 這個欄位，當nextAction不等於"end"時一律輸出 "personality": null，等於"end"時才輸出人格判斷(物件)。
 - 人格判斷必須以「面試回答的具體行為證據」為依據；若某維度資訊不足，在 reason/interpretation 中標示「信心不足」，並輸出保守的中間分數（50分左右）。
 - 分數為 0–100 整數，label 對應：85–100=高、70–84=中高、50–69=中、35–49=中低、0–34=低。
 - 禁止做醫療、臨床或絕對化結論；所有判斷基於「根據回答推測」。
@@ -134,9 +133,6 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
   3. **分數限制**：每個項目的最終分數絕對不能超過其滿分。例如，如果滿分是 10 分，最終分數必須在 0-10 之間。
 
 請根據上述評分標準對面試者的回答進行評分。每個標準都明確標示了滿分、計算邏輯（加分制或扣分制）以及具體的加分/減分依據。評分時請嚴格按照這些標準執行。
-
-當前對話歷史：
-{conversationHistory}
 
 請根據面試者的回答給予適當的回饋，並依 nextAction 規則決定「追問」或「進入下一題」或「結束面試」。
 記住：每次回應都必須包含情感標籤和評分信息！`,

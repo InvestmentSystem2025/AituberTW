@@ -37,6 +37,12 @@ interface ChatMessage {
   aiCurrentScores?: Record<string, number>
   // （選用）人格判斷結果，只會在最後一則 AI 回覆上出現
   personality?: any
+  // 單回合 token 使用量（僅 AI 訊息）
+  aiTokenUsage?: {
+    tokens_input: number
+    tokens_output: number
+    tokens_total: number
+  } | null
 }
 
 interface InterviewConfig {
@@ -154,6 +160,9 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         aiScoreEvents: t?.score_events && typeof t.score_events === 'object' ? t.score_events : (t?.aiScoreEvents && typeof t.aiScoreEvents === 'object' ? t.aiScoreEvents : undefined),
         aiCurrentScores: t?.current_scores && typeof t.current_scores === 'object' ? t.current_scores : (t?.aiCurrentScores && typeof t.aiCurrentScores === 'object' ? t.aiCurrentScores : undefined),
         personality: t?.personality ?? undefined,
+        aiTokenUsage: t?.token_usage && typeof t.token_usage === 'object'
+          ? t.token_usage
+          : (t?.aiTokenUsage && typeof t.aiTokenUsage === 'object' ? t.aiTokenUsage : undefined),
       })
     }
     return out
@@ -658,6 +667,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         current_scores: msg.type === 'ai' ? (msg.aiCurrentScores || null) : null,
         // 人格判斷結果（只會在最後一則 AI 回覆中非空）
         personality: msg.type === 'ai' ? (msg.personality || null) : null,
+        // 單回合 token 使用量（由串流 metadata 提供）
+        token_usage: msg.type === 'ai' ? (msg.aiTokenUsage || null) : null,
       }))
 
       // 計算duration
@@ -846,6 +857,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       let streamingContent = ''
       let finalEmotion = 'neutral'
       let finalScoreResult: AnswerScore | null = null
+      let finalTurnTokens: { tokens_input: number; tokens_output: number; tokens_total: number } | null = null
       
       // 初始化 TTS 隊列（新的回應）
       ttsQueueRef.current.sessionId = generateMessageId()
@@ -920,6 +932,17 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                   const to = Number((t as any).tokens_output)
                   if (Number.isFinite(ti) && ti >= 0) tokensInputRef.current += Math.floor(ti)
                   if (Number.isFinite(to) && to >= 0) tokensOutputRef.current += Math.floor(to)
+                  finalTurnTokens = {
+                    tokens_input: Number.isFinite(ti) && ti >= 0 ? Math.floor(ti) : 0,
+                    tokens_output: Number.isFinite(to) && to >= 0 ? Math.floor(to) : 0,
+                    tokens_total: (() => {
+                      const tt = Number((t as any).tokens_total)
+                      if (Number.isFinite(tt) && tt >= 0) return Math.floor(tt)
+                      const inTok = Number.isFinite(ti) && ti >= 0 ? Math.floor(ti) : 0
+                      const outTok = Number.isFinite(to) && to >= 0 ? Math.floor(to) : 0
+                      return inTok + outTok
+                    })(),
+                  }
                 }
                 // 為了方便檢驗：每題回答結束後印一次 token（本次 + 累計）
                 console.log('[Interview] 回答完成 token', {
@@ -1146,6 +1169,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                     },
                     aiCurrentScores: updatedScoresSnapshot,
                     personality: finalScoreResult?.personality,
+                    aiTokenUsage: finalTurnTokens,
                   }
                 : msg
             )
@@ -1165,8 +1189,71 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           setAnswerScores(nextAnswerScoresSnapshot)
           scoringEngine.addScoredAnswer(finalScoreResult)
 
+          const normalizeQuestionForCompare = (s: string) =>
+            String(s || '').replace(/\s+/g, '').replace(/[。！？!?，,、；;：:]/g, '').trim()
+
+          const extractLikelyQuestionFromContent = (content: string): string => {
+            const text = String(content || '').trim()
+            if (!text) return ''
+
+            const markers = ['接下來我會問下一題：', '接下來請回答：', '請回答：', '下一題：', '問題：']
+            for (const marker of markers) {
+              const idx = text.lastIndexOf(marker)
+              if (idx !== -1) {
+                const after = text.slice(idx + marker.length).trim()
+                if (after) return after
+              }
+            }
+
+            const lines = text
+              .split('\n')
+              .map((x) => x.trim())
+              .filter(Boolean)
+            if (lines.length === 0) return ''
+            return lines[lines.length - 1]
+          }
+
+          const findSequenceQuestionIndex = (candidate: string): number => {
+            const candNorm = normalizeQuestionForCompare(candidate)
+            if (!candNorm) return -1
+            return questionSequence.findIndex((q) => {
+              const qNorm = normalizeQuestionForCompare(String(q.question || ''))
+              return qNorm.length > 0 && (candNorm === qNorm || candNorm.includes(qNorm) || qNorm.includes(candNorm))
+            })
+          }
+
           // 依 nextAction 控制題號推進（避免 AI 自己亂出題）
-          const rawAction = (finalScoreResult.nextAction || 'next') as 'followup' | 'next' | 'end'
+          let rawAction = (finalScoreResult.nextAction || 'next') as 'followup' | 'next' | 'end'
+          // 問句抽取與題序校正：即使標記 followup，只要內容實際在問題庫題目，也強制校正
+          const likelyQuestion = extractLikelyQuestionFromContent(streamingContent)
+          const askedQuestionIdx = findSequenceQuestionIndex(likelyQuestion)
+          const expectedNextIdx = currentQuestionIndex + 1
+          const hasExpectedNext = Boolean(
+            questionSequence[expectedNextIdx] &&
+            typeof questionSequence[expectedNextIdx].question === 'string' &&
+            questionSequence[expectedNextIdx].question.trim().length > 0
+          )
+          if (rawAction !== 'end' && askedQuestionIdx !== -1 && hasExpectedNext) {
+            if (askedQuestionIdx === expectedNextIdx) {
+              // followup/next 標記錯亂但內容已是下一題，統一校正
+              rawAction = 'next'
+              streamingContent = String(questionSequence[expectedNextIdx].question)
+            } else if (askedQuestionIdx <= currentQuestionIndex || askedQuestionIdx > expectedNextIdx) {
+              // 重複舊題或跳題，強制拉回下一題
+              rawAction = 'next'
+              streamingContent = String(questionSequence[expectedNextIdx].question)
+            }
+            if (DEBUG_INTERVIEW) {
+              console.log('[Interview] question-order guard', {
+                currentQuestionIndex,
+                expectedNextIdx,
+                askedQuestionIdx,
+                rawActionAfterGuard: rawAction,
+                likelyQuestion,
+              })
+            }
+          }
+
           // 避免無限追問：達到上限後強制進下一題
           const action: 'followup' | 'next' | 'end' =
             (rawAction === 'followup' && followUpCount >= MAX_FOLLOWUPS) ? 'next' : rawAction
@@ -1182,6 +1269,23 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             const nextIdx = currentQuestionIndex + 1
             const nextQ = questionSequence[nextIdx]
             if (nextQ && typeof nextQ.question === 'string' && nextQ.question.trim().length > 0) {
+              const expectedNextQuestion = String(nextQ.question)
+              const expectedNorm = normalizeQuestionForCompare(expectedNextQuestion)
+              const actualNorm = normalizeQuestionForCompare(streamingContent)
+              const hasAskedSameBefore = questionSequence
+                .slice(0, nextIdx)
+                .some((q) => normalizeQuestionForCompare(String(q.question || '')) === actualNorm)
+              if (actualNorm !== expectedNorm || hasAskedSameBefore) {
+                if (DEBUG_INTERVIEW) {
+                  console.warn('[Interview] detect out-of-order/repeated next question, force-correcting', {
+                    currentQuestionIndex,
+                    expectedNextQuestion,
+                    aiContent: streamingContent,
+                    hasAskedSameBefore,
+                  })
+                }
+                streamingContent = expectedNextQuestion
+              }
               // 題庫有下一題：推進題號（題號仍用於追蹤/記錄）
               setCurrentQuestionIndex(nextIdx)
               setCurrentQuestionId(nextQ.id || '')
@@ -1199,8 +1303,11 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         }
         
         // 檢查是否為面試結束的回應
+        // 優先使用 nextAction=end，只有在拿不到 scoreResult 時才回退關鍵字判斷
         const endKeywords = ['面試到此結束', '面試結束', '感謝你的參與', '我們的面試', '後續流程']
-        const isInterviewEnding = endKeywords.some((keyword) => streamingContent.includes(keyword))
+        const isInterviewEndingByAction = decidedAction === 'end'
+        const isInterviewEndingByText = !finalScoreResult && endKeywords.some((keyword) => streamingContent.includes(keyword))
+        const isInterviewEnding = isInterviewEndingByAction || isInterviewEndingByText
 
         // ⭐ 關鍵：每題 AI 串流結束後只存一次（把 AI 回覆/評分落盤；不在「使用者送出」時先存，避免重複與錯位）
         // 若本回合已判定結束（endKeywords），則把 nowMs 快照留給最後一次 final save 使用，避免多打一發 save-session。
@@ -1224,6 +1331,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                     },
                     aiCurrentScores: updatedScores,
                     personality: finalScoreResult?.personality,
+                    aiTokenUsage: finalTurnTokens,
                   }
                 : m
             )
@@ -1373,6 +1481,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       score_events: msg.type === 'ai' ? (msg.aiScoreEvents || null) : null,
       current_scores: msg.type === 'ai' ? (msg.aiCurrentScores || null) : null,
       personality: msg.type === 'ai' ? (msg.personality || null) : null,
+      token_usage: msg.type === 'ai' ? (msg.aiTokenUsage || null) : null,
     }))
   }, [])
 

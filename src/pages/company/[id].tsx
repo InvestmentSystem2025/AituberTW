@@ -3766,14 +3766,40 @@ ${criteriaText}
                                     <div>
                                       <strong>Token 使用量：</strong>
                                       {(() => {
-                                        const ti = Number((session as any)?.tokens_input)
-                                        const to = Number((session as any)?.tokens_output)
-                                        const hasAny =
-                                          Number.isFinite(ti) || Number.isFinite(to)
-                                        if (!hasAny) return '—'
-                                        const inTok = Number.isFinite(ti) ? Math.max(0, Math.floor(ti)) : 0
-                                        const outTok = Number.isFinite(to) ? Math.max(0, Math.floor(to)) : 0
-                                        const total = inTok + outTok
+                                        // 優先使用逐回合 transcript token_usage 加總，避免 session 累加誤差
+                                        const transcript = Array.isArray((session as any)?.interview_transcript)
+                                          ? (session as any).interview_transcript
+                                          : []
+                                        let tIn = 0
+                                        let tOut = 0
+                                        let hasTranscriptToken = false
+                                        for (const row of transcript) {
+                                          const usage = row?.token_usage
+                                          if (!usage || typeof usage !== 'object') continue
+                                          const ti = Number((usage as any).tokens_input)
+                                          const to = Number((usage as any).tokens_output)
+                                          if (Number.isFinite(ti) && ti >= 0) {
+                                            tIn += Math.floor(ti)
+                                            hasTranscriptToken = true
+                                          }
+                                          if (Number.isFinite(to) && to >= 0) {
+                                            tOut += Math.floor(to)
+                                            hasTranscriptToken = true
+                                          }
+                                        }
+
+                                        const si = Number((session as any)?.tokens_input)
+                                        const so = Number((session as any)?.tokens_output)
+                                        const hasSessionToken = Number.isFinite(si) || Number.isFinite(so)
+                                        if (!hasTranscriptToken && !hasSessionToken) return '—'
+
+                                        const inTok = hasTranscriptToken
+                                          ? tIn
+                                          : (Number.isFinite(si) ? Math.max(0, Math.floor(si)) : 0)
+                                        const outTok = hasTranscriptToken
+                                          ? tOut
+                                          : (Number.isFinite(so) ? Math.max(0, Math.floor(so)) : 0)
+                                        const total = Math.max(0, inTok + outTok)
                                         return `輸入 ${inTok} / 輸出 ${outTok} / 總計 ${total}`
                                       })()}
                                     </div>
@@ -3817,6 +3843,7 @@ ${criteriaText}
                                           {session.interview_transcript.map((t: any, idx: number) => {
                                             const additionsDetail = (t.additions_detail || '').trim()
                                             const deductionsDetail = (t.deductions_detail || '').trim()
+                                            const tu = t?.token_usage && typeof t.token_usage === 'object' ? t.token_usage : null
                                             const hasCurrentScores =
                                               t.current_scores &&
                                               typeof t.current_scores === 'object' &&
@@ -3846,6 +3873,15 @@ ${criteriaText}
                                                   <div style={{ marginBottom: 2 }}>
                                                     <span style={{ fontWeight: 'bold' }}>AI 評語：</span>
                                                     <span>{t.aiFeedback}</span>
+                                                  </div>
+                                                )}
+
+                                                {tu && (
+                                                  <div style={{ marginBottom: 2 }}>
+                                                    <span style={{ fontWeight: 'bold' }}>本題 Token：</span>
+                                                    <span>
+                                                      {`輸入 ${Math.max(0, Number(tu.tokens_input) || 0)} / 輸出 ${Math.max(0, Number(tu.tokens_output) || 0)} / 總計 ${Math.max(0, Number(tu.tokens_total) || ((Number(tu.tokens_input) || 0) + (Number(tu.tokens_output) || 0)))}`}
+                                                    </span>
                                                   </div>
                                                 )}
 

@@ -83,18 +83,6 @@ function getApiEndpoint(aiService: string): string {
 }
 
 /**
- * 格式化對話歷史為字串
- */
-function formatConversationHistory(messages: Message[]): string {
-  return messages
-    .map((msg) => {
-      const role = msg.role === 'user' ? '面試者' : 'AI面試官'
-      return `${role}: ${msg.content}`
-    })
-    .join('\n')
-}
-
-/**
  * 創建AnswerScore對象
  */
 function createAnswerScore(scoreData: any, questionIndex?: number, evaluationCriteria?: any[]): AnswerScore | null {
@@ -678,9 +666,6 @@ export async function getInterviewAIResponse(
   // 使用面試偏好語言（來自前端傳入的 preferredLanguageCode）
   const userLanguage = mapInterviewLanguageToLabel(preferredLanguageCode)
 
-  // 格式化對話歷史
-  const conversationHistory = formatConversationHistory(messages)
-
   // 格式化人格判斷問題列表（固定題目，優先於一般職務相關問題）
   const personalityQuestionsText =
     PERSONALITY_QUESTION_LIST && PERSONALITY_QUESTION_LIST.length > 0
@@ -749,7 +734,6 @@ export async function getInterviewAIResponse(
     role: 'system',
     content: formatPrompt(INTERVIEW_PROMPT_TEMPLATES.SYSTEM_PROMPT, {
       userLanguage,
-      conversationHistory,
       interviewQuestions: questionsText,
       personalityQuestions: personalityQuestionsText,
       scoringCriteria: scoringCriteriaText,
@@ -907,9 +891,6 @@ export async function getInterviewAIResponseStream(
   // 使用面試偏好語言（來自前端傳入的 preferredLanguageCode）
   const userLanguage = mapInterviewLanguageToLabel(preferredLanguageCode)
 
-  // 格式化對話歷史
-  const conversationHistory = formatConversationHistory(messages)
-
   // 格式化人格判斷問題列表（固定題目，優先於一般職務相關問題）
   const personalityQuestionsText =
     PERSONALITY_QUESTION_LIST && PERSONALITY_QUESTION_LIST.length > 0
@@ -978,7 +959,6 @@ export async function getInterviewAIResponseStream(
     role: 'system',
     content: formatPrompt(INTERVIEW_PROMPT_TEMPLATES.SYSTEM_PROMPT, {
       userLanguage,
-      conversationHistory,
       interviewQuestions: questionsText,
       personalityQuestions: personalityQuestionsText,
       scoringCriteria: scoringCriteriaText,
