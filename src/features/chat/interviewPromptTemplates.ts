@@ -35,14 +35,14 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
 重要規則:
   1. 保持專業、友善的語調
   2. 根據面試者的回答給予適當的回饋
-  3. 如果面試者的回答不足以回答問題，可以追問，但並不是一定要具體的例子，大部分回答其實概念性的東西有回答道就好，如果面試者明確表示不知道，或沒有相關經驗則不可繼續追問。
+  3. 人格相關題目與職務相關題目視為母問題，追問視為子問題，如果面試者的回答不足以回答問題，可以追問，但並不是一定要具體的例子，大部分回答其實概念性的東西有回答就好，如果面試者明確表示不知道，或沒有相關經驗則不可繼續追問，每個母問題最多只能追問兩次子問題。
   4. 追問的問題不可以與已經問過的問題重複或過於相似。
   5. 保持面試的專業性和結構性
   6. 當面試者回答充分時，可以進入下一題或是下一步。
   7. [CONTENT_START]跟[CONTENT_END]只會出現一次，且必須包含對於面試者回答的回覆。
    **同一回合「最多只能出現一個問題句」：**
    - 若 nextAction = "followup"：CONTENT 內只能包含「一句追問」，並且**嚴格禁止**輸出下一題文字（nextQuestionText）或任何其他新問題。
-   - 若 nextAction = "next"：CONTENT 內**只能**逐字輸出下一題完整文字（nextQuestionText）作為唯一問題；禁止再加任何追問/延伸問題。
+   - 若 nextAction = "next"：CONTENT 內可先用 1-2 句簡短回饋，再提出「且僅提出一個」下一題（nextQuestionText）；禁止再加第二個問題或延伸問題。
    - 若 nextAction = "end"：CONTENT 內不得再提出任何問題。
   8. 回答語言必須使用：{userLanguage}
   9. **嚴格限制：**你只能針對「系統指定的當前題目」進行回饋/追問與評分；禁止提出任何不在當前題目範圍內的新題目，除非系統指定的當前題目就是那些。
@@ -96,11 +96,13 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
 **nextAction 規則（非常重要）：**
 - 若你判斷需要追問，設定 "nextAction":"followup"，並把追問句直接寫在 [CONTENT_START]...[CONTENT_END] 內（只問一次）。
   **此模式下嚴格禁止輸出 {nextQuestionText}。**
-- 若回答已充分，設定 "nextAction":"next"。此時你必須在 [CONTENT_START]...[CONTENT_END] 內問下一題。
-- 若要結束，設定 "nextAction":"end"，並輸出人格判斷欄位personality的內容，並結束面試（回覆內必須包含「面試到此結束」）。
+- 若回答已充分，設定 "nextAction":"next"。此時你必須在 [CONTENT_START]...[CONTENT_END] 內提出且僅提出一個下一題。
+- 若全部問題都已經問完，且未處於追問狀態，設定 "nextAction":"end"；此時 "personality" 必須是完整物件，禁止為 null，並結束面試（回覆內必須包含「面試到此結束」）。
 
 **人格判斷輸出規則（只在要結束面試時必須加入完整內容）：**
-- 每一次評分 JSON 都必須包含 "personality" 這個欄位，當nextAction不等於"end"時一律輸出 "personality": null，等於"end"時才輸出人格判斷(物件)。
+- 每一次評分 JSON 都必須包含 "personality" 這個欄位。
+- 當 nextAction 不等於 "end" 時，一律輸出 "personality": null。
+- 當 nextAction 等於 "end" 時，"personality" 必須是完整人格判斷物件，禁止輸出 null。
 - 人格判斷必須以「面試回答的具體行為證據」為依據；若某維度資訊不足，在 reason/interpretation 中標示「信心不足」，並輸出保守的中間分數（50分左右）。
 - 分數為 0–100 整數，label 對應：85–100=高、70–84=中高、50–69=中、35–49=中低、0–34=低。
 - 禁止做醫療、臨床或絕對化結論；所有判斷基於「根據回答推測」。
@@ -229,6 +231,20 @@ export function parseScoreFromResponse(response: string): {
   score: any | null
   cleanResponse: string
 } {
+  const sanitizeScoreJson = (raw: string): string => {
+    let s = String(raw || '').trim()
+    // 常見模型輸出錯誤容錯：
+    // 1) 多餘逗號
+    s = s.replace(/,\s*,/g, ',')
+    // 2) 物件結束後漏逗號（例如 "}\"scores\":")
+    s = s.replace(/}(\s*)"([A-Za-z0-9_]+)"\s*:/g, '},$1"$2":')
+    // 3) key 未加引號（例如 nextAction:end）
+    s = s.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)/g, '$1"$2"$3')
+    // 4) 單引號改雙引號
+    s = s.replace(/'/g, '"')
+    return s
+  }
+
   // 多行/全域剝離：匹配所有 [SCORE_START] ... [SCORE_END]
   const blockRegex = /\[SCORE_START\]([\s\S]*?)\[SCORE_END\]/g
   let lastScore: any | null = null
@@ -239,7 +255,11 @@ export function parseScoreFromResponse(response: string): {
     try {
       lastScore = JSON.parse(payload)
     } catch (e) {
-      console.warn('評分JSON解析失敗（將忽略本段）:', e)
+      try {
+        lastScore = JSON.parse(sanitizeScoreJson(payload))
+      } catch (e2) {
+        console.warn('評分JSON解析失敗（將忽略本段）:', e2)
+      }
     }
   }
   // 無論解析是否成功，先從顯示文字中移除所有評分區塊

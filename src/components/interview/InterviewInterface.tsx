@@ -1237,11 +1237,9 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             if (askedQuestionIdx === expectedNextIdx) {
               // followup/next 標記錯亂但內容已是下一題，統一校正
               rawAction = 'next'
-              streamingContent = String(questionSequence[expectedNextIdx].question)
             } else if (askedQuestionIdx <= currentQuestionIndex || askedQuestionIdx > expectedNextIdx) {
               // 重複舊題或跳題，強制拉回下一題
               rawAction = 'next'
-              streamingContent = String(questionSequence[expectedNextIdx].question)
             }
             if (DEBUG_INTERVIEW) {
               console.log('[Interview] question-order guard', {
@@ -1269,23 +1267,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             const nextIdx = currentQuestionIndex + 1
             const nextQ = questionSequence[nextIdx]
             if (nextQ && typeof nextQ.question === 'string' && nextQ.question.trim().length > 0) {
-              const expectedNextQuestion = String(nextQ.question)
-              const expectedNorm = normalizeQuestionForCompare(expectedNextQuestion)
-              const actualNorm = normalizeQuestionForCompare(streamingContent)
-              const hasAskedSameBefore = questionSequence
-                .slice(0, nextIdx)
-                .some((q) => normalizeQuestionForCompare(String(q.question || '')) === actualNorm)
-              if (actualNorm !== expectedNorm || hasAskedSameBefore) {
-                if (DEBUG_INTERVIEW) {
-                  console.warn('[Interview] detect out-of-order/repeated next question, force-correcting', {
-                    currentQuestionIndex,
-                    expectedNextQuestion,
-                    aiContent: streamingContent,
-                    hasAskedSameBefore,
-                  })
-                }
-                streamingContent = expectedNextQuestion
-              }
+              // 不重寫 AI 輸出內容，避免對話不自然；僅維持狀態機題號推進
               // 題庫有下一題：推進題號（題號仍用於追蹤/記錄）
               setCurrentQuestionIndex(nextIdx)
               setCurrentQuestionId(nextQ.id || '')
