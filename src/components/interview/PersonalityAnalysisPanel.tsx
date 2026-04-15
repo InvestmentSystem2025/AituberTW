@@ -256,7 +256,10 @@ function DISCRadar({ disc }: DISCRadarProps) {
 }
 
 // ─────────────────────────────────────────────
-// DISC 四象限座標圖（D-I 軸 × S-C 軸）
+// DISC 四象限座標圖（主動性 × 人際導向）
+// X 軸：主動性（低 → 高）
+// Y 軸：人際導向（低 → 高）
+// 四象限：C / D / S / I
 // ─────────────────────────────────────────────
 
 interface DISCQuadrantProps {
@@ -264,14 +267,20 @@ interface DISCQuadrantProps {
 }
 
 function DISCQuadrant({ disc }: DISCQuadrantProps) {
-  const size = 180
-  const pad = 20
+  const size = 220
+  const pad = 26
   const inner = size - pad * 2
 
-  // X 軸：D（強）← 左 → I（強）右
-  // Y 軸：S（強）↑ 上 → C（強）↓ 下
-  const plotX = pad + ((disc.i - disc.d + 100) / 200) * inner
-  const plotY = pad + ((disc.c - disc.s + 100) / 200) * inner
+  const clamp01 = (value: number) => Math.max(0, Math.min(1, value))
+  // 依 DISC 分數推估兩個連續維度（0-100）
+  // - 主動性：D/I 越高越主動
+  // - 人際導向：I/S 越高越偏人際互動
+  const initiative = clamp(disc.d * 0.55 + disc.i * 0.45)
+  const peopleOrientation = clamp(disc.i * 0.6 + disc.s * 0.4)
+  const xRatio = clamp01(initiative / 100)
+  const yRatio = clamp01(peopleOrientation / 100)
+  const plotX = pad + xRatio * inner
+  const plotY = pad + (1 - yRatio) * inner
 
   return (
     <svg
@@ -293,11 +302,26 @@ function DISCQuadrant({ disc }: DISCQuadrantProps) {
       <line x1={pad + inner / 2} y1={pad} x2={pad + inner / 2} y2={pad + inner} stroke="#d1d5db" strokeWidth="0.8" strokeDasharray="3,2" />
       <line x1={pad} y1={pad + inner / 2} x2={pad + inner} y2={pad + inner / 2} stroke="#d1d5db" strokeWidth="0.8" strokeDasharray="3,2" />
 
-      {/* 象限標籤 */}
-      <text x={pad + inner / 4} y={pad + 10} fontSize="7" fill="#ef4444" textAnchor="middle" fontWeight="600">D 主導</text>
-      <text x={pad + (inner * 3) / 4} y={pad + 10} fontSize="7" fill="#f59e0b" textAnchor="middle" fontWeight="600">I 影響</text>
-      <text x={pad + inner / 4} y={pad + inner - 4} fontSize="7" fill="#10b981" textAnchor="middle" fontWeight="600">S 穩定</text>
-      <text x={pad + (inner * 3) / 4} y={pad + inner - 4} fontSize="7" fill="#3b82f6" textAnchor="middle" fontWeight="600">C 謹慎</text>
+      {/* 象限標籤（依主動性 × 人際導向） */}
+      <text x={pad + inner / 4} y={pad + 12} fontSize="8" fill="#10b981" textAnchor="middle" fontWeight="700">S 穩定</text>
+      <text x={pad + (inner * 3) / 4} y={pad + 12} fontSize="8" fill="#f59e0b" textAnchor="middle" fontWeight="700">I 影響</text>
+      <text x={pad + inner / 4} y={pad + inner - 6} fontSize="8" fill="#3b82f6" textAnchor="middle" fontWeight="700">C 謹慎</text>
+      <text x={pad + (inner * 3) / 4} y={pad + inner - 6} fontSize="8" fill="#ef4444" textAnchor="middle" fontWeight="700">D 主導</text>
+
+      {/* 軸標題 */}
+      <text x={pad + inner / 2} y={size - 2} fontSize="7.5" fill="#6b7280" textAnchor="middle">
+        主動性（低 → 高）
+      </text>
+      <text
+        x={7}
+        y={pad + inner / 2}
+        fontSize="7.5"
+        fill="#6b7280"
+        textAnchor="middle"
+        transform={`rotate(-90 7 ${pad + inner / 2})`}
+      >
+        人際導向（低 → 高）
+      </text>
 
       {/* 候選人位置 */}
       <circle
@@ -316,6 +340,11 @@ function DISCQuadrant({ disc }: DISCQuadrantProps) {
         strokeWidth="1"
         opacity={0.4}
       />
+
+      <text x={plotX + 8} y={plotY - 8} fontSize="8" fill="#4338ca" fontWeight="700">
+        {disc.primary_type}
+        {disc.secondary_type ? `/${disc.secondary_type}` : ''}
+      </text>
     </svg>
   )
 }
@@ -590,7 +619,7 @@ export function PersonalityAnalysisPanel({ personality, compact = false }: Props
                     {label}
                     <span className="ml-1.5 text-xs text-gray-400 hidden sm:inline">{desc}</span>
                   </span>
-                  <span className="font-bold" style={{}}>{disc[key]}</span>
+                  <span className="font-bold">{disc[key]}</span>
                 </div>
                 <ScoreBarSvg score={disc[key]} color={color} />
               </div>

@@ -3848,7 +3848,6 @@ ${criteriaText}
                                               t.current_scores &&
                                               typeof t.current_scores === 'object' &&
                                               Object.keys(t.current_scores).length > 0
-                                            const hasPersonality = t.personality && typeof t.personality === 'object'
 
                                             return (
                                               <div
@@ -3990,16 +3989,6 @@ ${criteriaText}
                                                     <span>{deductionsDetail}</span>
                                                   </div>
                                                 )}
-
-                                                {hasPersonality && (
-                                                  <div style={{ marginTop: 8 }}>
-                                                    <div style={{ fontWeight: 'bold', marginBottom: 6 }}>人格分析：</div>
-                                                    <PersonalityAnalysisPanel
-                                                      personality={t.personality}
-                                                      compact
-                                                    />
-                                                  </div>
-                                                )}
                                               </div>
                                             )
                                           })}
@@ -4007,6 +3996,36 @@ ${criteriaText}
                                       ) : (
                                         <span>尚無面試對話紀錄</span>
                                       )}
+                                      {(() => {
+                                        if (!Array.isArray(session.interview_transcript) || session.interview_transcript.length === 0) return null
+                                        const parsePersonality = (raw: any) => {
+                                          if (!raw) return null
+                                          if (typeof raw === 'object') return raw
+                                          if (typeof raw === 'string') {
+                                            try {
+                                              const parsed = JSON.parse(raw)
+                                              return parsed && typeof parsed === 'object' ? parsed : null
+                                            } catch {
+                                              return null
+                                            }
+                                          }
+                                          return null
+                                        }
+                                        const reversed = [...session.interview_transcript].reverse()
+                                        const latest = reversed.find((item: any) => {
+                                          if (!item || item.role !== 'ai') return false
+                                          return !!parsePersonality(item.personality)
+                                        })
+                                        const personalityData = latest ? parsePersonality(latest.personality) : null
+                                        if (!personalityData) return null
+
+                                        return (
+                                          <div style={{ marginTop: 12 }}>
+                                            <div style={{ fontWeight: 'bold', marginBottom: 6 }}>人格分析：</div>
+                                            <PersonalityAnalysisPanel personality={personalityData} />
+                                          </div>
+                                        )
+                                      })()}
                                     </div>
                                     <div>
                                       <strong>使用者反饋：</strong>
