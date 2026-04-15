@@ -740,6 +740,7 @@ export async function getInterviewAIResponse(
       // 新增：系統控題用的上下文（避免模型自行發明下一題）
       questionId: String(questionIndex ?? ''),
       currentQuestionText: currentQuestionText || '',
+      nextQuestionText: '',
       isFollowUp: String(Boolean(isFollowUp)),
       followUpCount: String(followUpCount ?? 0),
       maxFollowUps: String(maxFollowUps ?? 2),

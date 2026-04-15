@@ -62,6 +62,7 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
 **當前題目（系統指定，不可改寫/不可跳題）：**
 - 當前題目索引（從 1 開始）：{questionId}
 - 當前題目完整文字：{currentQuestionText}
+- 預期下一題完整文字（僅 nextAction=next 時可使用）：{nextQuestionText}
 - 目前是否為追問階段：{isFollowUp}
 - 已追問次數 / 上限：{followUpCount}/{maxFollowUps}
 - 是否為最後一題：{isLastQuestion}
