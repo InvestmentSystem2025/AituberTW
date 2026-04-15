@@ -3,7 +3,7 @@ import { getAuthUserIdFromRequest, getServiceClient } from '@/lib/supabaseServer
 
 type Resp =
   | { ok: true; text: string }
-  | { error: string; message?: string }
+  | { error: string; message?: string; detail?: string; upstreamStatus?: number }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'METHOD_NOT_ALLOWED', message: '不支援此方法。' })
@@ -47,7 +47,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   }
 
   // 呼叫既有 vercel AI 邏輯；忽略 company_id 欄位即可
-  const { company_id: _ignore, ...aiBody } = body || {}
+  const { company_id: _ignore, ...rawAiBody } = body || {}
+  const aiBody = { ...rawAiBody }
+  if (typeof aiBody.apiKey === 'string' && !aiBody.apiKey.trim()) {
+    delete aiBody.apiKey
+  }
 
   // 不動既有 /api/ai/vercel（其他功能也在用）。在此只做 proxy 呼叫。
   const proto = (req.headers['x-forwarded-proto'] as string) || 'http'
@@ -62,8 +66,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   })
 
   const payload = await aiResp.json().catch(() => null)
-  if (!aiResp.ok || !payload || typeof payload.text !== 'string') {
-    return res.status(400).json({ error: 'AI_CALL_FAILED', message: 'AI 生成問題失敗，請稍後再試。' })
+  if (!aiResp.ok) {
+    const upstreamErrorCode =
+      payload && typeof payload === 'object' && typeof (payload as any).errorCode === 'string'
+        ? (payload as any).errorCode
+        : 'AI_CALL_FAILED'
+    const upstreamDetail =
+      payload && typeof payload === 'object' && typeof (payload as any).error === 'string'
+        ? (payload as any).error
+        : undefined
+    const message =
+      upstreamErrorCode === 'EmptyAPIKey'
+        ? 'AI 金鑰未設定。請先在設定填入對應服務的 API Key，或確認伺服器端環境變數已配置。'
+        : 'AI 生成問題失敗，請稍後再試。'
+
+    return res.status(aiResp.status || 400).json({
+      error: upstreamErrorCode,
+      message,
+      detail: upstreamDetail,
+      upstreamStatus: aiResp.status,
+    })
+  }
+
+  if (!payload || typeof payload.text !== 'string') {
+    return res.status(400).json({ error: 'AI_CALL_FAILED', message: 'AI 生成問題失敗，回應格式不正確。' })
   }
 
   return res.status(200).json({ ok: true, text: payload.text })

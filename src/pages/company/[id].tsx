@@ -840,13 +840,15 @@ ${criteriaText}
           { role: 'user', content: prompt },
         ],
         stream: false,
-        apiKey,
         aiService,
         model: ss.selectAIModel,
         localLlmUrl: ss.localLlmUrl,
         azureEndpoint: ss.azureEndpoint,
         temperature: ss.temperature,
         maxTokens: ss.maxTokens,
+      }
+      if (apiKey) {
+        requestData.apiKey = apiKey
       }
 
       const aiRes = await fetch('/api/ai/generate-joq-questions', {
