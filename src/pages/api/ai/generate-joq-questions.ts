@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { getAuthUserIdFromRequest, getServiceClient } from '@/lib/supabaseServer'
+import { handleVercelAiJson } from '../services/vercelAiRoute'
 
 type Resp =
   | { ok: true; text: string }
@@ -53,17 +54,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     delete aiBody.apiKey
   }
 
-  // 不動既有 /api/ai/vercel（其他功能也在用）。在此只做 proxy 呼叫。
-  const proto = (req.headers['x-forwarded-proto'] as string) || 'http'
-  const host = (req.headers['x-forwarded-host'] as string) || (req.headers.host as string) || ''
-  if (!host) return res.status(500).json({ error: 'SERVER_MISCONFIGURED', message: '伺服器缺少 host。' })
-  const origin = `${proto}://${host}`
-
-  const aiResp = await fetch(`${origin}/api/ai/vercel`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(aiBody),
-  })
+  // 直接呼叫 Node 版既有 AI 邏輯，避免 server-to-server HTTP 在站台外層被 401 攔截。
+  const aiResp = await handleVercelAiJson(aiBody)
 
   const payload = await aiResp.json().catch(() => null)
   if (!aiResp.ok) {
