@@ -3832,7 +3832,7 @@ ${criteriaText}
                                       session.interview_transcript.length > 0 ? (
                                         <div
                                           style={{
-                                            maxHeight: 260,
+                                            maxHeight: 560,
                                             overflowY: 'auto',
                                             marginTop: 4,
                                             padding: 8,
