@@ -111,6 +111,7 @@ export default function CompanyAdminPage() {
   const [joq, setJoq] = useState<JOQ[]>([])
   const [ivs, setIvs] = useState<Interview[]>([])
   const [interviewQuota, setInterviewQuota] = useState({ used_count: 0, free_quota: 3, remaining: 3 })
+  const [joqQuota, setJoqQuota] = useState({ used_count: 0, free_quota: 5, remaining: 5 })
   const [resumeReviewInviteQuota, setResumeReviewInviteQuota] = useState({
     used_count: null as number | null,
     free_quota: 3,
@@ -348,6 +349,7 @@ export default function CompanyAdminPage() {
           loadJOQ(t),
           loadIVs(t),
           loadInterviewQuota(t),
+          loadJoqQuota(t),
           loadReviewStandards(t),
           loadReviewResults(t),
           loadResumeReviewInviteQuota(t, companyId)
@@ -448,6 +450,17 @@ export default function CompanyAdminPage() {
       setInterviewQuota({
         used_count: Number(j.used_count || 0),
         free_quota: Number(j.free_quota || 3),
+        remaining: Number(j.remaining || 0),
+      })
+    }
+  }
+  const loadJoqQuota = async (t: string) => {
+    const r = await fetch(`/api/company/joq-quota/get?company_id=${companyId}`, { headers: headers(t) })
+    const j = await r.json().catch(() => ({}))
+    if (r.ok && j?.ok) {
+      setJoqQuota({
+        used_count: Number(j.used_count || 0),
+        free_quota: Number(j.free_quota || 5),
         remaining: Number(j.remaining || 0),
       })
     }
@@ -860,12 +873,24 @@ ${criteriaText}
       if (!aiRes.ok) {
         const err = await aiRes.json().catch(() => ({} as any))
         console.error('AI 生成問題失敗', err)
+        if (err?.error === 'AI_JOQ_QUOTA_EXCEEDED') {
+          await loadJoqQuota(token)
+        }
         alert(err?.message || 'AI 生成問題失敗，請稍後再試')
         return
       }
 
       const aiJson = await aiRes.json()
       const aiText = typeof aiJson.text === 'string' ? aiJson.text : ''
+      if (aiJson?.quota) {
+        setJoqQuota({
+          used_count: Number(aiJson.quota.used_count || 0),
+          free_quota: Number(aiJson.quota.free_quota || 5),
+          remaining: Number(aiJson.quota.remaining || 0),
+        })
+      } else {
+        await loadJoqQuota(token)
+      }
 
       if (!aiText.trim()) {
         alert('AI 沒有返回可用的問題，請稍後再試')
@@ -3202,6 +3227,9 @@ ${criteriaText}
 
       {tab === 'joq' && (
         <div>
+          <div style={{ marginBottom: 12, fontWeight: 600 }}>
+            AI 生成問題免費次數剩餘：{Math.max(0, joqQuota.remaining)} / {joqQuota.free_quota}
+          </div>
           {jobs.length === 0 ? (
             <div style={{ padding: 24, border: '2px dashed #f44336', background: '#ffebee', borderRadius: 8, textAlign: 'center' }}>
               <strong style={{ color: '#f44336' }}>請先創建職種再添加職種個別題庫</strong>
@@ -3267,14 +3295,17 @@ ${criteriaText}
                   </button>
                   <button
                     type="button"
-                    disabled={isGeneratingJOQAI}
+                    disabled={isGeneratingJOQAI || joqQuota.remaining <= 0}
                     onClick={() => generateJOQQuestionsWithAI('new')}
-                    style={{ padding: '4px 8px', background: isGeneratingJOQAI ? '#9e9e9e' : '#673ab7', color: 'white', border: 'none', borderRadius: 4, cursor: isGeneratingJOQAI ? 'not-allowed' : 'pointer' }}
+                    style={{ padding: '4px 8px', background: (isGeneratingJOQAI || joqQuota.remaining <= 0) ? '#9e9e9e' : '#673ab7', color: 'white', border: 'none', borderRadius: 4, cursor: (isGeneratingJOQAI || joqQuota.remaining <= 0) ? 'not-allowed' : 'pointer' }}
                   >
                     {isGeneratingJOQAI ? 'AI 生成中…' : 'AI 生成問題'}
                   </button>
                 </div>
               </div>
+              {joqQuota.remaining <= 0 && (
+                <div style={{ color: '#b00000', fontSize: '0.9em', marginBottom: 8 }}>AI 生成問題免費次數已用完</div>
+              )}
               {newJOQ.questions.map((question, idx) => (
                 <div key={idx} style={{ marginBottom: 8, display: 'flex', gap: 8 }}>
                   <div style={{ flex: 1 }}>
@@ -3364,9 +3395,9 @@ ${criteriaText}
                                 </button>
                                 <button
                                   type="button"
-                                  disabled={isGeneratingJOQAI}
+                                  disabled={isGeneratingJOQAI || joqQuota.remaining <= 0}
                                   onClick={() => generateJOQQuestionsWithAI('edit')}
-                                  style={{ padding: '4px 8px', background: isGeneratingJOQAI ? '#9e9e9e' : '#673ab7', color: 'white', border: 'none', borderRadius: 4, cursor: isGeneratingJOQAI ? 'not-allowed' : 'pointer' }}
+                                  style={{ padding: '4px 8px', background: (isGeneratingJOQAI || joqQuota.remaining <= 0) ? '#9e9e9e' : '#673ab7', color: 'white', border: 'none', borderRadius: 4, cursor: (isGeneratingJOQAI || joqQuota.remaining <= 0) ? 'not-allowed' : 'pointer' }}
                                 >
                                   {isGeneratingJOQAI ? 'AI 生成中…' : 'AI 生成問題'}
                                 </button>

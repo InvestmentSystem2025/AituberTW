@@ -3,7 +3,7 @@ import { getAuthUserIdFromRequest, getServiceClient } from '@/lib/supabaseServer
 import { handleVercelAiJson } from '../services/vercelAiRoute'
 
 type Resp =
-  | { ok: true; text: string }
+  | { ok: true; text: string; quota?: { used_count: number; free_quota: number; remaining: number } }
   | { error: string; message?: string; detail?: string; upstreamStatus?: number }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
@@ -38,13 +38,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   if (scopeErr) return res.status(400).json({ error: 'SCOPE_CHECK_FAILED', message: '權限檢查失敗。' })
   if (!scope) return res.status(403).json({ error: 'FORBIDDEN', message: '您不是此公司的成員。' })
 
-  const { error: quotaErr } = await supa.rpc('consume_company_joq_quota', { p_company_id: company_id })
-  if (quotaErr) {
-    const msg = quotaErr.message || ''
-    if (msg.includes('AI_JOQ_QUOTA_EXCEEDED')) {
-      return res.status(403).json({ error: 'AI_JOQ_QUOTA_EXCEEDED', message: 'AI 生成問題免費次數已用完（每家公司共 5 次）。' })
-    }
-    return res.status(400).json({ error: 'QUOTA_CONSUME_FAILED', message: '扣點失敗，請稍後再試。' })
+  // 先做 quota gate（不扣點），避免 AI 失敗時仍被扣點。
+  const { data: usage, error: usageErr } = await supa
+    .from('company_ai_usage')
+    .select('joq_used_count, joq_free_quota')
+    .eq('company_id', company_id)
+    .maybeSingle()
+
+  if (usageErr) {
+    return res.status(400).json({ error: 'QUOTA_READ_FAILED', message: '讀取免費次數失敗，請稍後再試。' })
+  }
+
+  const used = Number((usage as any)?.joq_used_count || 0)
+  const free = Number((usage as any)?.joq_free_quota || 5)
+  if (used >= free) {
+    return res.status(403).json({ error: 'AI_JOQ_QUOTA_EXCEEDED', message: 'AI 生成問題免費次數已用完（每家公司共 5 次）。' })
   }
 
   // 呼叫既有 vercel AI 邏輯；忽略 company_id 欄位即可
@@ -84,7 +92,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(400).json({ error: 'AI_CALL_FAILED', message: 'AI 生成問題失敗，回應格式不正確。' })
   }
 
-  return res.status(200).json({ ok: true, text: payload.text })
+  // AI 成功後才扣點。若併發競態造成額度剛好被扣完，會在這裡被正確擋下。
+  const { data: quotaConsumeData, error: quotaErr } = await supa.rpc('consume_company_joq_quota', { p_company_id: company_id })
+  if (quotaErr) {
+    const msg = quotaErr.message || ''
+    if (msg.includes('AI_JOQ_QUOTA_EXCEEDED')) {
+      return res.status(403).json({ error: 'AI_JOQ_QUOTA_EXCEEDED', message: 'AI 生成問題免費次數已用完（每家公司共 5 次）。' })
+    }
+    return res.status(400).json({ error: 'QUOTA_CONSUME_FAILED', message: '扣點失敗，請稍後再試。' })
+  }
+
+  const quota = {
+    used_count: Number((quotaConsumeData as any)?.used_count || 0),
+    free_quota: Number((quotaConsumeData as any)?.free_quota || 5),
+    remaining: Number((quotaConsumeData as any)?.remaining || 0),
+  }
+
+  return res.status(200).json({ ok: true, text: payload.text, quota })
 }
 
 
