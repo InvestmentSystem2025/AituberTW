@@ -93,3 +93,4 @@ public/scripts/*
 # k6 outputs (may contain auth tokens / sensitive data)
 /tmp/*
 csp-ssr-nextjs.mdc
+AGENTS.md

@@ -2529,6 +2529,13 @@ CREATE TABLE IF NOT EXISTS public.company_interview_quota (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS public.company_resume_review_quota (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL UNIQUE REFERENCES public.company(id) ON DELETE CASCADE,
+  free_quota INTEGER NOT NULL DEFAULT 3,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'company_interview_quota_used_count_chk') THEN
@@ -2539,10 +2546,18 @@ BEGIN
     ALTER TABLE public.company_interview_quota
       ADD CONSTRAINT company_interview_quota_free_quota_chk CHECK (free_quota >= 0);
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'company_resume_review_quota_free_quota_chk') THEN
+    ALTER TABLE public.company_resume_review_quota
+      ADD CONSTRAINT company_resume_review_quota_free_quota_chk CHECK (free_quota >= 0);
+  END IF;
 END $$;
 
 INSERT INTO public.company_interview_quota(company_id, used_count, free_quota, updated_at)
 SELECT c.id, 0, 3, now() FROM public.company c
+ON CONFLICT (company_id) DO NOTHING;
+
+INSERT INTO public.company_resume_review_quota(company_id, free_quota, updated_at)
+SELECT c.id, 3, now() FROM public.company c
 ON CONFLICT (company_id) DO NOTHING;
 
 CREATE INDEX IF NOT EXISTS idx_resume_review_requests_company_job_status_created
@@ -2555,6 +2570,28 @@ CREATE INDEX IF NOT EXISTS idx_job_opening_company_capacity
   ON public.job_opening(company_id, target_hires, hired_count);
 CREATE INDEX IF NOT EXISTS idx_company_interview_quota_company
   ON public.company_interview_quota(company_id);
+CREATE INDEX IF NOT EXISTS idx_company_resume_review_quota_company
+  ON public.company_resume_review_quota(company_id);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.company_resume_review_quota TO service_role;
+
+CREATE OR REPLACE FUNCTION public.fn_init_company_resume_review_quota()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO public.company_resume_review_quota(company_id, free_quota, updated_at)
+  VALUES (NEW.id, 3, now())
+  ON CONFLICT (company_id) DO NOTHING;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_company_init_resume_review_quota ON public.company;
+CREATE TRIGGER trg_company_init_resume_review_quota
+AFTER INSERT ON public.company
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_init_company_resume_review_quota();
 
 CREATE OR REPLACE FUNCTION public.fn_resume_review_request_guard()
 RETURNS trigger
@@ -2562,24 +2599,30 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   v_count integer;
-  v_lock_key text;
+  v_free_quota integer;
 BEGIN
   NEW.candidate_email := lower(btrim(coalesce(NEW.candidate_email, '')));
   IF NEW.candidate_email = '' THEN
     RAISE EXCEPTION 'INVALID_CANDIDATE_EMAIL';
   END IF;
 
-  -- 序列化同 company/job/candidate 的插入，避免並發請求繞過上限
-  v_lock_key := concat_ws(':', NEW.company_id::text, NEW.job_opening_id::text, NEW.candidate_email);
-  PERFORM pg_advisory_xact_lock(hashtext(v_lock_key));
+  -- 序列化同 company 的插入，避免並發請求繞過上限
+  PERFORM pg_advisory_xact_lock(hashtext(NEW.company_id::text));
+
+  INSERT INTO public.company_resume_review_quota(company_id, free_quota, updated_at)
+  VALUES (NEW.company_id, 3, now())
+  ON CONFLICT (company_id) DO NOTHING;
+
+  SELECT q.free_quota INTO v_free_quota
+  FROM public.company_resume_review_quota q
+  WHERE q.company_id = NEW.company_id
+  FOR UPDATE;
 
   SELECT count(*)::integer INTO v_count
   FROM public.resume_review_requests r
-  WHERE r.company_id = NEW.company_id
-    AND r.job_opening_id = NEW.job_opening_id
-    AND lower(r.candidate_email) = NEW.candidate_email;
+  WHERE r.company_id = NEW.company_id;
 
-  IF v_count >= 3 THEN
+  IF v_count >= v_free_quota THEN
     RAISE EXCEPTION 'INVITATION_LIMIT_EXCEEDED';
   END IF;
 

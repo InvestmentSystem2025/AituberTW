@@ -10,9 +10,11 @@ zone   = "asia-east1-a"
 
 name_prefix  = "ai-interview-stg"
 # Staging can be smaller to reduce cost.
-machine_type = "e2-small"
+machine_type = "e2-standard-4"
 
 # Security: restrict to your public IP if possible.
 # Example: ["203.0.113.10/32"]
 ssh_source_ranges = ["0.0.0.0/0"]
 
+# Allow Terraform to stop the instance when resizing.
+allow_stopping_for_update = true
