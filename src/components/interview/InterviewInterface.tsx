@@ -1052,6 +1052,19 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           console.log('📊 當前對話歷史長度:', conversationMessages.length)
         }
 
+        console.log('[Interview] request payload question context', {
+          questionIndexOneBased: effectiveQuestionIndex + 1,
+          questionId: currentQ?.id || '',
+          currentQuestionText,
+          nextQuestionIndexOneBased: nextQuestionText
+            ? effectiveQuestionIndex + 2
+            : null,
+          nextQuestionText,
+          totalQuestions: questionSequence.length,
+          isFollowUpPhase: effectiveIsFollowUpPhase,
+          followUpCount: effectiveFollowUpCount,
+        })
+
         // 調用AI API獲取串流回應
         const stream = await getInterviewAIResponseStream(
           conversationMessages,
@@ -1073,6 +1086,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         let streamingContent = ''
         let finalEmotion = 'neutral'
         let finalScoreResult: AnswerScore | null = null
+        let finalNextAction: 'followup' | 'next' | 'end' | null = null
         let finalTurnTokens: {
           tokens_input: number
           tokens_output: number
@@ -1204,9 +1218,33 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                       scoreResult.timestamp = new Date()
                     }
                     finalScoreResult = scoreResult
+                    finalNextAction =
+                      metadata.nextAction === 'followup' ||
+                      metadata.nextAction === 'next' ||
+                      metadata.nextAction === 'end'
+                        ? metadata.nextAction
+                        : scoreResult?.nextAction || null
                   } else {
                     finalScoreResult = null
+                    finalNextAction =
+                      metadata.nextAction === 'followup' ||
+                      metadata.nextAction === 'next' ||
+                      metadata.nextAction === 'end'
+                        ? metadata.nextAction
+                        : null
                   }
+                  console.log('[Interview] metadata parse result', {
+                    metadataNextAction: metadata.nextAction || null,
+                    finalNextAction,
+                    scoreResultCreated: Boolean(finalScoreResult),
+                    scoreResultQuestionId: finalScoreResult?.questionId,
+                    scoreResultQuestionText: finalScoreResult?.questionText,
+                    cleanResponsePreview:
+                      typeof metadata.cleanResponse === 'string'
+                        ? metadata.cleanResponse.slice(0, 300)
+                        : null,
+                    metadata,
+                  })
                   // 從 rawBuffer 中移除元數據標記，避免後續 chunk 重複 match
                   rawBuffer = rawBuffer.replace(metadataRegex, '')
                   didHandleMetadata = true
@@ -1278,6 +1316,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                         : undefined,
                     personality: parsed?.personality ?? undefined,
                   } as any
+                  finalNextAction =
+                    (finalScoreResult as AnswerScore).nextAction || null
 
                   rawBuffer = rawBuffer.replace(scoreRegex, '')
                   didHandleScoreBlock = true
@@ -1509,71 +1549,62 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
             answerScoresRef.current = nextAnswerScoresSnapshot
             setAnswerScores(nextAnswerScoresSnapshot)
             scoringEngine.addScoredAnswer(finalScoreResult)
+          }
 
-            const normalizeQuestionForCompare = (s: string) =>
-              String(s || '')
-                .replace(/\s+/g, '')
-                .replace(/[。！？!?，,、；;：:]/g, '')
-                .trim()
+          const extractLikelyQuestionFromContent = (
+            content: string
+          ): string => {
+            const text = String(content || '').trim()
+            if (!text) return ''
 
-            const extractLikelyQuestionFromContent = (
-              content: string
-            ): string => {
-              const text = String(content || '').trim()
-              if (!text) return ''
-
-              const markers = [
-                '接下來我會問下一題：',
-                '接下來請回答：',
-                '請回答：',
-                '下一題：',
-                '問題：',
-              ]
-              for (const marker of markers) {
-                const idx = text.lastIndexOf(marker)
-                if (idx !== -1) {
-                  const after = text.slice(idx + marker.length).trim()
-                  if (after) return after
-                }
+            const markers = [
+              '接下來我會問下一題：',
+              '接下來請回答：',
+              '請回答：',
+              '下一題：',
+              '問題：',
+            ]
+            for (const marker of markers) {
+              const idx = text.lastIndexOf(marker)
+              if (idx !== -1) {
+                const after = text.slice(idx + marker.length).trim()
+                if (after) return after
               }
-
-              const lines = text
-                .split('\n')
-                .map((x) => x.trim())
-                .filter(Boolean)
-              if (lines.length === 0) return ''
-              return lines[lines.length - 1]
             }
 
-            const findSequenceQuestionIndex = (candidate: string): number => {
-              const candNorm = normalizeQuestionForCompare(candidate)
-              if (!candNorm) return -1
-              return questionSequence.findIndex((q) => {
-                const qNorm = normalizeQuestionForCompare(
-                  String(q.question || '')
-                )
-                return (
-                  qNorm.length > 0 &&
-                  (candNorm === qNorm ||
-                    candNorm.includes(qNorm) ||
-                    qNorm.includes(candNorm))
-                )
-              })
-            }
+            const lines = text
+              .split('\n')
+              .map((x) => x.trim())
+              .filter(Boolean)
+            if (lines.length === 0) return ''
+            return lines[lines.length - 1]
+          }
 
-            // 依 nextAction 控制題號推進（避免 AI 自己亂出題）
-            let rawAction = (finalScoreResult.nextAction || 'next') as
-              | 'followup'
-              | 'next'
-              | 'end'
+          const findSequenceQuestionIndex = (candidate: string): number => {
+            const candNorm = normalizeQuestionForCompare(candidate)
+            if (!candNorm) return -1
+            return questionSequence.findIndex((q) => {
+              const qNorm = normalizeQuestionForCompare(
+                String(q.question || '')
+              )
+              return (
+                qNorm.length > 0 &&
+                (candNorm === qNorm ||
+                  candNorm.includes(qNorm) ||
+                  qNorm.includes(candNorm))
+              )
+            })
+          }
+
+          if (finalNextAction) {
+            let rawAction = finalNextAction
             if (
               effectiveQuestionIndex >= questionSequence.length - 1 &&
               rawAction === 'next'
             ) {
-              // 最後一題已回答時，模型若仍誤回 next，前端狀態機必須進入結束保存。
               rawAction = 'end'
             }
-            // 問句抽取與題序校正：即使標記 followup，只要內容實際在問題庫題目，也強制校正
+
             const likelyQuestion =
               extractLikelyQuestionFromContent(streamingContent)
             const askedQuestionIdx = findSequenceQuestionIndex(likelyQuestion)
@@ -1589,34 +1620,42 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
               hasExpectedNext
             ) {
               if (askedQuestionIdx === expectedNextIdx) {
-                // followup/next 標記錯亂但內容已是下一題，統一校正
                 rawAction = 'next'
               } else if (
                 askedQuestionIdx <= effectiveQuestionIndex ||
                 askedQuestionIdx > expectedNextIdx
               ) {
-                // 重複舊題或跳題，強制拉回下一題
                 rawAction = 'next'
               }
-              if (DEBUG_INTERVIEW) {
-                console.log('[Interview] question-order guard', {
-                  currentQuestionIndex,
-                  effectiveQuestionIndex,
-                  expectedNextIdx,
-                  askedQuestionIdx,
-                  rawActionAfterGuard: rawAction,
-                  likelyQuestion,
-                })
-              }
+              console.log('[Interview] question-order guard', {
+                currentQuestionIndex,
+                effectiveQuestionIndex,
+                expectedNextIdx,
+                askedQuestionIdx,
+                rawActionAfterGuard: rawAction,
+                likelyQuestion,
+              })
             }
 
-            // 避免無限追問：達到上限後強制進下一題
             const action: 'followup' | 'next' | 'end' =
               rawAction === 'followup' &&
               effectiveFollowUpCount >= MAX_FOLLOWUPS
                 ? 'next'
                 : rawAction
             decidedAction = action
+
+            console.log('[Interview] nextAction applied', {
+              nextActionFromAI: finalNextAction,
+              action,
+              fromQuestionIndexOneBased: effectiveQuestionIndex + 1,
+              toQuestionIndexOneBased:
+                action === 'next' ? effectiveQuestionIndex + 2 : null,
+              currentQuestionText,
+              nextQuestionText:
+                action === 'next'
+                  ? questionSequence[effectiveQuestionIndex + 1]?.question || ''
+                  : '',
+            })
 
             if (action === 'followup') {
               const nextFollowUpCount = Math.min(
@@ -1640,24 +1679,26 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                 typeof nextQ.question === 'string' &&
                 nextQ.question.trim().length > 0
               ) {
-                // 不重寫 AI 輸出內容，避免對話不自然；僅維持狀態機題號推進
-                // 題庫有下一題：推進題號（題號仍用於追蹤/記錄）
                 currentQuestionIndexRef.current = nextIdx
                 currentQuestionIdRef.current = nextQ.id || ''
                 setCurrentQuestionIndex(nextIdx)
                 setCurrentQuestionId(nextQ.id || '')
-                // 不再由系統插入下一題，改為要求 AI 在 CONTENT 內逐字輸出 nextQuestionText
-              } else {
-                // 題庫已無下一題：不要用題號/題庫狀態自動結束面試
-                // 面試是否結束一律由 AI 回覆內容（endKeywords）判斷
               }
             } else {
-              // end
               isFollowUpPhaseRef.current = false
               followUpCountRef.current = 0
               setIsFollowUpPhase(false)
               setFollowUpCount(0)
             }
+          } else {
+            console.warn(
+              '[Interview] missing nextAction; question index unchanged',
+              {
+                questionIndexOneBased: effectiveQuestionIndex + 1,
+                currentQuestionText,
+                streamingContent,
+              }
+            )
           }
 
           // 檢查是否為面試結束的回應
