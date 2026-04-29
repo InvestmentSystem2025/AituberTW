@@ -92,6 +92,14 @@ function getLatestUserText(messages: Message[]): string | undefined {
     : undefined
 }
 
+const LEGACY_SCORE_KEY_MAP: Record<string, string> = {
+  contentCompleteness: 'content_integrity',
+  logicalClarity: 'logical_clarity',
+  professionalDepth: 'professional_depth',
+  communicationSkills: 'communication',
+  personalTraits: 'personal_attributes',
+}
+
 /**
  * 創建AnswerScore對象
  */
@@ -118,6 +126,8 @@ function createAnswerScore(
       return { items, legacy, deltaByKey }
 
     for (const [criteriaKey, raw] of Object.entries(input)) {
+      const normalizedCriteriaKey =
+        LEGACY_SCORE_KEY_MAP[criteriaKey] || criteriaKey
       const list: ScoreReasonItem[] = []
 
       const pushItem = (it: any, fallbackDetail?: string) => {
@@ -157,10 +167,10 @@ function createAnswerScore(
       }
 
       if (list.length > 0) {
-        items[criteriaKey] = list
+        items[normalizedCriteriaKey] = list
         const sum = list.reduce((acc, it) => acc + (Number(it.points) || 0), 0)
-        deltaByKey[criteriaKey] = sign * sum
-        legacy[criteriaKey] = list.map((it) => {
+        deltaByKey[normalizedCriteriaKey] = sign * sum
+        legacy[normalizedCriteriaKey] = list.map((it) => {
           const p = Number(it.points) || 0
           const s = kind === 'deduction' ? `(-${p}分)` : `(+${p}分)`
           const d = (it.detail || '').trim()
@@ -172,9 +182,8 @@ function createAnswerScore(
     return { items, legacy, deltaByKey }
   }
 
-  // 驗證必要的字段
-  if (!scoreData.scores || typeof scoreData.scores !== 'object') {
-    console.warn('評分數據缺少scores字段或格式不正確')
+  if (!scoreData || typeof scoreData !== 'object') {
+    console.warn('評分數據格式不正確')
     return null
   }
 
@@ -183,146 +192,15 @@ function createAnswerScore(
     ? `Q${questionIndex}`
     : scoreData.questionId || generateMessageId()
 
-  // 建立評分標準映射：max_score 與 scoring_logic
+  // 建立評分標準映射：max_score
   const criteriaMap: Record<string, number> = {}
-  const logicMap: Record<string, 'addition' | 'deduction' | 'composite'> = {}
   if (evaluationCriteria && evaluationCriteria.length > 0) {
     evaluationCriteria.forEach((criteria: any) => {
       const criteriaKey = criteria.key
       criteriaMap[criteriaKey] = criteria.max_score || 10
-      if (criteria.scoring_logic === 'addition') {
-        logicMap[criteriaKey] = 'addition'
-      } else if (criteria.scoring_logic === 'composite') {
-        // 綜合制：同時支援加分與扣分，基準為 0 分
-        logicMap[criteriaKey] = 'composite'
-      } else {
-        logicMap[criteriaKey] = 'deduction'
-      }
     })
   }
 
-  // 映射評分 key 對應關係（用於向後兼容預設的5個項目）
-  const scoreKeyMap: Record<string, string> = {
-    contentCompleteness: 'content_integrity',
-    logicalClarity: 'logical_clarity',
-    professionalDepth: 'professional_depth',
-    communicationSkills: 'communication',
-    personalTraits: 'personal_attributes',
-  }
-
-  // 處理分數 - 支持動態評估項目
-  // ⚠️ 重要：scores 代表「本題各項目的加減分數（delta）」，而不是最終分數
-  const rawScores: Record<string, number> = {}
-  const scores: Record<string, number> = {}
-  const numericProvidedKeys = new Set<string>()
-  // 預設將所有分數視為 0（本題沒有加減分）
-
-  // 處理預設的5個項目（同時支援前端 key 與 DB key）
-  const defaultKeys = [
-    'contentCompleteness',
-    'logicalClarity',
-    'professionalDepth',
-    'communicationSkills',
-    'personalTraits',
-  ]
-  defaultKeys.forEach((key) => {
-    if (!scoreData.scores) return
-    const dbKey = scoreKeyMap[key]
-    const candidateValues = [
-      scoreData.scores[key], // 前端 key（camelCase）
-      scoreData.scores[dbKey], // DB key（snake_case）
-    ]
-    const found = candidateValues.find((v) => typeof v === 'number')
-    if (typeof found === 'number') {
-      const delta = Number(found) || 0
-      rawScores[dbKey] = delta
-      scores[dbKey] = delta
-      numericProvidedKeys.add(dbKey)
-    }
-  })
-
-  // 處理自訂評估項目（從 evaluationCriteria 中獲取）
-  if (evaluationCriteria && evaluationCriteria.length > 0) {
-    evaluationCriteria.forEach((criteria: any) => {
-      const criteriaKey = criteria.key
-      // 嘗試從 scoreData.scores 中獲取分數（可能使用 criteriaKey 或顯示名稱）
-      const displayName = criteria.display_name
-
-      // 檢查是否已經在 scores 中（預設項目）
-      const isDefaultKey = defaultKeys.some(
-        (k) => scoreKeyMap[k] === criteriaKey
-      )
-      if (!isDefaultKey && scoreData.scores) {
-        // 嘗試用不同的 key 來匹配
-        let scoreValue: number | undefined
-
-        // 1. 直接用 criteriaKey
-        if (scoreData.scores[criteriaKey] !== undefined) {
-          scoreValue = Number(scoreData.scores[criteriaKey]) || 0
-        }
-        // 2. 用顯示名稱
-        else if (scoreData.scores[displayName] !== undefined) {
-          scoreValue = Number(scoreData.scores[displayName]) || 0
-        }
-        // 3. 遍歷所有 scores 的 key，看是否有匹配的
-        else {
-          const matchedKey = Object.keys(scoreData.scores).find(
-            (k) =>
-              k.toLowerCase() === criteriaKey.toLowerCase() ||
-              k.includes(displayName) ||
-              displayName.includes(k)
-          )
-          if (matchedKey) {
-            scoreValue = Number(scoreData.scores[matchedKey]) || 0
-          }
-        }
-
-        // 如果找到了分數，視為「本題的加減分數（delta）」
-        if (scoreValue !== undefined) {
-          const delta = Number(scoreValue) || 0
-          rawScores[criteriaKey] = delta
-          scores[criteriaKey] = delta
-          numericProvidedKeys.add(criteriaKey)
-        }
-      }
-    })
-  }
-
-  // 規範化：確保所有 evaluation_criteria 的 key 都存在於 scores（預設本題加減分為 0）
-  if (evaluationCriteria && evaluationCriteria.length > 0) {
-    evaluationCriteria.forEach((criteria: any) => {
-      const k = criteria.key
-      if (typeof scores[k] !== 'number') {
-        scores[k] = 0
-      }
-    })
-  }
-
-  // 若 AI 未提供數值分數，根據 additions/deductions 與 DB 規則自動推導分數
-  const getReasons = (
-    container: any,
-    key: string,
-    displayName: string
-  ): string[] => {
-    if (!container) return []
-    if (Array.isArray(container[key])) return container[key]
-    if (Array.isArray(container[displayName])) return container[displayName]
-    // 嘗試鬆散匹配（名稱包含）
-    const matchedKey = Object.keys(container).find(
-      (k) =>
-        k.toLowerCase() === key.toLowerCase() ||
-        k.includes(displayName) ||
-        displayName.includes(k)
-    )
-    if (matchedKey && Array.isArray(container[matchedKey]))
-      return container[matchedKey]
-    return []
-  }
-  const parseDeltaFromRule = (rule: string): number => {
-    // 解析類似："搬得動磚頭+10分"、"展現深度理解+1分"、"表達不清晰-1分"
-    const m = rule.match(/[+\-]?\d+(?:\.\d+)?(?=\s*分)/)
-    return m ? Number(m[0]) : 0
-  }
   // deductions/additions：支援新結構（事件陣列）
   const dedParsed = normalizeReasonContainer(
     (scoreData as any).deductions,
@@ -333,52 +211,26 @@ function createAnswerScore(
     'addition'
   )
 
+  const scores: Record<string, number> = {}
   if (evaluationCriteria && evaluationCriteria.length > 0) {
     evaluationCriteria.forEach((c: any) => {
       const key = c.key
-      if (numericProvidedKeys.has(key)) return // 已有 AI 顯式數值，跳過
       const max = criteriaMap[key] || 10
-      const logic = logicMap[key] || 'deduction'
-      // 以 0 為基準，根據加分/扣分規則累加，作為「本題的加減分數」
-      let value = 0
-      const displayName = c.display_name || key
-      // 優先用結構化事件推導 delta（更穩定且可統計）
-      if (
-        addParsed.deltaByKey[key] !== undefined ||
-        dedParsed.deltaByKey[key] !== undefined
-      ) {
-        value += Number(addParsed.deltaByKey[key] || 0)
-        value += Number(dedParsed.deltaByKey[key] || 0)
-      } else {
-        // fallback：舊字串陣列原因（向後兼容）
-        const adds = getReasons((scoreData as any).additions, key, displayName)
-        const deds = getReasons((scoreData as any).deductions, key, displayName)
-        if (Array.isArray(adds) && c.addition_rules) {
-          // addition_rules 可能是字串或陣列，統一成陣列
-          const rules: string[] = Array.isArray(c.addition_rules)
-            ? c.addition_rules
-            : [c.addition_rules]
-          adds.forEach((reason: string) => {
-            const rule = rules.find(
-              (r) => typeof r === 'string' && r.includes(reason)
-            )
-            if (rule) value += parseDeltaFromRule(rule)
-          })
-        }
-        if (Array.isArray(deds) && c.deduction_rules) {
-          const rules: string[] = Array.isArray(c.deduction_rules)
-            ? c.deduction_rules
-            : [c.deduction_rules]
-          deds.forEach((reason: string) => {
-            const rule = rules.find(
-              (r) => typeof r === 'string' && r.includes(reason)
-            )
-            if (rule) value += parseDeltaFromRule(rule) // 規則內含負號
-          })
-        }
-      }
+      const value =
+        Number(addParsed.deltaByKey[key] || 0) +
+        Number(dedParsed.deltaByKey[key] || 0)
       // 限幅到可接受的變化範圍（-max ~ +max）
       scores[key] = Math.max(-max, Math.min(max, value))
+    })
+  } else {
+    const eventKeys = new Set([
+      ...Object.keys(addParsed.deltaByKey),
+      ...Object.keys(dedParsed.deltaByKey),
+    ])
+    eventKeys.forEach((key) => {
+      scores[key] =
+        Number(addParsed.deltaByKey[key] || 0) +
+        Number(dedParsed.deltaByKey[key] || 0)
     })
   }
 

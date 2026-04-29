@@ -714,21 +714,10 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         const key = c.key
         const max = c.max_score || 10
         const logic = c.scoring_logic || 'deduction'
-        const singleScore =
+        const delta =
           typeof scoreResult.scores[key] === 'number'
             ? scoreResult.scores[key]
-            : logic === 'addition' || logic === 'composite'
-              ? 0
-              : max
-
-        let delta = 0
-        if (logic === 'addition' || logic === 'composite') {
-          // 加分制/綜合制：單題分數視為本題「加減分總和」
-          delta = singleScore
-        } else {
-          // 扣分制：單題分數是以滿分為基準的「本題評分後分數」，與滿分差值為本題扣分量
-          delta = singleScore - max // <= 0
-        }
+            : 0
 
         const currentBase =
           typeof next[key] === 'number'
@@ -1342,28 +1331,102 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                   const qid = String(
                     parsed?.questionId || `Q${effectiveQuestionIndex + 1}`
                   )
+                  const normalizeScoreEvents = (
+                    input: any,
+                    sign: 1 | -1
+                  ): {
+                    items: Record<string, any[]>
+                    legacy: Record<string, string[]>
+                    delta: Record<string, number>
+                  } => {
+                    const keyMap: Record<string, string> = {
+                      contentCompleteness: 'content_integrity',
+                      logicalClarity: 'logical_clarity',
+                      professionalDepth: 'professional_depth',
+                      communicationSkills: 'communication',
+                      personalTraits: 'personal_attributes',
+                    }
+                    const items: Record<string, any[]> = {}
+                    const legacy: Record<string, string[]> = {}
+                    const delta: Record<string, number> = {}
+                    if (!input || typeof input !== 'object') {
+                      return { items, legacy, delta }
+                    }
+
+                    Object.entries(input).forEach(([rawKey, rawValue]) => {
+                      const key = keyMap[rawKey] || rawKey
+                      const rawItems = Array.isArray(rawValue)
+                        ? rawValue
+                        : [rawValue]
+                      const list = rawItems
+                        .map((item: any) => {
+                          if (!item) return null
+                          if (typeof item === 'object') {
+                            const points = Math.abs(Number(item.points) || 0)
+                            return {
+                              ...item,
+                              points,
+                              detail: String(item.detail || ''),
+                            }
+                          }
+                          return {
+                            points: 0,
+                            detail: String(item || ''),
+                          }
+                        })
+                        .filter(Boolean) as any[]
+
+                      if (list.length === 0) return
+                      items[key] = list
+                      delta[key] =
+                        sign *
+                        list.reduce(
+                          (sum, item) => sum + (Number(item.points) || 0),
+                          0
+                        )
+                      legacy[key] = list.map((item) => {
+                        const points = Number(item.points) || 0
+                        const label =
+                          sign < 0 ? `(-${points}分)` : `(+${points}分)`
+                        const detail = String(item.detail || '').trim()
+                        return detail ? `${detail} ${label}` : label
+                      })
+                    })
+
+                    return { items, legacy, delta }
+                  }
+                  const deductionEvents = normalizeScoreEvents(
+                    parsed?.deductions,
+                    -1
+                  )
+                  const additionEvents = normalizeScoreEvents(
+                    parsed?.additions,
+                    1
+                  )
+                  const derivedScores: Record<string, number> = {}
+                  if (Array.isArray(evaluationCriteria)) {
+                    evaluationCriteria.forEach((criteria: any) => {
+                      const key = criteria.key
+                      const max = Number(criteria.max_score) || 10
+                      const value =
+                        Number(additionEvents.delta[key] || 0) +
+                        Number(deductionEvents.delta[key] || 0)
+                      derivedScores[key] = Math.max(-max, Math.min(max, value))
+                    })
+                  }
+
                   finalScoreResult = {
                     answerId: qid,
                     questionId: qid,
                     questionText: String(parsed?.questionText || ''),
-                    answerText: String(parsed?.answerText || userAnswer || ''),
+                    answerText: String(userAnswer || parsed?.answerText || ''),
                     timestamp: new Date(),
-                    scores:
-                      parsed?.scores && typeof parsed.scores === 'object'
-                        ? parsed.scores
-                        : {},
+                    scores: derivedScores,
                     totalScore: Number(parsed?.totalScore) || 0,
-                    deductions: {},
-                    additions: {},
-                    deductionItems:
-                      parsed?.deductions &&
-                      typeof parsed.deductions === 'object'
-                        ? parsed.deductions
-                        : undefined,
-                    additionItems:
-                      parsed?.additions && typeof parsed.additions === 'object'
-                        ? parsed.additions
-                        : undefined,
+                    deductions: deductionEvents.legacy,
+                    additions: additionEvents.legacy,
+                    deductionItems: deductionEvents.items,
+                    additionItems: additionEvents.items,
                     aiFeedback: String(parsed?.aiFeedback || ''),
                     additionsDetail:
                       typeof parsed?.additionsDetail === 'string'
