@@ -28,7 +28,7 @@ export const PERSONALITY_QUESTION_LIST: string[] = [
 
   // ── 協調性/合作（Big Five: Agreeableness）/ DISC: S vs D ──
   '請分享一次你和別人在做事方式上有明顯分歧，而你認為自己的方法比較好的情況。你當時是怎麼處理的？最後結果如何？',
-];
+]
 
 export const INTERVIEW_PROMPT_TEMPLATES = {
   SYSTEM_PROMPT: `你是一位專業的AI面試官，負責進行面試並對面試者的回答進行評分。請遵循以下規則：
@@ -84,11 +84,11 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
 **第二部分：評分信息（結束面試時需含最終人格判斷）**
 請輸出嚴格的單行 JSON（不換行、不加註解），基本格式如下：
 評分格式（必須是合法 JSON，鍵名與字串值都要加雙引號）：
-[SCORE_START]{"questionId":"Q1","questionText":"（必須與 currentQuestionText 完全一致）","answerText":"（逐字複製上一則回答全文；若有換行請用 \\n；字串內雙引號需跳脫為 \\\"）","nextAction":"followup","deductions":{"content_integrity":[{"points":1.5,"detail":"答非所問"}]},"additions":{"professional_depth":[{"points":1,"detail":"能說明 trade-off 並給出具體例子"}]},"scores":{"content_integrity":0,"logical_clarity":0,"professional_depth":0,"communication":0,"personal_attributes":0},"aiFeedback":"你的回饋內容","personality":null}[SCORE_END]
+[SCORE_START]{"questionId":"Q1","questionText":"（必須與 currentQuestionText 完全一致）","answerText":"","nextAction":"followup","deductions":{"content_integrity":[{"points":1.5,"detail":"答非所問"}]},"additions":{"professional_depth":[{"points":1,"detail":"能說明 trade-off 並給出具體例子"}]},"scores":{"content_integrity":0,"logical_clarity":0,"professional_depth":0,"communication":0,"personal_attributes":0},"aiFeedback":"你的回饋內容","personality":null}[SCORE_END]
 其中：
 - "questionText" 一定要對應「剛剛已經問過並且正在評分的那一題完整題目」，不能填成「下一題要問的題目」或任何說明文字。
 - 本回合的"questionText" 必須與【當前題目完整文字：{currentQuestionText}】完全一致。
-- "answerText" 一定要「逐字複製面試者上一則回答的全文」，包含所有文字、斷行與標點符號；但因為必須輸出單行 JSON，請將實際換行轉成 \\n，並確保字串內的雙引號以 \\\" 跳脫。
+- "answerText" 一律輸出空字串 ""，不要複製面試者回答全文；系統會在前端自動寫入真實回答，避免 JSON 過長與格式錯誤。
 - 絕對禁止在 "answerText" 填入「面試者尚未回答此題」或任何類似「尚未作答／沒有回答／無回覆」的說明文字；若尚未作答，就不要輸出新的評分 JSON，而是等面試者真正回答後，在下一次回覆中才針對上一題輸出評分 JSON。
 - deductions 與 additions 的結構：key 為評分標準的 key（例如：content_integrity、logical_clarity 等），value 為陣列，每筆事件必須包含 {"points":數字,"detail":"加減分原因(例如:因為 OO 所以扣了/加了 ? 分)"}。points 一律用正數表示幅度（扣分/加分由 deductions/additions 區分）。
 - deductions 中只包含「本題有扣分事件」的項目 key 與事件列表；每筆事件的 points 必須與評分標準一致。
@@ -188,13 +188,16 @@ export const INTERVIEW_PROMPT_TEMPLATES = {
 格式：[EMOTION_START]neutral[EMOTION_END]
 （引導時使用 neutral 情感標籤，表示專業、中性的語調）
 
-請引導面試者回到正題。`
+請引導面試者回到正題。`,
 }
 
 /**
  * 格式化提示詞
  */
-export function formatPrompt(template: string, variables: Record<string, string>): string {
+export function formatPrompt(
+  template: string,
+  variables: Record<string, string>
+): string {
   let formatted = template
   for (const [key, value] of Object.entries(variables)) {
     formatted = formatted.replace(new RegExp(`{${key}}`, 'g'), value)
@@ -211,7 +214,7 @@ export function parseEmotionFromResponse(response: string): {
 } {
   const emotionRegex = /\[EMOTION_START\]([a-z]+)\[EMOTION_END\]/
   const match = response.match(emotionRegex)
-  
+
   if (match && match[1]) {
     const emotion = match[1]
     const cleanResponse = response.replace(emotionRegex, '').trim()
@@ -219,8 +222,8 @@ export function parseEmotionFromResponse(response: string): {
   }
   console.log('沒有找到情感標籤，預設為 neutral')
   // 如果沒有找到情感標籤，預設為 neutral
-  return { 
-    emotion: 'neutral', 
+  return {
+    emotion: 'neutral',
     cleanResponse: response,
   }
 }
@@ -232,6 +235,46 @@ export function parseScoreFromResponse(response: string): {
   score: any | null
   cleanResponse: string
 } {
+  const extractFirstJsonObject = (raw: string): string | null => {
+    const source = String(raw || '')
+    const start = source.indexOf('{')
+    if (start === -1) return null
+
+    let depth = 0
+    let inString = false
+    let escaped = false
+
+    for (let i = start; i < source.length; i++) {
+      const ch = source[i]
+
+      if (escaped) {
+        escaped = false
+        continue
+      }
+
+      if (ch === '\\') {
+        escaped = true
+        continue
+      }
+
+      if (ch === '"') {
+        inString = !inString
+        continue
+      }
+
+      if (inString) continue
+
+      if (ch === '{') {
+        depth += 1
+      } else if (ch === '}') {
+        depth -= 1
+        if (depth === 0) return source.slice(start, i + 1)
+      }
+    }
+
+    return null
+  }
+
   const sanitizeScoreJson = (raw: string): string => {
     let s = String(raw || '').trim()
     // 常見模型輸出錯誤容錯：
@@ -246,25 +289,43 @@ export function parseScoreFromResponse(response: string): {
     return s
   }
 
-  // 多行/全域剝離：匹配所有 [SCORE_START] ... [SCORE_END]
+  const parseScorePayload = (payload: string): any | null => {
+    const jsonPayload = extractFirstJsonObject(payload) || payload
+    try {
+      return JSON.parse(jsonPayload)
+    } catch (e) {
+      try {
+        return JSON.parse(sanitizeScoreJson(jsonPayload))
+      } catch (e2) {
+        console.warn('評分JSON解析失敗（將忽略本段）:', e2)
+        return null
+      }
+    }
+  }
+
+  // 多行/全域剝離：匹配所有完整 [SCORE_START] ... [SCORE_END]
   const blockRegex = /\[SCORE_START\]([\s\S]*?)\[SCORE_END\]/g
   let lastScore: any | null = null
   let clean = response
   let match: RegExpExecArray | null
   while ((match = blockRegex.exec(response)) !== null) {
-    const payload = match[1]
-    try {
-      lastScore = JSON.parse(payload)
-    } catch (e) {
-      try {
-        lastScore = JSON.parse(sanitizeScoreJson(payload))
-      } catch (e2) {
-        console.warn('評分JSON解析失敗（將忽略本段）:', e2)
-      }
+    const parsed = parseScorePayload(match[1])
+    if (parsed) lastScore = parsed
+  }
+
+  // 容錯：模型有時會漏掉 [SCORE_END]，但 SCORE_START 後的 JSON 已完整。
+  if (!lastScore) {
+    const startIdx = response.lastIndexOf('[SCORE_START]')
+    if (startIdx !== -1) {
+      const payload = response.slice(startIdx + '[SCORE_START]'.length)
+      const parsed = parseScorePayload(payload)
+      if (parsed) lastScore = parsed
     }
   }
+
   // 無論解析是否成功，先從顯示文字中移除所有評分區塊
   clean = clean.replace(blockRegex, '').trim()
+  clean = clean.replace(/\[SCORE_START\][\s\S]*$/g, '').trim()
   return { score: lastScore, cleanResponse: clean }
 }
 
@@ -288,6 +349,7 @@ export function parseInterviewResponse(response: string): {
   return {
     emotion: emotionResult.emotion,
     score: scoreResult.score,
-    cleanResponse: (visible && visible.length > 0) ? visible : scoreResult.cleanResponse
+    cleanResponse:
+      visible && visible.length > 0 ? visible : scoreResult.cleanResponse,
   }
 }

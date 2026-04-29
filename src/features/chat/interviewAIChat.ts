@@ -82,13 +82,24 @@ function getApiEndpoint(aiService: string): string {
   return '/api/ai/vercel'
 }
 
+function getLatestUserText(messages: Message[]): string | undefined {
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === 'user')
+
+  return typeof latestUserMessage?.content === 'string'
+    ? latestUserMessage.content
+    : undefined
+}
+
 /**
  * 創建AnswerScore對象
  */
 function createAnswerScore(
   scoreData: any,
   questionIndex?: number,
-  evaluationCriteria?: any[]
+  evaluationCriteria?: any[],
+  answerTextOverride?: string
 ): AnswerScore | null {
   const normalizeReasonContainer = (
     input: any,
@@ -386,7 +397,7 @@ function createAnswerScore(
     answerId: questionId,
     questionId: questionId,
     questionText: scoreData.questionText || '',
-    answerText: scoreData.answerText || '',
+    answerText: answerTextOverride || scoreData.answerText || '',
     timestamp: new Date(),
     scores,
     totalScore: Number(scoreData.totalScore) || 0,
@@ -737,6 +748,8 @@ export async function getInterviewAIResponse(
     customApiIncludeMimeType,
   } = getAIConfig()
 
+  const latestUserAnswer = getLatestUserText(messages)
+
   // 使用面試偏好語言（來自前端傳入的 preferredLanguageCode）
   const userLanguage = mapInterviewLanguageToLabel(preferredLanguageCode)
 
@@ -926,7 +939,8 @@ export async function getInterviewAIResponse(
         scoreResult = createAnswerScore(
           score,
           questionIndex,
-          evaluationCriteria
+          evaluationCriteria,
+          latestUserAnswer
         )
         if (scoreResult) {
           logScoreResult(scoreResult)
@@ -983,6 +997,8 @@ export async function getInterviewAIResponseStream(
     customApiBody,
     customApiIncludeMimeType,
   } = getAIConfig()
+
+  const latestUserAnswer = getLatestUserText(messages)
 
   // 使用面試偏好語言（來自前端傳入的 preferredLanguageCode）
   const userLanguage = mapInterviewLanguageToLabel(preferredLanguageCode)
@@ -1556,7 +1572,8 @@ export async function getInterviewAIResponseStream(
               scoreResult = createAnswerScore(
                 score,
                 questionIndex,
-                evaluationCriteria
+                evaluationCriteria,
+                latestUserAnswer
               )
               if (scoreResult) {
                 logScoreResult(scoreResult)

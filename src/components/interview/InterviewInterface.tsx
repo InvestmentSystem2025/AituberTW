@@ -998,24 +998,6 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       )
 
       try {
-        // 將對話轉換為Message格式
-        const conversationMessages: Message[] = messages.map((msg) => ({
-          role: msg.type === 'ai' ? 'assistant' : 'user',
-          content: msg.content,
-        }))
-
-        // 添加用戶的最新回答（避免在「續接」情況下重複附加同一句）
-        const lastMsg = messages[messages.length - 1]
-        const shouldAppendUserAnswer = !(
-          lastMsg?.type === 'user' && lastMsg.content === userAnswer
-        )
-        if (shouldAppendUserAnswer) {
-          conversationMessages.push({
-            role: 'user',
-            content: userAnswer,
-          })
-        }
-
         // 準備問題列表供 AI 使用
         // 仍提供 DB 題庫給 prompt 作為背景資訊，但「下一題」完全由前端控制
         const questionsList = formattedQuestions.map((q) => q.question)
@@ -1030,6 +1012,84 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                 questionSequence[effectiveQuestionIndex + 1]?.question || ''
               )
             : ''
+
+        const lastMsg = messages[messages.length - 1]
+        const shouldAppendUserAnswer = !(
+          lastMsg?.type === 'user' && lastMsg.content === userAnswer
+        )
+        const messagesWithCurrentAnswer: ChatMessage[] = shouldAppendUserAnswer
+          ? [
+              ...messages,
+              {
+                id: `current-user-${Date.now()}`,
+                type: 'user',
+                content: userAnswer,
+                timestamp: new Date(),
+              },
+            ]
+          : messages
+
+        const truncateForPrompt = (value: string, maxLength = 1200) => {
+          const text = String(value || '').trim()
+          if (text.length <= maxLength) return text
+          return `${text.slice(0, maxLength)}...（已截斷）`
+        }
+
+        const buildPersonalityReferenceMessage = (): Message | null => {
+          const userMessages = messagesWithCurrentAnswer.filter(
+            (msg) => msg.type === 'user' && msg.content.trim()
+          )
+          const maxPersonalityQuestionIndex = Math.min(
+            questionSequence.length - 1,
+            PERSONALITY_QUESTION_LIST.length
+          )
+          const referenceLines: string[] = []
+
+          for (let index = 0; index <= maxPersonalityQuestionIndex; index++) {
+            const answer = userMessages[index]?.content?.trim()
+            if (!answer) continue
+
+            referenceLines.push(
+              [
+                `題號 ${index + 1}`,
+                `問題：${questionSequence[index]?.question || ''}`,
+                `回答：${truncateForPrompt(answer)}`,
+              ].join('\n')
+            )
+          }
+
+          if (referenceLines.length === 0) return null
+
+          return {
+            role: 'user',
+            content: [
+              '以下是本場面試的人格判斷參考紀錄，只用於最後輸出 personality 欄位；不要把它當成目前題目的回答，也不要重複評分這些舊回答。',
+              ...referenceLines,
+            ].join('\n\n'),
+          }
+        }
+
+        const lastAssistantMessage = [...messages]
+          .reverse()
+          .find((msg) => msg.type === 'ai' && msg.content.trim())
+
+        const conversationMessages: Message[] = []
+        if (isLastQuestion) {
+          const personalityReferenceMessage = buildPersonalityReferenceMessage()
+          if (personalityReferenceMessage) {
+            conversationMessages.push(personalityReferenceMessage)
+          }
+        }
+        if (lastAssistantMessage) {
+          conversationMessages.push({
+            role: 'assistant',
+            content: lastAssistantMessage.content,
+          })
+        }
+        conversationMessages.push({
+          role: 'user',
+          content: userAnswer,
+        })
 
         // 🔍 DEBUG: Client-side log（幫助偵錯）
         if (DEBUG_INTERVIEW) {
@@ -1063,6 +1123,15 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           totalQuestions: questionSequence.length,
           isFollowUpPhase: effectiveIsFollowUpPhase,
           followUpCount: effectiveFollowUpCount,
+          payloadMessages: conversationMessages.map((message) => ({
+            role: message.role,
+            contentPreview:
+              typeof message.content === 'string'
+                ? message.content.slice(0, 200)
+                : '',
+            contentLength:
+              typeof message.content === 'string' ? message.content.length : 0,
+          })),
         })
 
         // 調用AI API獲取串流回應
