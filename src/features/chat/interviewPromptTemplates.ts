@@ -222,6 +222,110 @@ export function parseScoreFromResponse(response: string): {
     return s
   }
 
+  const parseJsonStringValue = (value: string): string => {
+    try {
+      return JSON.parse(`"${value}"`)
+    } catch {
+      return value.replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+    }
+  }
+
+  const extractStringField = (raw: string, key: string): string | undefined => {
+    const match = raw.match(
+      new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`)
+    )
+    return match?.[1] ? parseJsonStringValue(match[1]) : undefined
+  }
+
+  const extractSectionSlice = (raw: string, key: string): string => {
+    const keyMatch = raw.match(new RegExp(`"${key}"\\s*:`))
+    if (!keyMatch || keyMatch.index === undefined) return ''
+
+    const start = keyMatch.index + keyMatch[0].length
+    const tail = raw.slice(start)
+    const endMatch = tail.match(
+      /,\s*"(questionId|questionText|nextAction|deductions|additions|aiFeedback|personality)"\s*:/
+    )
+    return endMatch && endMatch.index !== undefined
+      ? tail.slice(0, endMatch.index)
+      : tail
+  }
+
+  const parseReasonSectionLoose = (
+    raw: string,
+    sectionKey: 'deductions' | 'additions'
+  ): Record<string, Array<{ points: number; detail: string }>> => {
+    const section = extractSectionSlice(raw, sectionKey)
+    if (!section) return {}
+
+    const result: Record<string, Array<{ points: number; detail: string }>> = {}
+    const criterionRegex =
+      /"([A-Za-z0-9_]+)"\s*:\s*\[\s*((?:\{[\s\S]*?\}\s*,?\s*)*)/g
+    let criterionMatch: RegExpExecArray | null
+
+    while ((criterionMatch = criterionRegex.exec(section)) !== null) {
+      const criterionKey = criterionMatch[1]
+      const rawItems = criterionMatch[2] || ''
+      const itemRegex = /\{[\s\S]*?\}/g
+      const items: Array<{ points: number; detail: string }> = []
+      let itemMatch: RegExpExecArray | null
+
+      while ((itemMatch = itemRegex.exec(rawItems)) !== null) {
+        const itemSource = itemMatch[0]
+        try {
+          const parsed = JSON.parse(itemSource)
+          items.push({
+            points: Math.abs(Number(parsed?.points) || 0),
+            detail: String(parsed?.detail || ''),
+          })
+        } catch {
+          const pointsMatch = itemSource.match(
+            /"points"\s*:\s*(-?\d+(?:\.\d+)?)/
+          )
+          const detail = extractStringField(itemSource, 'detail') || ''
+          items.push({
+            points: Math.abs(Number(pointsMatch?.[1]) || 0),
+            detail,
+          })
+        }
+      }
+
+      if (items.length > 0) {
+        result[criterionKey] = items
+      }
+    }
+
+    return result
+  }
+
+  const parseScorePayloadLoose = (payload: string): any | null => {
+    const raw = extractFirstJsonObject(payload) || payload
+    const nextAction = extractStringField(raw, 'nextAction')
+    const normalizedNextAction =
+      nextAction === 'followup' || nextAction === 'next' || nextAction === 'end'
+        ? nextAction
+        : undefined
+    const partial = {
+      questionId: extractStringField(raw, 'questionId'),
+      questionText: extractStringField(raw, 'questionText'),
+      nextAction: normalizedNextAction,
+      deductions: parseReasonSectionLoose(raw, 'deductions'),
+      additions: parseReasonSectionLoose(raw, 'additions'),
+      aiFeedback: extractStringField(raw, 'aiFeedback') || '',
+      personality: null,
+    }
+
+    const hasUsefulData =
+      partial.questionId ||
+      partial.questionText ||
+      partial.nextAction ||
+      Object.keys(partial.deductions).length > 0 ||
+      Object.keys(partial.additions).length > 0 ||
+      partial.aiFeedback
+
+    return hasUsefulData ? partial : null
+  }
+
   const parseScorePayload = (payload: string): any | null => {
     const jsonPayload = extractFirstJsonObject(payload) || payload
     try {
@@ -230,8 +334,19 @@ export function parseScoreFromResponse(response: string): {
       try {
         return JSON.parse(sanitizeScoreJson(jsonPayload))
       } catch (e2) {
-        console.warn('評分JSON解析失敗（將忽略本段）:', e2)
-        return null
+        const looseScore = parseScorePayloadLoose(payload)
+        console.warn('評分JSON解析失敗，改用寬鬆欄位解析:', {
+          error: e2,
+          recoveredNextAction: looseScore?.nextAction || null,
+          recoveredQuestionId: looseScore?.questionId || null,
+          recoveredDeductionKeys: looseScore?.deductions
+            ? Object.keys(looseScore.deductions)
+            : [],
+          recoveredAdditionKeys: looseScore?.additions
+            ? Object.keys(looseScore.additions)
+            : [],
+        })
+        return looseScore
       }
     }
   }
