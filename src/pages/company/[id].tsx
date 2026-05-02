@@ -3851,7 +3851,6 @@ ${criteriaText}
                                                 criteriaNames[e.key] ||
                                                 e.key
                                               )}: {e.score}
-                                              {e.evidence ? `（說明：${e.evidence}）` : ''}
                                             </li>
                                           ))}
                                         </ul>
@@ -4611,5 +4610,4 @@ ${criteriaText}
     </div>
   )
 }
-
 
