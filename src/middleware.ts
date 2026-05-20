@@ -42,7 +42,8 @@ function safeOrigin(urlLike: string | undefined): string | null {
 function originToWsOrigin(origin: string): string | null {
   try {
     const u = new URL(origin)
-    const wsProto = u.protocol === 'https:' ? 'wss:' : u.protocol === 'http:' ? 'ws:' : null
+    const wsProto =
+      u.protocol === 'https:' ? 'wss:' : u.protocol === 'http:' ? 'ws:' : null
     if (!wsProto) return null
     return `${wsProto}//${u.host}`
   } catch {
@@ -51,17 +52,19 @@ function originToWsOrigin(origin: string): string | null {
 }
 
 function buildConnectSrc(req: NextRequest, isRelaxed: boolean): string {
-  const allowedHttpOrigins = uniqPreserve([
-    // Supabase browser client needs these.
-    safeOrigin(process.env.NEXT_PUBLIC_SUPABASE_URL as string | undefined),
-    safeOrigin(process.env.SUPABASE_AUTH_PUBLIC_URL as string | undefined),
-    // Some pages talk to MCP server from browser.
-    safeOrigin(process.env.NEXT_PUBLIC_MCP_SERVER_URL as string | undefined),
-    // MediaPipe Tasks Vision loads WASM from this CDN by default (unless you self-host the wasm files).
-    'https://cdn.jsdelivr.net',
-    // MediaPipe model assets (e.g. *.tflite) are served from Google Cloud Storage.
-    'https://storage.googleapis.com',
-  ].filter((v): v is string => typeof v === 'string' && v.length > 0))
+  const allowedHttpOrigins = uniqPreserve(
+    [
+      // Supabase browser client needs these.
+      safeOrigin(process.env.NEXT_PUBLIC_SUPABASE_URL as string | undefined),
+      safeOrigin(process.env.SUPABASE_AUTH_PUBLIC_URL as string | undefined),
+      // Some pages talk to MCP server from browser.
+      safeOrigin(process.env.NEXT_PUBLIC_MCP_SERVER_URL as string | undefined),
+      // MediaPipe Tasks Vision loads WASM from this CDN by default (unless you self-host the wasm files).
+      'https://cdn.jsdelivr.net',
+      // MediaPipe model assets (e.g. *.tflite) are served from Google Cloud Storage.
+      'https://storage.googleapis.com',
+    ].filter((v): v is string => typeof v === 'string' && v.length > 0)
+  )
 
   const allowedWsOrigins = uniqPreserve(
     allowedHttpOrigins
@@ -90,7 +93,11 @@ function buildConnectSrc(req: NextRequest, isRelaxed: boolean): string {
   return ['connect-src', ...sources].join(' ')
 }
 
-function buildCsp(nonce: string, isRelaxed: boolean, connectSrc: string): string {
+function buildCsp(
+  nonce: string,
+  isRelaxed: boolean,
+  connectSrc: string
+): string {
   // Phase B (production): nonce-based CSP, no unsafe-*
   // Relaxed mode: allow eval/inline to avoid breaking Next dev tooling.
   //
@@ -106,7 +113,7 @@ function buildCsp(nonce: string, isRelaxed: boolean, connectSrc: string): string
       "script-src 'self'",
       `'nonce-${nonce}'`,
       // MediaPipe Tasks Vision dynamically loads vision_wasm_internal.js from jsDelivr; allow that CDN for script.
-      "https://cdn.jsdelivr.net",
+      'https://cdn.jsdelivr.net',
       // MediaPipe / WebAssembly compilation can be blocked by CSP unless wasm is explicitly allowed.
       // Prefer the narrower directive over 'unsafe-eval'.
       ...(isRelaxed ? [] : ["'wasm-unsafe-eval'"]),
@@ -121,9 +128,11 @@ function buildCsp(nonce: string, isRelaxed: boolean, connectSrc: string): string
       `'nonce-${nonce}'`,
       ...(isRelaxed ? ["'unsafe-inline'"] : []),
     ].join(' '),
-    ["style-src-elem 'self'", `'nonce-${nonce}'`, ...(isRelaxed ? ["'unsafe-inline'"] : [])].join(
-      ' '
-    ),
+    [
+      "style-src-elem 'self'",
+      `'nonce-${nonce}'`,
+      ...(isRelaxed ? ["'unsafe-inline'"] : []),
+    ].join(' '),
     "style-src-attr 'unsafe-inline'",
     // Allow data/blob for user-generated images and Next.js blobs.
     "img-src 'self' data: blob:",
@@ -135,7 +144,7 @@ function buildCsp(nonce: string, isRelaxed: boolean, connectSrc: string): string
     "frame-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
-    "form-action 'self'",
+    "form-action 'self' https://ccore.newebpay.com https://core.newebpay.com",
     "frame-ancestors 'self'",
     // Security hardening
     'block-all-mixed-content',
@@ -155,7 +164,8 @@ export function middleware(req: NextRequest) {
   // - Static (SSG) pages are rendered at build time. They cannot embed a per-request nonce.
   // - Therefore, when security headers are strict (i.e. not relaxed), we must use a *stable* nonce
   //   so the build output and runtime CSP match.
-  const stableNonce = (process.env.CSP_NONCE as string | undefined) || 'zap-scan-nonce'
+  const stableNonce =
+    (process.env.CSP_NONCE as string | undefined) || 'zap-scan-nonce'
   const nonce = isRelaxed ? generateNonceBase64() : stableNonce
   const connectSrc = buildConnectSrc(req, isRelaxed)
 
@@ -196,7 +206,10 @@ export function middleware(req: NextRequest) {
     res.headers.set('Content-Type', 'application/json; charset=utf-8')
   }
 
-  res.headers.set('Content-Security-Policy', buildCsp(nonce, isRelaxed, connectSrc))
+  res.headers.set(
+    'Content-Security-Policy',
+    buildCsp(nonce, isRelaxed, connectSrc)
+  )
   res.headers.set('X-Frame-Options', 'SAMEORIGIN')
   res.headers.set('X-Content-Type-Options', 'nosniff')
   res.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
@@ -224,4 +237,3 @@ export function middleware(req: NextRequest) {
 export const config = {
   matcher: '/:path*',
 }
-

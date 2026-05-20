@@ -5,6 +5,22 @@ import { GuidedOverlay } from '@/components/tutorial/GuidedOverlay'
 
 type TosResp = { accepted: boolean; version: string | null; accepted_at?: string }
 
+type SubscriptionInfo = {
+  status: 'free_testing' | 'none' | 'active' | 'past_due' | 'canceled'
+  planName: string
+  amountTwd: number | null
+  billingCycle: 'monthly' | 'yearly' | null
+  nextBillingDate: string | null
+  currentPeriodEnd: string | null
+  paymentMethodLabel: string | null
+  cardStatus: 'none' | 'active' | 'card_update_required'
+  cancelAtPeriodEnd: boolean
+  canSubscribe: boolean
+  canModifyPayment: boolean
+  canCancel: boolean
+  message: string
+}
+
 type RecruiterTutorialState = {
   active: boolean
   step: number
@@ -55,7 +71,7 @@ export default function MePage() {
   const [savingPreferredLanguage, setSavingPreferredLanguage] = useState(false)
   const [copied, setCopied] = useState(false)
   const [tos, setTos] = useState<TosResp | null>(null)
-  const [activeTab, setActiveTab] = useState<'profile' | 'company' | 'interviews'>('profile')
+  const [activeTab, setActiveTab] = useState<'profile' | 'company' | 'interviews' | 'subscription'>('profile')
   const [tabInitialized, setTabInitialized] = useState(false)
   const [companies, setCompanies] = useState<any[]>([])
   const [interviews, setInterviews] = useState<any[]>([])
@@ -63,6 +79,9 @@ export default function MePage() {
   const [accessToken, setAccessToken] = useState<string>('')
   const [centerNotice, setCenterNotice] = useState<string>('')
   const [quotaInfo, setQuotaInfo] = useState<{ remaining: number; used_count: number; free_quota: number } | null>(null)
+  const [subscriptionInfo, setSubscriptionInfo] = useState<SubscriptionInfo | null>(null)
+  const [subscriptionLoading, setSubscriptionLoading] = useState(false)
+  const [subscriptionError, setSubscriptionError] = useState<string>('')
   const [startInterviewModal, setStartInterviewModal] = useState<{
     open: boolean
     interviewId: string | null
@@ -99,7 +118,7 @@ export default function MePage() {
       if (typeof window !== 'undefined') {
         const params = new URLSearchParams(window.location.search)
         const tab = params.get('tab')
-        if (tab === 'interviews' || tab === 'profile' || tab === 'company') {
+        if (tab === 'interviews' || tab === 'profile' || tab === 'company' || tab === 'subscription') {
           setActiveTab(tab)
           setTabInitialized(true)
           return
@@ -108,7 +127,7 @@ export default function MePage() {
       // 如果 window 不可用，等待 router 準備好
       if (router.isReady) {
         const tabParam = router.query.tab as string | undefined
-        if (tabParam === 'interviews' || tabParam === 'profile' || tabParam === 'company') {
+        if (tabParam === 'interviews' || tabParam === 'profile' || tabParam === 'company' || tabParam === 'subscription') {
           setActiveTab(tabParam)
         }
         setTabInitialized(true)
@@ -116,7 +135,7 @@ export default function MePage() {
     } else if (router.isReady) {
       // router 準備好後，如果 URL 參數改變，更新 tab
       const tabParam = router.query.tab as string | undefined
-      if (tabParam === 'interviews' || tabParam === 'profile' || tabParam === 'company') {
+      if (tabParam === 'interviews' || tabParam === 'profile' || tabParam === 'company' || tabParam === 'subscription') {
         setActiveTab(tabParam)
       }
     }
@@ -155,6 +174,7 @@ export default function MePage() {
       const sess = sessionOverride ?? (await supabase.auth.getSession()).data.session
       const token = sess?.access_token
       setEmail(sess?.user?.email || '')
+      let loadedRole: 'jobSeeker' | 'recruiter' | null = null
       
       // 獲取 profile ID 和 role
       if (token && sess?.user?.id) {
@@ -170,6 +190,7 @@ export default function MePage() {
         setFamilyName(typeof (profile as any)?.family_name === 'string' ? (profile as any).family_name : '')
         setGivenName(typeof (profile as any)?.given_name === 'string' ? (profile as any).given_name : '')
         if (profile?.role) {
+          loadedRole = profile.role as 'jobSeeker' | 'recruiter'
           setUserRole(profile.role as 'jobSeeker' | 'recruiter')
           // 不需要在這裡設定預設 tab，因為已經在初始化時從 URL 讀取了
           // 如果沒有 URL 參數，getInitialTab() 已經返回 'profile' 作為預設值
@@ -216,6 +237,10 @@ export default function MePage() {
         } catch {
           // ignore
         }
+      }
+
+      if (token && loadedRole === 'recruiter') {
+        await loadSubscription(token)
       }
 
       await loadCompanies(token || '')
@@ -307,6 +332,26 @@ export default function MePage() {
 
   const isTutorialActive = tutorial.active && tutorial.step > 0
   const isTutorialPrompt = tutorial.active && tutorial.step === 0
+
+  const loadSubscription = async (token: string) => {
+    if (!token) return
+    setSubscriptionLoading(true)
+    setSubscriptionError('')
+    try {
+      const response = await fetch('/api/subscriptions/me', {
+        headers: { 'x-supabase-token': token },
+      })
+      const body = await response.json()
+      if (!response.ok || !body?.ok) {
+        throw new Error(body?.error || 'SUBSCRIPTION_LOAD_FAILED')
+      }
+      setSubscriptionInfo(body.subscription as SubscriptionInfo)
+    } catch (err) {
+      setSubscriptionError('訂閱狀態暫時無法讀取，請稍後再試。')
+    } finally {
+      setSubscriptionLoading(false)
+    }
+  }
 
   const shouldPrefillCompanyForm = userRole === 'recruiter' && isTutorialActive && tutorial.step === 2
   const prefillCompanyForm = () => {
@@ -782,6 +827,17 @@ export default function MePage() {
               公司
             </button>
           )}
+          {userRole === 'recruiter' && (
+            <button
+              onClick={() => {
+                setActiveTab('subscription')
+                if (accessToken) void loadSubscription(accessToken)
+              }}
+              style={{ padding: '8px 12px', borderBottom: activeTab === 'subscription' ? '2px solid #111' : '2px solid transparent' }}
+            >
+              訂閱
+            </button>
+          )}
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
           <button
@@ -1105,6 +1161,181 @@ export default function MePage() {
         </div>
       )}
 
+      {activeTab === 'subscription' && userRole === 'recruiter' && (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+            <div>
+              <h2 style={{ fontSize: 18, fontWeight: 600 }}>訂閱</h2>
+              <div style={{ marginTop: 6, fontSize: 14, color: '#4b5563' }}>
+                企業端付費方案會用來解鎖公司面試、履歷審查與 AI 題目等用量限制。
+              </div>
+            </div>
+            <button
+              onClick={() => accessToken && loadSubscription(accessToken)}
+              disabled={subscriptionLoading}
+              style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: '1px solid #d1d5db',
+                background: '#fff',
+                cursor: subscriptionLoading ? 'not-allowed' : 'pointer',
+                opacity: subscriptionLoading ? 0.65 : 1,
+              }}
+            >
+              {subscriptionLoading ? '更新中…' : '重新整理'}
+            </button>
+          </div>
+
+          {subscriptionError && (
+            <div style={{ marginTop: 16, padding: 12, border: '1px solid #f59e0b', borderRadius: 8, background: '#fffbeb', color: '#92400e' }}>
+              {subscriptionError}
+            </div>
+          )}
+
+          <div style={{ marginTop: 16, display: 'grid', gap: 16 }}>
+            <div style={{ padding: 18, border: '2px solid #000', borderRadius: 8, background: '#f9fafb' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 4 }}>當前訂閱狀態</div>
+                  <div style={{ fontSize: 24, fontWeight: 800 }}>
+                    {subscriptionInfo?.status === 'active'
+                      ? '已訂閱'
+                      : subscriptionInfo?.status === 'past_due'
+                        ? '付款異常'
+                        : subscriptionInfo?.status === 'free_testing'
+                          ? '免費測試中'
+                          : subscriptionInfo?.status === 'canceled'
+                            ? '已取消'
+                            : '尚未訂閱'}
+                  </div>
+                  <div style={{ marginTop: 8, color: '#374151', lineHeight: 1.6 }}>
+                    {subscriptionInfo?.message || '正在準備企業訂閱方案。'}
+                  </div>
+                </div>
+                <span
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: 999,
+                    background:
+                      subscriptionInfo?.status === 'active'
+                        ? '#dcfce7'
+                        : subscriptionInfo?.status === 'past_due' || subscriptionInfo?.cardStatus === 'card_update_required'
+                          ? '#fee2e2'
+                          : '#e0f2fe',
+                    color:
+                      subscriptionInfo?.status === 'active'
+                        ? '#166534'
+                        : subscriptionInfo?.status === 'past_due' || subscriptionInfo?.cardStatus === 'card_update_required'
+                          ? '#991b1b'
+                          : '#075985',
+                    fontSize: 13,
+                    fontWeight: 700,
+                  }}
+                >
+                  {subscriptionInfo?.planName || '企業訂閱'}
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+              {[
+                {
+                  label: '方案',
+                  value: subscriptionInfo?.planName || '尚未選擇',
+                },
+                {
+                  label: '費用',
+                  value:
+                    typeof subscriptionInfo?.amountTwd === 'number'
+                      ? `NT$${subscriptionInfo.amountTwd.toLocaleString('zh-TW')} / ${subscriptionInfo.billingCycle === 'yearly' ? '年' : '月'}`
+                      : '免費測試期',
+                },
+                {
+                  label: '預計續訂日期',
+                  value: subscriptionInfo?.nextBillingDate || '尚未排定',
+                },
+                {
+                  label: '本期可用至',
+                  value: subscriptionInfo?.currentPeriodEnd || '免費測試期間',
+                },
+                {
+                  label: '付款方式',
+                  value: subscriptionInfo?.paymentMethodLabel || '尚未綁定',
+                },
+                {
+                  label: '卡片狀態',
+                  value:
+                    subscriptionInfo?.cardStatus === 'active'
+                      ? '正常'
+                      : subscriptionInfo?.cardStatus === 'card_update_required'
+                        ? '需要更新'
+                        : '尚未綁定',
+                },
+              ].map((item) => (
+                <div key={item.label} style={{ padding: 14, border: '1px solid #d1d5db', borderRadius: 8, background: '#fff' }}>
+                  <div style={{ fontSize: 12, color: '#6b7280' }}>{item.label}</div>
+                  <div style={{ marginTop: 6, fontWeight: 700, color: '#111827' }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ padding: 16, border: '1px solid #d1d5db', borderRadius: 8, background: '#fff' }}>
+              <div style={{ fontWeight: 700, marginBottom: 10 }}>訂閱操作</div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => setCenterNotice('正式收費方案尚未啟用。NewebPay 定期定額串接完成後，這裡會導向訂閱付款流程。')}
+                  disabled={!subscriptionInfo?.canSubscribe}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 8,
+                    border: '1px solid #111827',
+                    background: subscriptionInfo?.canSubscribe ? '#111827' : '#e5e7eb',
+                    color: subscriptionInfo?.canSubscribe ? '#fff' : '#6b7280',
+                    cursor: subscriptionInfo?.canSubscribe ? 'pointer' : 'not-allowed',
+                    fontWeight: 700,
+                  }}
+                >
+                  訂閱方案
+                </button>
+                <button
+                  onClick={() => setCenterNotice('修改付費資訊會在重新綁卡流程完成後啟用。')}
+                  disabled={!subscriptionInfo?.canModifyPayment}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 8,
+                    border: '1px solid #9ca3af',
+                    background: '#fff',
+                    color: subscriptionInfo?.canModifyPayment ? '#111827' : '#9ca3af',
+                    cursor: subscriptionInfo?.canModifyPayment ? 'pointer' : 'not-allowed',
+                    fontWeight: 700,
+                  }}
+                >
+                  修改付費資訊
+                </button>
+                <button
+                  onClick={() => setCenterNotice('取消訂閱會在正式訂閱啟用後呼叫藍新終止委託，並保留本期已付費權益至到期日。')}
+                  disabled={!subscriptionInfo?.canCancel}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 8,
+                    border: '1px solid #b91c1c',
+                    background: '#fff',
+                    color: subscriptionInfo?.canCancel ? '#b91c1c' : '#9ca3af',
+                    cursor: subscriptionInfo?.canCancel ? 'pointer' : 'not-allowed',
+                    fontWeight: 700,
+                  }}
+                >
+                  取消訂閱
+                </button>
+              </div>
+              <div style={{ marginTop: 12, fontSize: 13, color: '#6b7280', lineHeight: 1.6 }}>
+                正式收費後會補上付款失敗提醒、重新綁卡、發票或收據資訊、以及最近付款紀錄。
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeTab === 'interviews' && userRole === 'jobSeeker' && (
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 600 }}>面試預定</h2>
@@ -1306,5 +1537,3 @@ export default function MePage() {
     </div>
   )
 }
-
-
