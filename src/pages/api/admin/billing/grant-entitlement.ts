@@ -22,15 +22,16 @@ export default async function handler(
   }
   try {
     const ctx = await requireBillingAdmin(req)
-    let effectiveTokenLimit = tokenLimit
-    if (effectiveTokenLimit == null && planId) {
+    let effectiveTokenLimitRaw = tokenLimit
+    if (effectiveTokenLimitRaw == null && planId) {
       const { data: plan } = await ctx.supa
         .from('billing_plans')
         .select('monthly_token_limit')
         .eq('id', planId)
         .maybeSingle()
-      effectiveTokenLimit = Number((plan as any)?.monthly_token_limit || 0)
+      effectiveTokenLimitRaw = Number((plan as any)?.monthly_token_limit || 0)
     }
+    const effectiveTokenLimit = Number(effectiveTokenLimitRaw || 0)
     if (!Number.isInteger(effectiveTokenLimit) || effectiveTokenLimit <= 0) {
       return res.status(400).json({
         ok: false,
