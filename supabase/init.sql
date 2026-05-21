@@ -2847,7 +2847,7 @@ CREATE INDEX IF NOT EXISTS idx_app_admins_role_active
 
 CREATE TABLE IF NOT EXISTS public.billing_runtime_settings (
   id TEXT PRIMARY KEY DEFAULT 'default',
-  free_interview_token_cap INTEGER NOT NULL DEFAULT 50000,
+  free_interview_token_cap INTEGER NOT NULL DEFAULT 200000,
   default_estimated_interview_tokens INTEGER NOT NULL DEFAULT 12000,
   security_alert_notify_email TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -2860,6 +2860,11 @@ CREATE TABLE IF NOT EXISTS public.billing_runtime_settings (
 INSERT INTO public.billing_runtime_settings(id)
 VALUES ('default')
 ON CONFLICT (id) DO NOTHING;
+
+UPDATE public.billing_runtime_settings
+SET free_interview_token_cap = 200000,
+    updated_at = now()
+WHERE id = 'default';
 
 CREATE TABLE IF NOT EXISTS public.billing_plans (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -3026,6 +3031,32 @@ CREATE TABLE IF NOT EXISTS public.credit_packages (
   CONSTRAINT credit_packages_interview_count_chk CHECK (interview_count > 0),
   CONSTRAINT credit_packages_token_cap_chk CHECK (per_interview_token_cap > 0)
 );
+
+INSERT INTO public.credit_packages (
+  code,
+  name,
+  price_twd,
+  interview_count,
+  per_interview_token_cap,
+  is_active,
+  updated_at
+)
+VALUES (
+  'interview_10_for_10_twd',
+  '面試追加 10 次',
+  10,
+  10,
+  200000,
+  true,
+  now()
+)
+ON CONFLICT (code) DO UPDATE
+SET name = EXCLUDED.name,
+    price_twd = EXCLUDED.price_twd,
+    interview_count = EXCLUDED.interview_count,
+    per_interview_token_cap = EXCLUDED.per_interview_token_cap,
+    is_active = EXCLUDED.is_active,
+    updated_at = now();
 
 CREATE TABLE IF NOT EXISTS public.company_interview_credit_balance (
   company_id UUID PRIMARY KEY REFERENCES public.company(id) ON DELETE CASCADE,
