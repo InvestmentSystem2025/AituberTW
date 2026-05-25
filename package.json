@@ -15,6 +15,7 @@
     "desktop": "NEXT_PUBLIC_BACKGROUND_IMAGE_PATH=\"\" run-p dev electron",
     "test": "jest",
     "test:watch": "jest --watch",
+    "newebpay:fake-webhook": "node scripts/newebpay-fake-webhook.mjs",
     "test:coverage": "jest --coverage"
   },
   "dependencies": {

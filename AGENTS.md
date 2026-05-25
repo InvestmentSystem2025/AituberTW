@@ -6,6 +6,8 @@
 
 實作功能時，效能、擴充性與安全性都視為預設需求，不要把它們留到事後最佳化。
 
+金流系統（藍新 NewebPay）相關的設定、版本、加密、callback、webhook、權益、token budget、STG Basic Auth bypass 規則，必須先查閱 `docs/newebpay-billing-spec.md`，並以該文件作為專案內 canonical spec；不要只依賴 chat context 或記憶。
+
 優先順序：
 
 1. 先確保正確性，再處理效率；明顯 hot path 要主動避免低效實作。
