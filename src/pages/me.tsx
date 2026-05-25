@@ -21,6 +21,30 @@ type SubscriptionInfo = {
   message: string
 }
 
+type InterviewCreditsInfo = {
+  balance: {
+    purchased_credits_remaining: number
+  }
+  packages: Array<{
+    id: string
+    code: string
+    name: string
+    price_twd: number
+    interview_count: number
+    per_interview_token_cap: number
+    is_active: boolean
+  }>
+  recent_purchases: Array<{
+    id: string
+    merchant_order_no: string
+    amount: number
+    interview_count: number
+    status: string
+    created_at: string
+    updated_at: string
+  }>
+}
+
 type RecruiterTutorialState = {
   active: boolean
   step: number
@@ -82,6 +106,10 @@ export default function MePage() {
   const [subscriptionInfo, setSubscriptionInfo] = useState<SubscriptionInfo | null>(null)
   const [subscriptionLoading, setSubscriptionLoading] = useState(false)
   const [subscriptionError, setSubscriptionError] = useState<string>('')
+  const [creditsInfo, setCreditsInfo] = useState<InterviewCreditsInfo | null>(null)
+  const [creditsLoading, setCreditsLoading] = useState(false)
+  const [creditsError, setCreditsError] = useState<string>('')
+  const [purchaseCreating, setPurchaseCreating] = useState(false)
   const [startInterviewModal, setStartInterviewModal] = useState<{
     open: boolean
     interviewId: string | null
@@ -118,8 +146,8 @@ export default function MePage() {
       if (typeof window !== 'undefined') {
         const params = new URLSearchParams(window.location.search)
         const tab = params.get('tab')
-        if (tab === 'interviews' || tab === 'profile' || tab === 'company' || tab === 'subscription') {
-          setActiveTab(tab)
+        if (tab === 'interviews' || tab === 'profile' || tab === 'company' || tab === 'subscription' || tab === 'credits') {
+          setActiveTab(tab === 'credits' ? 'subscription' : tab)
           setTabInitialized(true)
           return
         }
@@ -127,16 +155,16 @@ export default function MePage() {
       // 如果 window 不可用，等待 router 準備好
       if (router.isReady) {
         const tabParam = router.query.tab as string | undefined
-        if (tabParam === 'interviews' || tabParam === 'profile' || tabParam === 'company' || tabParam === 'subscription') {
-          setActiveTab(tabParam)
+        if (tabParam === 'interviews' || tabParam === 'profile' || tabParam === 'company' || tabParam === 'subscription' || tabParam === 'credits') {
+          setActiveTab(tabParam === 'credits' ? 'subscription' : tabParam)
         }
         setTabInitialized(true)
       }
     } else if (router.isReady) {
       // router 準備好後，如果 URL 參數改變，更新 tab
       const tabParam = router.query.tab as string | undefined
-      if (tabParam === 'interviews' || tabParam === 'profile' || tabParam === 'company' || tabParam === 'subscription') {
-        setActiveTab(tabParam)
+      if (tabParam === 'interviews' || tabParam === 'profile' || tabParam === 'company' || tabParam === 'subscription' || tabParam === 'credits') {
+        setActiveTab(tabParam === 'credits' ? 'subscription' : tabParam)
       }
     }
   }, [router.isReady, router.query.tab, tabInitialized])
@@ -241,6 +269,7 @@ export default function MePage() {
 
       if (token && loadedRole === 'recruiter') {
         await loadSubscription(token)
+        await loadInterviewCredits(token)
       }
 
       await loadCompanies(token || '')
@@ -350,6 +379,107 @@ export default function MePage() {
       setSubscriptionError('訂閱狀態暫時無法讀取，請稍後再試。')
     } finally {
       setSubscriptionLoading(false)
+    }
+  }
+
+  const normalizeCreditsInfo = (body: any): InterviewCreditsInfo => ({
+    balance: {
+      purchased_credits_remaining: Number(
+        body?.balance?.purchased_credits_remaining ??
+          body?.credits?.purchasedCreditsRemaining ??
+          0
+      ),
+    },
+    packages: ((body?.packages as any[]) || []).map((pkg) => ({
+      id: pkg.id,
+      code: pkg.code,
+      name: pkg.name,
+      price_twd: Number(pkg.price_twd ?? pkg.priceTwd ?? 0),
+      interview_count: Number(pkg.interview_count ?? pkg.interviewCount ?? 0),
+      per_interview_token_cap: Number(
+        pkg.per_interview_token_cap ?? pkg.perInterviewTokenCap ?? 0
+      ),
+      is_active: pkg.is_active !== false,
+    })),
+    recent_purchases: ((body?.recent_purchases as any[]) || []).map((purchase) => ({
+      id: purchase.id,
+      merchant_order_no: purchase.merchant_order_no,
+      amount: Number(purchase.amount || 0),
+      interview_count: Number(purchase.interview_count || 0),
+      status: purchase.status,
+      created_at: purchase.created_at,
+      updated_at: purchase.updated_at,
+    })),
+  })
+
+  const loadInterviewCredits = async (token: string) => {
+    if (!token) return
+    setCreditsLoading(true)
+    setCreditsError('')
+    try {
+      const response = await fetch('/api/interview-credits/me', {
+        headers: { 'x-supabase-token': token },
+      })
+      const body = await response.json()
+      if (!response.ok || !body?.ok) {
+        throw new Error(body?.error || 'CREDITS_LOAD_FAILED')
+      }
+      setCreditsInfo(normalizeCreditsInfo(body))
+    } catch {
+      setCreditsError('面試追加回數暫時無法讀取，請稍後再試。')
+    } finally {
+      setCreditsLoading(false)
+    }
+  }
+
+  const postToNewebPay = (
+    gatewayUrl: string,
+    fields: Record<string, string>
+  ) => {
+    const formEl = document.createElement('form')
+    formEl.method = 'POST'
+    formEl.action = gatewayUrl
+    formEl.style.display = 'none'
+    Object.entries(fields).forEach(([key, value]) => {
+      const input = document.createElement('input')
+      input.type = 'hidden'
+      input.name = key
+      input.value = value
+      formEl.appendChild(input)
+    })
+    document.body.appendChild(formEl)
+    formEl.submit()
+  }
+
+  const handlePurchaseCredits = async (packageId: string) => {
+    if (!accessToken || purchaseCreating) return
+    const companyId = companies[0]?.id
+    if (!companyId) {
+      setCenterNotice('請先建立或加入公司後再購買面試追加回數。')
+      return
+    }
+
+    setPurchaseCreating(true)
+    try {
+      const response = await fetch('/api/interview-credit-purchases/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-supabase-token': accessToken,
+        },
+        body: JSON.stringify({ company_id: companyId, package_id: packageId }),
+      })
+      const body = await response.json()
+      if (!response.ok || !body?.ok) {
+        throw new Error(body?.error || 'CREATE_PURCHASE_FAILED')
+      }
+      const gatewayUrl = body.gateway_url || body.gatewayUrl
+      const fields = body.form_fields || body.fields
+      if (!gatewayUrl || !fields) throw new Error('INVALID_PAYMENT_FIELDS')
+      postToNewebPay(gatewayUrl, fields)
+    } catch {
+      setCenterNotice('建立付款訂單失敗，請稍後再試。')
+      setPurchaseCreating(false)
     }
   }
 
@@ -831,7 +961,10 @@ export default function MePage() {
             <button
               onClick={() => {
                 setActiveTab('subscription')
-                if (accessToken) void loadSubscription(accessToken)
+                if (accessToken) {
+                  void loadSubscription(accessToken)
+                  void loadInterviewCredits(accessToken)
+                }
               }}
               style={{ padding: '8px 12px', borderBottom: activeTab === 'subscription' ? '2px solid #111' : '2px solid transparent' }}
             >
@@ -1171,24 +1304,28 @@ export default function MePage() {
               </div>
             </div>
             <button
-              onClick={() => accessToken && loadSubscription(accessToken)}
-              disabled={subscriptionLoading}
+              onClick={() => {
+                if (!accessToken) return
+                void loadSubscription(accessToken)
+                void loadInterviewCredits(accessToken)
+              }}
+              disabled={subscriptionLoading || creditsLoading}
               style={{
                 padding: '8px 12px',
                 borderRadius: 8,
                 border: '1px solid #d1d5db',
                 background: '#fff',
-                cursor: subscriptionLoading ? 'not-allowed' : 'pointer',
-                opacity: subscriptionLoading ? 0.65 : 1,
+                cursor: subscriptionLoading || creditsLoading ? 'not-allowed' : 'pointer',
+                opacity: subscriptionLoading || creditsLoading ? 0.65 : 1,
               }}
             >
-              {subscriptionLoading ? '更新中…' : '重新整理'}
+              {subscriptionLoading || creditsLoading ? '更新中…' : '重新整理'}
             </button>
           </div>
 
-          {subscriptionError && (
+          {(subscriptionError || creditsError) && (
             <div style={{ marginTop: 16, padding: 12, border: '1px solid #f59e0b', borderRadius: 8, background: '#fffbeb', color: '#92400e' }}>
-              {subscriptionError}
+              {subscriptionError || creditsError}
             </div>
           )}
 
@@ -1235,6 +1372,101 @@ export default function MePage() {
                   {subscriptionInfo?.planName || '企業訂閱'}
                 </span>
               </div>
+            </div>
+
+            <div style={{ padding: 18, border: '2px solid #000', borderRadius: 8, background: '#fff' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 4 }}>面試追加回數</div>
+                  <div style={{ fontSize: 20, fontWeight: 800 }}>
+                    剩餘建立面試次數（付費版）：{creditsInfo?.balance.purchased_credits_remaining ?? 0} 次
+                  </div>
+                  <div style={{ marginTop: 8, color: '#4b5563', lineHeight: 1.6 }}>
+                    購買追加回數後，付款成功需等待藍新 NotifyURL 通知完成，重新整理後會更新剩餘次數。
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 14, display: 'grid', gap: 10 }}>
+                {(creditsInfo?.packages || [])
+                  .filter((pkg) => pkg.code === 'interview_10_test')
+                  .map((pkg) => (
+                    <div
+                      key={pkg.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        padding: 12,
+                        border: '1px solid #d1d5db',
+                        borderRadius: 8,
+                        background: '#f9fafb',
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 800 }}>{pkg.name}</div>
+                        <div style={{ marginTop: 4, fontSize: 13, color: '#4b5563' }}>
+                          NT${pkg.price_twd.toLocaleString('zh-TW')} / {pkg.interview_count} 回
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handlePurchaseCredits(pkg.id)}
+                        disabled={purchaseCreating}
+                        style={{
+                          padding: '10px 14px',
+                          borderRadius: 8,
+                          border: '1px solid #111827',
+                          background: purchaseCreating ? '#e5e7eb' : '#111827',
+                          color: purchaseCreating ? '#6b7280' : '#fff',
+                          cursor: purchaseCreating ? 'not-allowed' : 'pointer',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {purchaseCreating ? '前往付款中…' : '購買面接追加10回'}
+                      </button>
+                    </div>
+                  ))}
+                {creditsInfo && creditsInfo.packages.filter((pkg) => pkg.code === 'interview_10_test').length === 0 && (
+                  <div style={{ padding: 12, border: '1px dashed #d1d5db', borderRadius: 8, color: '#6b7280' }}>
+                    目前沒有可購買的面試追加方案。
+                  </div>
+                )}
+              </div>
+
+              {(creditsInfo?.recent_purchases || []).length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 8 }}>最近購買紀錄</div>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {creditsInfo!.recent_purchases.slice(0, 3).map((purchase) => (
+                      <div
+                        key={purchase.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: 12,
+                          padding: 10,
+                          border: '1px solid #e5e7eb',
+                          borderRadius: 8,
+                          fontSize: 13,
+                        }}
+                      >
+                        <span>{purchase.merchant_order_no}</span>
+                        <span>
+                          {purchase.status === 'paid'
+                            ? '付款成功'
+                            : purchase.status === 'failed'
+                              ? '付款失敗'
+                              : purchase.status === 'pending'
+                                ? '付款確認中'
+                                : purchase.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>

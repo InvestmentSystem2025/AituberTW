@@ -17,6 +17,15 @@ import {
 type Resp =
   | {
       ok: true
+      purchase_id: string
+      merchant_order_no: string
+      gateway_url: string
+      form_fields: {
+        MerchantID: string
+        TradeInfo: string
+        TradeSha: string
+        Version: string
+      }
       gatewayUrl: string
       merchantOrderNo: string
       fields: {
@@ -66,7 +75,7 @@ export default async function handler(
       return res.status(404).json({ ok: false, error: 'PACKAGE_NOT_FOUND' })
 
     const merchantOrderNo = createMerchantOrderNo('CRD')
-    const { error: insertErr } = await ctx.supa
+    const { data: purchase, error: insertErr } = await ctx.supa
       .from('one_time_purchases')
       .insert({
         company_id: companyId,
@@ -78,6 +87,8 @@ export default async function handler(
         per_interview_token_cap: (pkg as any).per_interview_token_cap,
         status: 'pending',
       })
+      .select('id')
+      .single()
     if (insertErr)
       return res
         .status(500)
@@ -89,20 +100,25 @@ export default async function handler(
         merchantOrderNo,
         amount: Number((pkg as any).price_twd),
         itemDesc: 'AI面接官 面接追加回数',
-        orderDetail: `面接追加回数 +${(pkg as any).interview_count}`,
+        orderDetail: `面接追加${(pkg as any).interview_count}回`,
         email: ctx.profile.email || undefined,
         returnUrl: `${baseUrl}/payment/result`,
         notifyUrl:
           process.env.NEWEBPAY_MPG_NOTIFY_URL ||
           `${baseUrl}/api/newebpay/mpg/notify`,
-        clientBackUrl: `${baseUrl}/me?tab=credits`,
+        clientBackUrl: `${baseUrl}/me?tab=subscription`,
       },
       config
     )
+    const gatewayUrl = getMpgGateway(config.env)
 
     return res.status(200).json({
       ok: true,
-      gatewayUrl: getMpgGateway(config.env),
+      purchase_id: (purchase as any).id,
+      merchant_order_no: merchantOrderNo,
+      gateway_url: gatewayUrl,
+      form_fields: fields,
+      gatewayUrl,
       merchantOrderNo,
       fields,
     })

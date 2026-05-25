@@ -4,6 +4,9 @@ import { createAuthContext } from '@/lib/authContext'
 type Resp =
   | {
       ok: true
+      balance: {
+        purchased_credits_remaining: number
+      }
       credits: {
         companyId: string | null
         freeQuota: number
@@ -15,9 +18,24 @@ type Resp =
         id: string
         code: string
         name: string
+        price_twd: number
+        interview_count: number
+        per_interview_token_cap: number
+        is_active: boolean
         priceTwd: number
         interviewCount: number
         perInterviewTokenCap: number
+      }>
+      recent_purchases: Array<{
+        id: string
+        merchant_order_no: string
+        amount: number
+        interview_count: number
+        status: string
+        trade_no: string | null
+        message: string | null
+        created_at: string
+        updated_at: string
       }>
     }
   | { ok: false; error: string }
@@ -73,33 +91,63 @@ export default async function handler(
     ctx.supa
       .from('credit_packages')
       .select(
-        'id, code, name, price_twd, interview_count, per_interview_token_cap'
+        'id, code, name, price_twd, interview_count, per_interview_token_cap, is_active'
       )
       .eq('is_active', true)
       .order('price_twd', { ascending: true }),
   ])
 
+  const purchasesRes = companyId
+    ? await ctx.supa
+        .from('one_time_purchases')
+        .select(
+          'id, merchant_order_no, amount, interview_count, status, trade_no, message, created_at, updated_at'
+        )
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false })
+        .limit(5)
+    : { data: [] }
+
   const freeUsed = Number((quotaRes.data as any)?.used_count || 0)
   const freeQuota = Number((quotaRes.data as any)?.free_quota || 0)
+  const purchasedCreditsRemaining = Number(
+    (balanceRes.data as any)?.purchased_credits_remaining || 0
+  )
 
   return res.status(200).json({
     ok: true,
+    balance: {
+      purchased_credits_remaining: purchasedCreditsRemaining,
+    },
     credits: {
       companyId,
       freeQuota,
       freeUsed,
       freeRemaining: Math.max(0, freeQuota - freeUsed),
-      purchasedCreditsRemaining: Number(
-        (balanceRes.data as any)?.purchased_credits_remaining || 0
-      ),
+      purchasedCreditsRemaining,
     },
     packages: ((packagesRes.data as any[]) || []).map((pkg) => ({
       id: pkg.id,
       code: pkg.code,
       name: pkg.name,
+      price_twd: Number(pkg.price_twd),
+      interview_count: Number(pkg.interview_count),
+      per_interview_token_cap: Number(pkg.per_interview_token_cap),
+      is_active: Boolean(pkg.is_active),
       priceTwd: Number(pkg.price_twd),
       interviewCount: Number(pkg.interview_count),
       perInterviewTokenCap: Number(pkg.per_interview_token_cap),
+    })),
+    recent_purchases: ((purchasesRes.data as any[]) || []).map((purchase) => ({
+      id: purchase.id,
+      merchant_order_no: purchase.merchant_order_no,
+      amount: Number(purchase.amount),
+      interview_count: Number(purchase.interview_count),
+      status: purchase.status,
+      trade_no: purchase.trade_no || null,
+      message: purchase.message || null,
+      created_at: purchase.created_at,
+      updated_at: purchase.updated_at,
     })),
   })
 }

@@ -20,23 +20,39 @@ export default function PaymentResultPage() {
           setMessage('付款結果已送出，請回到個人頁重新登入後確認狀態。')
           return
         }
-        const response = await fetch('/api/subscriptions/me', {
-          headers: { 'x-supabase-token': token },
-        })
+        const [subscriptionResponse, creditsResponse] = await Promise.all([
+          fetch('/api/subscriptions/me', {
+            headers: { 'x-supabase-token': token },
+          }),
+          fetch('/api/interview-credits/me', {
+            headers: { 'x-supabase-token': token },
+          }),
+        ])
         if (!active) return
-        if (!response.ok) {
+        if (!subscriptionResponse.ok && !creditsResponse.ok) {
           setStatus('ready')
           setMessage('付款結果已送出，系統仍在等待藍新通知確認。')
           return
         }
-        const body = await response.json()
-        const sub = body?.subscription
+        const subscriptionBody = subscriptionResponse.ok
+          ? await subscriptionResponse.json()
+          : null
+        const creditsBody = creditsResponse.ok ? await creditsResponse.json() : null
+        const sub = subscriptionBody?.subscription
+        const latestPurchase = creditsBody?.recent_purchases?.[0]
         setStatus('ready')
-        setMessage(
-          sub?.status === 'active' || sub?.status === 'cancel_at_period_end'
-            ? '訂閱狀態已更新。'
-            : '付款結果已送出，系統仍在等待藍新通知確認。'
-        )
+        if (latestPurchase?.status === 'paid') {
+          setMessage('付款成功，面試追加回數已更新。')
+        } else if (latestPurchase?.status === 'failed') {
+          setMessage('付款失敗，未增加面試追加回數。')
+        } else if (
+          sub?.status === 'active' ||
+          sub?.status === 'cancel_at_period_end'
+        ) {
+          setMessage('訂閱狀態已更新。')
+        } else {
+          setMessage('付款結果確認中，請稍後重新整理。')
+        }
       } catch {
         if (!active) return
         setStatus('error')
@@ -63,7 +79,7 @@ export default function PaymentResultPage() {
             回到訂閱頁
           </Link>
           <Link
-            href="/me?tab=credits"
+            href="/me?tab=subscription"
             className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-800"
           >
             查看面試次數
