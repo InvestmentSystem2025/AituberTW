@@ -3,6 +3,7 @@ import {
   aes256CbcEncryptToHex,
   createSha256Upper,
   encodeQuery,
+  getNewebPayCredentials,
   getNewebPayEnv,
   maskCardFromParts,
   parseNewebPayPlainText,
@@ -42,19 +43,20 @@ export type CreateMpgTradeInput = {
 const MPG_TEST_GATEWAY = 'https://ccore.newebpay.com/MPG/mpg_gateway'
 const MPG_PRODUCTION_GATEWAY = 'https://core.newebpay.com/MPG/mpg_gateway'
 
-export const getMpgConfig = (): MpgConfig => ({
-  merchantId:
-    trimEnv(process.env.NEWEBPAY_MPG_MERCHANT_ID) ||
-    trimEnv(process.env.NEWEBPAY_MERCHANT_ID),
-  hashKey:
-    trimEnv(process.env.NEWEBPAY_MPG_HASH_KEY) ||
-    trimEnv(process.env.NEWEBPAY_HASH_KEY),
-  hashIV:
-    trimEnv(process.env.NEWEBPAY_MPG_HASH_IV) ||
-    trimEnv(process.env.NEWEBPAY_HASH_IV),
-  version: trimEnv(process.env.NEWEBPAY_MPG_VERSION) || '2.3',
-  env: getNewebPayEnv(),
-})
+export const getMpgConfig = (): MpgConfig => {
+  const env = getNewebPayEnv()
+  const credentials = getNewebPayCredentials(env, {
+    merchantId: process.env.NEWEBPAY_MPG_MERCHANT_ID,
+    hashKey: process.env.NEWEBPAY_MPG_HASH_KEY,
+    hashIV: process.env.NEWEBPAY_MPG_HASH_IV,
+  })
+
+  return {
+    ...credentials,
+    version: trimEnv(process.env.NEWEBPAY_MPG_VERSION) || '2.3',
+    env,
+  }
+}
 
 export const validateMpgConfig = (config: MpgConfig): string | null =>
   validateAesConfig(config)

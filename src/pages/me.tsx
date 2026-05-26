@@ -1424,7 +1424,7 @@ export default function MePage() {
                           fontWeight: 700,
                         }}
                       >
-                        {purchaseCreating ? '前往付款中…' : '購買面接追加10回'}
+                        {purchaseCreating ? '前往付款中…' : '購買面試次數+10次'}
                       </button>
                     </div>
                   ))}

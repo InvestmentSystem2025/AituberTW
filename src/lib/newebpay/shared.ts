@@ -10,6 +10,38 @@ export const getNewebPayEnv = (): NewebPayEnv =>
     ? 'production'
     : 'test'
 
+export type NewebPayCredentialFallbacks = {
+  merchantId?: string
+  hashKey?: string
+  hashIV?: string
+}
+
+export const getNewebPayCredentials = (
+  env: NewebPayEnv = getNewebPayEnv(),
+  fallbacks: NewebPayCredentialFallbacks = {}
+): {
+  merchantId: string
+  hashKey: string
+  hashIV: string
+} => {
+  if (env === 'test') {
+    return {
+      merchantId: trimEnv(process.env.TEST_NEWEBPAY_MERCHANT_ID),
+      hashKey: trimEnv(process.env.TEST_NEWEBPAY_HASH_KEY),
+      hashIV: trimEnv(process.env.TEST_NEWEBPAY_HASH_IV),
+    }
+  }
+
+  return {
+    merchantId:
+      trimEnv(fallbacks.merchantId) ||
+      trimEnv(process.env.NEWEBPAY_MERCHANT_ID),
+    hashKey:
+      trimEnv(fallbacks.hashKey) || trimEnv(process.env.NEWEBPAY_HASH_KEY),
+    hashIV: trimEnv(fallbacks.hashIV) || trimEnv(process.env.NEWEBPAY_HASH_IV),
+  }
+}
+
 export const validateAesConfig = (args: {
   merchantId: string
   hashKey: string

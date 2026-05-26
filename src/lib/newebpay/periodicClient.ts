@@ -2,6 +2,7 @@ import {
   aes256CbcDecryptFromHex,
   aes256CbcEncryptToHex,
   encodeQuery,
+  getNewebPayCredentials,
   getNewebPayEnv,
   parseNewebPayPlainText,
   toUnixTimestampSeconds,
@@ -51,18 +52,19 @@ const ALTER_TEST_GATEWAY = 'https://ccore.newebpay.com/MPG/period/AlterStatus'
 const ALTER_PRODUCTION_GATEWAY =
   'https://core.newebpay.com/MPG/period/AlterStatus'
 
-export const getPeriodicConfig = (): PeriodicConfig => ({
-  merchantId:
-    trimEnv(process.env.NEWEBPAY_PERIOD_MERCHANT_ID) ||
-    trimEnv(process.env.NEWEBPAY_MERCHANT_ID),
-  hashKey:
-    trimEnv(process.env.NEWEBPAY_PERIOD_HASH_KEY) ||
-    trimEnv(process.env.NEWEBPAY_HASH_KEY),
-  hashIV:
-    trimEnv(process.env.NEWEBPAY_PERIOD_HASH_IV) ||
-    trimEnv(process.env.NEWEBPAY_HASH_IV),
-  env: getNewebPayEnv(),
-})
+export const getPeriodicConfig = (): PeriodicConfig => {
+  const env = getNewebPayEnv()
+  const credentials = getNewebPayCredentials(env, {
+    merchantId: process.env.NEWEBPAY_PERIOD_MERCHANT_ID,
+    hashKey: process.env.NEWEBPAY_PERIOD_HASH_KEY,
+    hashIV: process.env.NEWEBPAY_PERIOD_HASH_IV,
+  })
+
+  return {
+    ...credentials,
+    env,
+  }
+}
 
 export const validatePeriodicConfig = (config: PeriodicConfig): string | null =>
   validateAesConfig(config)

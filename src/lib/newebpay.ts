@@ -1,4 +1,9 @@
 import crypto from 'crypto'
+import {
+  getNewebPayCredentials,
+  getNewebPayEnv,
+  trimEnv,
+} from './newebpay/shared'
 
 // Legacy MPG helper for the temporary NT$1 test page only.
 // Do not use this module for the new billing flow.
@@ -36,21 +41,15 @@ export type NewebPayConfig = {
 const TEST_GATEWAY = 'https://ccore.newebpay.com/MPG/mpg_gateway'
 const PRODUCTION_GATEWAY = 'https://core.newebpay.com/MPG/mpg_gateway'
 
-const trimEnv = (value: string | undefined): string => (value || '').trim()
-
 export const getNewebPayGateway = (env: NewebPayEnv): string =>
   env === 'production' ? PRODUCTION_GATEWAY : TEST_GATEWAY
 
 export const getNewebPayConfig = (): NewebPayConfig => {
-  const env =
-    trimEnv(process.env.NEWEBPAY_ENV).toLowerCase() === 'production'
-      ? 'production'
-      : 'test'
+  const env = getNewebPayEnv()
+  const credentials = getNewebPayCredentials(env)
 
   return {
-    merchantId: trimEnv(process.env.NEWEBPAY_MERCHANT_ID),
-    hashKey: trimEnv(process.env.NEWEBPAY_HASH_KEY),
-    hashIV: trimEnv(process.env.NEWEBPAY_HASH_IV),
+    ...credentials,
     version: trimEnv(process.env.NEWEBPAY_VERSION) || '2.0',
     env,
   }

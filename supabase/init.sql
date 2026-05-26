@@ -3069,7 +3069,7 @@ INSERT INTO public.credit_packages (
 )
 VALUES (
   'interview_10_test',
-  '面接追加10回',
+  '面試次數追加10次',
   10,
   10,
   200000,
