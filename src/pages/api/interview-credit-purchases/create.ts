@@ -100,7 +100,6 @@ export default async function handler(
         merchantOrderNo,
         amount: Number((pkg as any).price_twd),
         itemDesc: 'AI面接官 面接追加回数',
-        orderDetail: `面接追加${(pkg as any).interview_count}回`,
         email: ctx.profile.email || undefined,
         returnUrl: `${baseUrl}/payment/result`,
         notifyUrl:

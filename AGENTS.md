@@ -6,7 +6,12 @@
 
 實作功能時，效能、擴充性與安全性都視為預設需求，不要把它們留到事後最佳化。
 
-金流系統（藍新 NewebPay）相關的設定、版本、加密、callback、webhook、權益、token budget、STG Basic Auth bypass 規則，必須先查閱 `docs/newebpay-billing-spec.md`，並以該文件作為專案內 canonical spec；不要只依賴 chat context 或記憶。
+金流系統（藍新 NewebPay）相關實作必須先查閱專案文件，不要只依賴 chat context 或記憶：
+
+- `docs/newebpay-billing-spec.md`：本專案的 billing canonical spec，包含產品設計、訂閱與單次購買流程、webhook、權益、token budget、STG callback / Basic Auth bypass、DB 更新與安全規則。
+- `docs/newebpay_implementation_reference.md`：藍新 PDF/API 實裝參考，包含 MPG、定期定額、加解密、CheckCode / CheckValue、API 參數、回傳欄位、錯誤碼與測試注意事項。此檔是本機參考文件且可能被 `.gitignore` 忽略，但若存在，實作 NewebPay API 細節前必須查閱。
+
+兩份文件的分工：藍新 API 參數與錯誤碼以 `docs/newebpay_implementation_reference.md` 為準；本專案商業規則、權益更新、callback 路徑、STG bypass 與資料一致性以 `docs/newebpay-billing-spec.md` 為準。若兩者看起來衝突，必須先指出差異並釐清，不要直接猜測實作。
 
 優先順序：
 

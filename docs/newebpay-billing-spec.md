@@ -64,7 +64,7 @@
 
 ## 共通金流安全規則
 
-1. `ReturnURL` 只做畫面顯示，不可更新 DB。
+1. `ReturnURL` 只做畫面顯示，不可更新訂單狀態或權益；可寫入 sanitized diagnostic capture，用於追查藍新付款頁參數錯誤，但不得視為付款依據。
 2. `NotifyURL` 才是付款狀態依據。
 3. 不保存完整信用卡號。
 4. 不保存 CVV。
@@ -384,7 +384,9 @@ CAU `CARD_NOT_ALLOWED`：
 - `MerchantOrderNo`
 - `Amt`
 - `ItemDesc`，例：`AI面接官 面接追加回数`
-- `OrderDetail`，例：`面接追加回数 +10`
+- `OrderDetail`：信用卡單次購買不送；STG 曾因一般文字格式觸發 `MPG01028`
+  訂單細項格式錯誤。若未來啟用需要細項的支付方式，須依藍新該支付方式規格送
+  JSON / itemized 格式，且總額需等於 `Amt`。
 - `NotifyURL`，STG：`https://stg.ai-interview.tw/api/newebpay/mpg/notify`
 - `ReturnURL`，STG：`https://stg.ai-interview.tw/payment/result`
 - `ClientBackURL`，可設 `/me?tab=credits`

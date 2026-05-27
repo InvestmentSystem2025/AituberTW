@@ -93,3 +93,6 @@ public/scripts/*
 # k6 outputs (may contain auth tokens / sensitive data)
 /tmp/*
 csp-ssr-nextjs.mdc
+
+# Local NewebPay implementation reference generated from PDF notes.
+/docs/newebpay_implementation_reference.md
