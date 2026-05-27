@@ -1,8 +1,204 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import type { GetServerSideProps } from 'next'
+import type { IncomingMessage } from 'http'
+import {
+  decryptMpgTradeInfo,
+  getMpgConfig,
+  validateMpgConfig,
+  verifyTradeSha,
+} from '@/lib/newebpay/mpgClient'
+import { getResult, getString } from '@/lib/newebpay/webhookService'
 import { supabase } from '@/lib/supabaseClient'
+import { getServiceClient } from '@/lib/supabaseServer'
 
 type Status = 'loading' | 'ready' | 'error'
+
+const CAPTURE_KEYS = [
+  'Status',
+  'Message',
+  'MerchantID',
+  'MerchantOrderNo',
+  'TradeNo',
+  'RespondCode',
+  'TradeInfo',
+  'TradeSha',
+  'Version',
+]
+
+const SENSITIVE_KEY_PATTERN = /hash|key|iv|token|secret|password/i
+
+const toStringValue = (value: unknown): string | null => {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value))
+    return typeof value[0] === 'string' ? value[0] : null
+  if (typeof value === 'number') return String(value)
+  return null
+}
+
+const sanitizePayload = (
+  payload: Record<string, unknown>
+): Record<string, unknown> => {
+  const sanitized: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(payload)) {
+    if (SENSITIVE_KEY_PATTERN.test(key)) {
+      sanitized[key] = '[REDACTED]'
+      continue
+    }
+    if (key === 'TradeInfo' || key === 'TradeSha') {
+      const text = toStringValue(value) || ''
+      sanitized[`${key}Present`] = Boolean(text)
+      sanitized[`${key}Length`] = text.length
+      continue
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      sanitized[key] = sanitizePayload(value as Record<string, unknown>)
+      continue
+    }
+    sanitized[key] = value
+  }
+  return sanitized
+}
+
+const readRawBody = async (req: IncomingMessage): Promise<string> =>
+  new Promise((resolve, reject) => {
+    let body = ''
+    req.setEncoding('utf8')
+    req.on('data', (chunk) => {
+      body += chunk
+      if (body.length > 64 * 1024) {
+        reject(new Error('RETURN_CAPTURE_BODY_TOO_LARGE'))
+        req.destroy()
+      }
+    })
+    req.on('end', () => resolve(body))
+    req.on('error', reject)
+  })
+
+const parseUrlEncodedBody = (rawBody: string): Record<string, string> =>
+  Object.fromEntries(new URLSearchParams(rawBody).entries())
+
+const captureNewebPayReturn = async (args: {
+  method: string
+  query: Record<string, unknown>
+  body: Record<string, unknown>
+}) => {
+  const merged = { ...args.query, ...args.body }
+  const hasNewebPayPayload = CAPTURE_KEYS.some((key) =>
+    toStringValue(merged[key])
+  )
+  if (!hasNewebPayPayload && args.method !== 'POST') return
+
+  const tradeInfo = toStringValue(merged.TradeInfo)
+  const tradeSha = toStringValue(merged.TradeSha) || undefined
+  let decryptedPayload: Record<string, unknown> | null = null
+  let tradeShaVerified = false
+  let decryptError: string | null = null
+
+  const config = getMpgConfig()
+  const configError = validateMpgConfig(config)
+  if (!configError && tradeInfo) {
+    tradeShaVerified = verifyTradeSha(tradeInfo, tradeSha, config)
+    if (tradeShaVerified) {
+      try {
+        decryptedPayload = decryptMpgTradeInfo(tradeInfo, config)
+      } catch (error) {
+        decryptError =
+          error instanceof Error
+            ? error.message
+            : 'RETURN_CAPTURE_DECRYPT_FAILED'
+      }
+    }
+  }
+
+  const result = decryptedPayload ? getResult(decryptedPayload) : {}
+  const merchantOrderNo =
+    getString(result, 'MerchantOrderNo') ||
+    toStringValue(merged.MerchantOrderNo) ||
+    null
+  const respondCode =
+    getString(result, 'RespondCode') || toStringValue(merged.RespondCode)
+  const status =
+    toStringValue(merged.Status) || getString(decryptedPayload || {}, 'Status')
+  const message =
+    toStringValue(merged.Message) ||
+    getString(decryptedPayload || {}, 'Message')
+  const capturedAt = new Date().toISOString()
+  const rawDecryptedPayload = sanitizePayload({
+    source: 'return_url',
+    method: args.method,
+    captured_at: capturedAt,
+    fields: sanitizePayload(merged),
+    trade_sha_verified: tradeShaVerified,
+    config_error: configError,
+    decrypt_error: decryptError,
+    decrypted_payload: decryptedPayload
+      ? sanitizePayload(decryptedPayload)
+      : null,
+  })
+
+  const supa = getServiceClient()
+  const uniqueKey = `newebpay:return_capture:${merchantOrderNo || 'unknown'}:${Date.now()}`
+  const { error } = await supa.from('newebpay_webhook_events').insert({
+    provider: 'newebpay',
+    event_type: 'mpg_one_time_purchase',
+    merchant_order_no: merchantOrderNo,
+    respond_code: respondCode,
+    unique_key: uniqueKey,
+    raw_encrypted_payload: null,
+    raw_decrypted_payload: rawDecryptedPayload,
+    status: 'received',
+    error_message: message
+      ? `ReturnURL capture: ${status || 'NO_STATUS'} ${message}`.slice(0, 500)
+      : 'ReturnURL capture',
+  })
+
+  if (error) {
+    console.warn('NewebPay ReturnURL capture failed', {
+      merchantOrderNo,
+      respondCode,
+      status,
+      message,
+      error: error.message,
+    })
+    return
+  }
+
+  console.info('NewebPay ReturnURL captured', {
+    merchantOrderNo,
+    respondCode,
+    status,
+    message,
+    tradeInfoPresent: Boolean(tradeInfo),
+    tradeInfoLength: tradeInfo?.length || 0,
+    tradeShaPresent: Boolean(tradeSha),
+    tradeShaVerified,
+  })
+}
+
+export const getServerSideProps: GetServerSideProps = async ({
+  req,
+  query,
+}) => {
+  try {
+    const method = req.method || 'GET'
+    const rawBody =
+      method === 'POST' || method === 'PUT' || method === 'PATCH'
+        ? await readRawBody(req)
+        : ''
+    await captureNewebPayReturn({
+      method,
+      query,
+      body: rawBody ? parseUrlEncodedBody(rawBody) : {},
+    })
+  } catch (error) {
+    console.warn('NewebPay ReturnURL capture skipped', {
+      error: error instanceof Error ? error.message : 'UNKNOWN_ERROR',
+    })
+  }
+
+  return { props: {} }
+}
 
 export default function PaymentResultPage() {
   const [status, setStatus] = useState<Status>('loading')
@@ -37,7 +233,9 @@ export default function PaymentResultPage() {
         const subscriptionBody = subscriptionResponse.ok
           ? await subscriptionResponse.json()
           : null
-        const creditsBody = creditsResponse.ok ? await creditsResponse.json() : null
+        const creditsBody = creditsResponse.ok
+          ? await creditsResponse.json()
+          : null
         const sub = subscriptionBody?.subscription
         const latestPurchase = creditsBody?.recent_purchases?.[0]
         setStatus('ready')
