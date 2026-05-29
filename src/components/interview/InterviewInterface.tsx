@@ -810,6 +810,9 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       const nextQuestionText = (!isLastQuestion && questionSequence[currentQuestionIndex + 1]?.question)
         ? String(questionSequence[currentQuestionIndex + 1]?.question || '')
         : ''
+      const { data: authSession } = await supabase.auth.getSession()
+      const accessToken = authSession.session?.access_token || ''
+      const companyId = String(interviewConfig?.interview?.company_id || '')
       
       // 🔍 DEBUG: Client-side log（幫助偵錯）
       if (DEBUG_INTERVIEW) {
@@ -838,7 +841,10 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         isFollowUpPhase,
         followUpCount,
         MAX_FOLLOWUPS,
-        isLastQuestion
+        isLastQuestion,
+        interviewId && companyId && accessToken
+          ? { interviewId, companyId, accessToken }
+          : undefined
       )
       
       // 創建一個新的 AI 消息用於實時更新

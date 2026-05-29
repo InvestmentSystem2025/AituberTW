@@ -38,6 +38,46 @@ function getCandidateInternalOrigins(req: NextRequest): string[] {
   return Array.from(new Set(ordered))
 }
 
+function estimateTokensFromMessages(messages: Message[], maxTokens: number): number {
+  const inputChars = messages.reduce((sum, msg) => {
+    if (typeof msg.content === 'string') return sum + msg.content.length
+    return sum + JSON.stringify(msg.content || '').length
+  }, 0)
+  const estimatedInputTokens = Math.ceil(inputChars / 4)
+  return Math.max(1, estimatedInputTokens + Math.max(1, Math.floor(maxTokens || 0)))
+}
+
+async function postInternalInterviewTokenBudget(params: {
+  origins: string[]
+  internalSecret: string
+  accessToken?: string | null
+  body: Record<string, any>
+}) {
+  let lastError: unknown = null
+  for (const origin of params.origins) {
+    const url = `${origin}/api/internal/interview-token-budget`
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-internal-secret': params.internalSecret,
+          ...(params.accessToken ? { 'x-supabase-token': params.accessToken } : {}),
+        },
+        body: JSON.stringify(params.body),
+      })
+      if (res.ok) return await res.json().catch(() => ({}))
+      const text = await res.text().catch(() => '')
+      lastError = new Error(`HTTP ${res.status}: ${text}`)
+      if (res.status >= 400 && res.status < 500) throw lastError
+    } catch (err) {
+      lastError = err
+      if (err instanceof Error && /^HTTP 4\d\d:/.test(err.message)) throw err
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
+
 export default async function handler(req: NextRequest) {
   if (req.method !== 'POST') {
     return new Response(
@@ -65,6 +105,7 @@ export default async function handler(req: NextRequest) {
     dynamicRetrievalThreshold,
     temperature = 1.0,
     maxTokens = 4096,
+    interviewContext,
   } = await req.json()
 
   // APIキーの取得と検証
@@ -472,6 +513,102 @@ export default async function handler(req: NextRequest) {
       const requestId = crypto.randomUUID()
       const internalSecret = process.env.CRON_SECRET ?? ''
       const candidateOrigins = getCandidateInternalOrigins(req)
+      const interviewId =
+        typeof interviewContext?.interviewId === 'string'
+          ? interviewContext.interviewId
+          : null
+      const companyId =
+        typeof interviewContext?.companyId === 'string'
+          ? interviewContext.companyId
+          : null
+      const accessToken = req.headers.get('x-supabase-token')
+      const hasInterviewBudgetContext = !!(interviewId && companyId)
+      const canUseDevInternalSecret =
+        !internalSecret && process.env.NODE_ENV === 'development'
+      const shouldEnforceInterviewBudget = !!(
+        hasInterviewBudgetContext &&
+        (internalSecret || canUseDevInternalSecret) &&
+        accessToken
+      )
+
+      if (hasInterviewBudgetContext && !accessToken) {
+        return new Response(
+          JSON.stringify({
+            error: 'UNAUTHORIZED',
+            errorCode: 'UNAUTHORIZED',
+          }),
+          {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      }
+
+      if (
+        hasInterviewBudgetContext &&
+        !internalSecret &&
+        process.env.NODE_ENV !== 'development'
+      ) {
+        return new Response(
+          JSON.stringify({
+            error: 'INTERVIEW_TOKEN_BUDGET_NOT_CONFIGURED',
+            errorCode: 'INTERVIEW_TOKEN_BUDGET_NOT_CONFIGURED',
+          }),
+          {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        )
+      }
+
+      if (shouldEnforceInterviewBudget) {
+        try {
+          await postInternalInterviewTokenBudget({
+            origins: candidateOrigins,
+            internalSecret: internalSecret || 'development',
+            accessToken,
+            body: {
+              action: 'reserve',
+              companyId,
+              interviewId,
+              requestId,
+              requestType: 'interview_ai',
+              model: modifiedModel,
+              estimatedTokens: estimateTokensFromMessages(
+                modifiedMessages,
+                Number(maxTokens) || 4096
+              ),
+            },
+          })
+        } catch (err: any) {
+          const msg = String(err?.message || '')
+          if (msg.includes('TOKEN_LIMIT_EXCEEDED')) {
+            return new Response(
+              JSON.stringify({
+                error: 'TOKEN_LIMIT_EXCEEDED',
+                errorCode: 'TOKEN_LIMIT_EXCEEDED',
+              }),
+              {
+                status: 402,
+                headers: { 'Content-Type': 'application/json' },
+              }
+            )
+          }
+          console.error('[vercel.ts] interview token reserve failed', {
+            error: msg,
+          })
+          return new Response(
+            JSON.stringify({
+              error: 'INTERVIEW_TOKEN_BUDGET_FAILED',
+              errorCode: 'INTERVIEW_TOKEN_BUDGET_FAILED',
+            }),
+            {
+              status: 500,
+              headers: { 'Content-Type': 'application/json' },
+            }
+          )
+        }
+      }
 
       // Edge runtime cannot import ioredis → delegate to internal Node.js API via HTTP.
       const tokenRecord = internalSecret
@@ -484,6 +621,18 @@ export default async function handler(req: NextRequest) {
             }) => {
               Promise.resolve()
                 .then(async () => {
+                  if (shouldEnforceInterviewBudget) {
+                    await postInternalInterviewTokenBudget({
+                      origins: candidateOrigins,
+                      internalSecret: internalSecret || 'development',
+                      body: {
+                        action: 'finalize',
+                        requestId: data.requestId,
+                        inputTokens: data.inputTokens,
+                        outputTokens: data.outputTokens,
+                      },
+                    })
+                  }
                   let lastError: unknown = null
                   for (const origin of candidateOrigins) {
                     const url = `${origin}/api/internal/record-token-usage`
@@ -521,10 +670,30 @@ export default async function handler(req: NextRequest) {
                   })
                 })
             },
+            onNoUsage: (data: { requestId: string; userId: string | null }) => {
+              if (!shouldEnforceInterviewBudget) return
+              Promise.resolve()
+                .then(() =>
+                  postInternalInterviewTokenBudget({
+                    origins: candidateOrigins,
+                    internalSecret: internalSecret || 'development',
+                    body: {
+                      action: 'release',
+                      requestId: data.requestId,
+                      reason: 'provider_usage_missing',
+                    },
+                  })
+                )
+                .catch((err) => {
+                  console.error('[vercel.ts] interview token release failed', {
+                    error: err instanceof Error ? err.message : String(err),
+                  })
+                })
+            },
           }
         : undefined
 
-      return await streamAiText({
+      const response = await streamAiText({
         aiService,
         model: modifiedModel,
         modelInstance,
@@ -535,6 +704,22 @@ export default async function handler(req: NextRequest) {
         aiApiKey,
         tokenRecord,
       } as any)
+      if (shouldEnforceInterviewBudget && response.status >= 500) {
+        postInternalInterviewTokenBudget({
+          origins: candidateOrigins,
+          internalSecret: internalSecret || 'development',
+          body: {
+            action: 'release',
+            requestId,
+            reason: `ai_response_status_${response.status}`,
+          },
+        }).catch((err) => {
+          console.error('[vercel.ts] interview token release failed', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
+      }
+      return response
     } else {
       return await generateAiText({
         model: modifiedModel,

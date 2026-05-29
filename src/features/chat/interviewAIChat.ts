@@ -68,6 +68,9 @@ const getAIConfig = () => {
 }
 
 function handleApiError(errorCode: string): string {
+  if (errorCode === 'TOKEN_LIMIT_EXCEEDED') {
+    return '本場面試的 AI token 額度已用完，請聯絡招募方。'
+  }
   const languageCode = settingsStore.getState().selectLanguage
   i18next.changeLanguage(languageCode)
   return i18next.t(`Errors.${errorCode || 'AIAPIError'}`)
@@ -888,7 +891,12 @@ export async function getInterviewAIResponseStream(
   isFollowUp?: boolean,
   followUpCount?: number,
   maxFollowUps?: number,
-  isLastQuestion?: boolean
+  isLastQuestion?: boolean,
+  tokenBudgetContext?: {
+    interviewId?: string
+    companyId?: string
+    accessToken?: string
+  }
 ): Promise<ReadableStream<string>> {
   const {
     aiApiKey,
@@ -1034,10 +1042,20 @@ export async function getInterviewAIResponseStream(
     })
   }
 
+  if (tokenBudgetContext?.interviewId && tokenBudgetContext?.companyId) {
+    requestData.interviewContext = {
+      interviewId: tokenBudgetContext.interviewId,
+      companyId: tokenBudgetContext.companyId,
+    }
+  }
+
   const response = await fetch(apiEndpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...(tokenBudgetContext?.accessToken
+        ? { 'x-supabase-token': tokenBudgetContext.accessToken }
+        : {}),
     },
     body: JSON.stringify(requestData),
   })

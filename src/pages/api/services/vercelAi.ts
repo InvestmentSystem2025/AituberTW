@@ -92,6 +92,7 @@ export async function streamAiText({
       inputTokens: number
       outputTokens: number
     }) => void
+    onNoUsage?: (data: { requestId: string; userId: string | null }) => void
   }
 }) {
   try {
@@ -266,13 +267,20 @@ export async function streamAiText({
           // Fire-and-forget: record token usage via caller-provided onRecord().
           // Runs server-side in onFinish → client disconnect does NOT prevent
           // recording (spec: "server completion = record it").
-          if (tokenRecord && tokens) {
-            tokenRecord.onRecord({
-              requestId: tokenRecord.requestId,
-              userId: tokenRecord.userId,
-              inputTokens: tokens.tokens_input,
-              outputTokens: tokens.tokens_output,
-            })
+          if (tokenRecord) {
+            if (tokens) {
+              tokenRecord.onRecord({
+                requestId: tokenRecord.requestId,
+                userId: tokenRecord.userId,
+                inputTokens: tokens.tokens_input,
+                outputTokens: tokens.tokens_output,
+              })
+            } else {
+              tokenRecord.onNoUsage?.({
+                requestId: tokenRecord.requestId,
+                userId: tokenRecord.userId,
+              })
+            }
           }
         },
       })
