@@ -96,3 +96,5 @@ csp-ssr-nextjs.mdc
 
 # Local NewebPay implementation reference generated from PDF notes.
 /docs/newebpay_implementation_reference.md
+/docs/newebpay-billing-flow.md
+/docs/newebpay-billing-implementation-plan.md
