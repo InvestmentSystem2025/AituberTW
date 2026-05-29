@@ -107,6 +107,14 @@ const MyChart = dynamic(() => import('@/components/MyChart'), { ssr: false })
 
 如果新增 `supabase/migrations/` 底下的 migration 檔案，只 push/pull 程式碼是不夠的，SQL 必須實際套用到目標資料庫環境。
 
+只要本次回覆涉及新增或修改 migration，就算尚未由 agent 實際套用，也必須在回覆中明確列出：
+
+- 新增/修改的 migration 檔名。
+- 本機套用指令。
+- VM/GCP 套用指令，預設使用 `docker-compose.gcp.yml` 與 service name `supabase-db`。
+- 套用後的 schema / function 驗證指令。
+- 如果 agent 沒有實際套用，必須明確說「尚未套用到目標 DB」。
+
 必要步驟：
 
 1. 確認新增的 migration 檔案，例如 `supabase/migrations/20260330_example.sql`。

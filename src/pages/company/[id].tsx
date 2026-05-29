@@ -109,7 +109,13 @@ export default function CompanyAdminPage() {
   const [qb, setQb] = useState<Question[]>([])
   const [joq, setJoq] = useState<JOQ[]>([])
   const [ivs, setIvs] = useState<Interview[]>([])
-  const [interviewQuota, setInterviewQuota] = useState({ used_count: 0, free_quota: 3, remaining: 3 })
+  const [interviewQuota, setInterviewQuota] = useState({
+    used_count: 0,
+    free_quota: 3,
+    remaining: 3,
+    purchased_credits_remaining: 0,
+    total_remaining: 3,
+  })
   const [resumeReviewInviteQuota, setResumeReviewInviteQuota] = useState({
     used_count: null as number | null,
     free_quota: 3,
@@ -448,6 +454,8 @@ export default function CompanyAdminPage() {
         used_count: Number(j.used_count || 0),
         free_quota: Number(j.free_quota || 3),
         remaining: Number(j.remaining || 0),
+        purchased_credits_remaining: Number(j.purchased_credits_remaining || 0),
+        total_remaining: Number(j.total_remaining ?? Number(j.remaining || 0)),
       })
     }
   }
@@ -964,7 +972,7 @@ ${criteriaText}
       } else if (result.error === 'CAPACITY_REACHED') {
         errorMsg = '此職種已達招募目標人數，無法再建立面試'
       } else if (result.error === 'INTERVIEW_QUOTA_EXCEEDED') {
-        errorMsg = '公司面試免費配額已用完（3/3）'
+        errorMsg = '公司面試免費配額與付費面試配額皆已用完'
       } else if (result.error === 'CANDIDATE_NOT_JOBSEEKER') {
         errorMsg = '候選人必須是 jobSeeker，請更換候選人'
       } else if (result.error === 'CREATE_FAILED') {
@@ -3429,7 +3437,12 @@ ${criteriaText}
       {tab === 'interviews' && (
         <div>
           <div style={{ marginBottom: 12, padding: 12, border: '2px solid #000', borderRadius: 8, background: '#fff7e6' }}>
-            公司面試配額剩餘：{Math.max(0, interviewQuota.free_quota - interviewQuota.used_count)} / {interviewQuota.free_quota}
+            <div>
+              公司面試剩餘免費配額：{Math.max(0, interviewQuota.free_quota - interviewQuota.used_count)} / {interviewQuota.free_quota}
+            </div>
+            <div>
+              公司付費剩餘面試配額：{interviewQuota.purchased_credits_remaining} 次
+            </div>
           </div>
           <form onSubmit={addIV} style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
             <div>
@@ -3496,20 +3509,20 @@ ${criteriaText}
             </div>
             <button
               type="submit"
-              disabled={interviewQuota.remaining <= 0}
+              disabled={interviewQuota.total_remaining <= 0}
               style={{
                 padding: '8px 12px',
-                background: interviewQuota.remaining <= 0 ? '#9ca3af' : '#4CAF50',
+                background: interviewQuota.total_remaining <= 0 ? '#9ca3af' : '#4CAF50',
                 color: 'white',
                 border: 'none',
                 borderRadius: 4,
-                cursor: interviewQuota.remaining <= 0 ? 'not-allowed' : 'pointer',
+                cursor: interviewQuota.total_remaining <= 0 ? 'not-allowed' : 'pointer',
               }}
             >
               新增面試
             </button>
-            {interviewQuota.remaining <= 0 && (
-              <div style={{ color: '#b00000', fontSize: '0.9em' }}>面試免費配額已用完</div>
+            {interviewQuota.total_remaining <= 0 && (
+              <div style={{ color: '#b00000', fontSize: '0.9em' }}>公司面試免費配額與付費面試配額皆已用完</div>
             )}
           </form>
           <ul 
@@ -4544,5 +4557,3 @@ ${criteriaText}
     </div>
   )
 }
-
-

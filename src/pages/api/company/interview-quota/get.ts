@@ -1,7 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createAuthContext } from '@/lib/authContext'
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
   if (req.method !== 'GET') return res.status(405).end()
 
   const company_id = String(req.query.company_id || '')
@@ -15,18 +18,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!isMember) return res.status(403).json({ error: 'FORBIDDEN' })
 
   const supa = ctx.supa
-  const { data } = await supa
-    .from('company_interview_quota')
-    .select('used_count, free_quota')
-    .eq('company_id', company_id)
-    .maybeSingle()
+  const [quotaRes, balanceRes] = await Promise.all([
+    supa
+      .from('company_interview_quota')
+      .select('used_count, free_quota')
+      .eq('company_id', company_id)
+      .maybeSingle(),
+    supa
+      .from('company_interview_credit_balance')
+      .select('purchased_credits_remaining')
+      .eq('company_id', company_id)
+      .maybeSingle(),
+  ])
 
-  const used = Number(data?.used_count || 0)
-  const free = Number(data?.free_quota || 3)
+  const used = Number(quotaRes.data?.used_count || 0)
+  const free = Number(quotaRes.data?.free_quota || 3)
+  const purchasedCreditsRemaining = Number(
+    balanceRes.data?.purchased_credits_remaining || 0
+  )
   return res.status(200).json({
     ok: true,
     used_count: used,
     free_quota: free,
     remaining: Math.max(0, free - used),
+    purchased_credits_remaining: purchasedCreditsRemaining,
+    total_remaining: Math.max(0, free - used) + purchasedCreditsRemaining,
   })
 }
