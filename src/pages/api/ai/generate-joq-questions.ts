@@ -1,9 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { getAuthUserIdFromRequest, getServiceClient } from '@/lib/supabaseServer'
+import { handleVercelAiJson } from '../services/vercelAiRoute'
 
 type Resp =
-  | { ok: true; text: string }
-  | { error: string; message?: string }
+  | { ok: true; text: string; quota?: { used_count: number; free_quota: number; remaining: number } }
+  | { error: string; message?: string; detail?: string; upstreamStatus?: number }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'METHOD_NOT_ALLOWED', message: '不支援此方法。' })
@@ -37,7 +38,62 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   if (scopeErr) return res.status(400).json({ error: 'SCOPE_CHECK_FAILED', message: '權限檢查失敗。' })
   if (!scope) return res.status(403).json({ error: 'FORBIDDEN', message: '您不是此公司的成員。' })
 
-  const { error: quotaErr } = await supa.rpc('consume_company_joq_quota', { p_company_id: company_id })
+  // 先做 quota gate（不扣點），避免 AI 失敗時仍被扣點。
+  const { data: usage, error: usageErr } = await supa
+    .from('company_ai_usage')
+    .select('joq_used_count, joq_free_quota')
+    .eq('company_id', company_id)
+    .maybeSingle()
+
+  if (usageErr) {
+    return res.status(400).json({ error: 'QUOTA_READ_FAILED', message: '讀取免費次數失敗，請稍後再試。' })
+  }
+
+  const used = Number((usage as any)?.joq_used_count || 0)
+  const free = Number((usage as any)?.joq_free_quota || 5)
+  if (used >= free) {
+    return res.status(403).json({ error: 'AI_JOQ_QUOTA_EXCEEDED', message: 'AI 生成問題免費次數已用完（每家公司共 5 次）。' })
+  }
+
+  // 呼叫既有 vercel AI 邏輯；忽略 company_id 欄位即可
+  const { company_id: _ignore, ...rawAiBody } = body || {}
+  const aiBody = { ...rawAiBody }
+  if (typeof aiBody.apiKey === 'string' && !aiBody.apiKey.trim()) {
+    delete aiBody.apiKey
+  }
+
+  // 直接呼叫 Node 版既有 AI 邏輯，避免 server-to-server HTTP 在站台外層被 401 攔截。
+  const aiResp = await handleVercelAiJson(aiBody)
+
+  const payload = await aiResp.json().catch(() => null)
+  if (!aiResp.ok) {
+    const upstreamErrorCode =
+      payload && typeof payload === 'object' && typeof (payload as any).errorCode === 'string'
+        ? (payload as any).errorCode
+        : 'AI_CALL_FAILED'
+    const upstreamDetail =
+      payload && typeof payload === 'object' && typeof (payload as any).error === 'string'
+        ? (payload as any).error
+        : undefined
+    const message =
+      upstreamErrorCode === 'EmptyAPIKey'
+        ? 'AI 金鑰未設定。請先在設定填入對應服務的 API Key，或確認伺服器端環境變數已配置。'
+        : 'AI 生成問題失敗，請稍後再試。'
+
+    return res.status(aiResp.status || 400).json({
+      error: upstreamErrorCode,
+      message,
+      detail: upstreamDetail,
+      upstreamStatus: aiResp.status,
+    })
+  }
+
+  if (!payload || typeof payload.text !== 'string') {
+    return res.status(400).json({ error: 'AI_CALL_FAILED', message: 'AI 生成問題失敗，回應格式不正確。' })
+  }
+
+  // AI 成功後才扣點。若併發競態造成額度剛好被扣完，會在這裡被正確擋下。
+  const { data: quotaConsumeData, error: quotaErr } = await supa.rpc('consume_company_joq_quota', { p_company_id: company_id })
   if (quotaErr) {
     const msg = quotaErr.message || ''
     if (msg.includes('AI_JOQ_QUOTA_EXCEEDED')) {
@@ -46,27 +102,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(400).json({ error: 'QUOTA_CONSUME_FAILED', message: '扣點失敗，請稍後再試。' })
   }
 
-  // 呼叫既有 vercel AI 邏輯；忽略 company_id 欄位即可
-  const { company_id: _ignore, ...aiBody } = body || {}
-
-  // 不動既有 /api/ai/vercel（其他功能也在用）。在此只做 proxy 呼叫。
-  const proto = (req.headers['x-forwarded-proto'] as string) || 'http'
-  const host = (req.headers['x-forwarded-host'] as string) || (req.headers.host as string) || ''
-  if (!host) return res.status(500).json({ error: 'SERVER_MISCONFIGURED', message: '伺服器缺少 host。' })
-  const origin = `${proto}://${host}`
-
-  const aiResp = await fetch(`${origin}/api/ai/vercel`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(aiBody),
-  })
-
-  const payload = await aiResp.json().catch(() => null)
-  if (!aiResp.ok || !payload || typeof payload.text !== 'string') {
-    return res.status(400).json({ error: 'AI_CALL_FAILED', message: 'AI 生成問題失敗，請稍後再試。' })
+  const quota = {
+    used_count: Number((quotaConsumeData as any)?.used_count || 0),
+    free_quota: Number((quotaConsumeData as any)?.free_quota || 5),
+    remaining: Number((quotaConsumeData as any)?.remaining || 0),
   }
 
-  return res.status(200).json({ ok: true, text: payload.text })
+  return res.status(200).json({ ok: true, text: payload.text, quota })
 }
 
 

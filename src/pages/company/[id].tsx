@@ -6,6 +6,7 @@ import type { AIService } from '@/features/constants/settings'
 import { GuidedOverlay } from '@/components/tutorial/GuidedOverlay'
 import type { ResumeReviewLabel } from '@/lib/resumeReview'
 import { RESUME_REVIEW_LABEL_ORDER, RESUME_REVIEW_LABEL_ZH } from '@/lib/resumeReview'
+import { PersonalityAnalysisPanel } from '@/components/interview/PersonalityAnalysisPanel'
 
 type RecruiterTutorialState = {
   active: boolean
@@ -121,6 +122,7 @@ export default function CompanyAdminPage() {
     can_create_interview: true,
     total_remaining: 3,
   })
+  const [joqQuota, setJoqQuota] = useState({ used_count: 0, free_quota: 5, remaining: 5 })
   const [resumeReviewInviteQuota, setResumeReviewInviteQuota] = useState({
     used_count: null as number | null,
     free_quota: 3,
@@ -358,6 +360,7 @@ export default function CompanyAdminPage() {
           loadJOQ(t),
           loadIVs(t),
           loadInterviewQuota(t),
+          loadJoqQuota(t),
           loadReviewStandards(t),
           loadReviewResults(t),
           loadResumeReviewInviteQuota(t, companyId)
@@ -466,6 +469,17 @@ export default function CompanyAdminPage() {
         estimated_remaining_interviews: Number(j.estimated_remaining_interviews || 0),
         can_create_interview: j.can_create_interview !== false,
         total_remaining: Number(j.total_remaining ?? Number(j.remaining || 0)),
+      })
+    }
+  }
+  const loadJoqQuota = async (t: string) => {
+    const r = await fetch(`/api/company/joq-quota/get?company_id=${companyId}`, { headers: headers(t) })
+    const j = await r.json().catch(() => ({}))
+    if (r.ok && j?.ok) {
+      setJoqQuota({
+        used_count: Number(j.used_count || 0),
+        free_quota: Number(j.free_quota || 5),
+        remaining: Number(j.remaining || 0),
       })
     }
   }
@@ -857,13 +871,15 @@ ${criteriaText}
           { role: 'user', content: prompt },
         ],
         stream: false,
-        apiKey,
         aiService,
         model: ss.selectAIModel,
         localLlmUrl: ss.localLlmUrl,
         azureEndpoint: ss.azureEndpoint,
         temperature: ss.temperature,
         maxTokens: ss.maxTokens,
+      }
+      if (apiKey) {
+        requestData.apiKey = apiKey
       }
 
       const aiRes = await fetch('/api/ai/generate-joq-questions', {
@@ -875,12 +891,24 @@ ${criteriaText}
       if (!aiRes.ok) {
         const err = await aiRes.json().catch(() => ({} as any))
         console.error('AI 生成問題失敗', err)
+        if (err?.error === 'AI_JOQ_QUOTA_EXCEEDED') {
+          await loadJoqQuota(token)
+        }
         alert(err?.message || 'AI 生成問題失敗，請稍後再試')
         return
       }
 
       const aiJson = await aiRes.json()
       const aiText = typeof aiJson.text === 'string' ? aiJson.text : ''
+      if (aiJson?.quota) {
+        setJoqQuota({
+          used_count: Number(aiJson.quota.used_count || 0),
+          free_quota: Number(aiJson.quota.free_quota || 5),
+          remaining: Number(aiJson.quota.remaining || 0),
+        })
+      } else {
+        await loadJoqQuota(token)
+      }
 
       if (!aiText.trim()) {
         alert('AI 沒有返回可用的問題，請稍後再試')
@@ -982,7 +1010,7 @@ ${criteriaText}
       } else if (result.error === 'CAPACITY_REACHED') {
         errorMsg = '此職種已達招募目標人數，無法再建立面試'
       } else if (result.error === 'INTERVIEW_QUOTA_EXCEEDED') {
-        errorMsg = '公司面試免費配額與付費面試配額皆已用完'
+        errorMsg = '公司面試免費配額與可用 TOKEN 皆不足'
       } else if (result.error === 'INSUFFICIENT_TOKENS_FOR_INTERVIEW' || result.error === 'BILLING_REQUIRED') {
         errorMsg = '公司目前可用 TOKEN 不足以建立新面試，請前往課金頁購買 TOKEN 或確認訂閱狀態'
       } else if (result.error === 'CANDIDATE_NOT_JOBSEEKER') {
@@ -3219,6 +3247,9 @@ ${criteriaText}
 
       {tab === 'joq' && (
         <div>
+          <div style={{ marginBottom: 12, fontWeight: 600 }}>
+            AI 生成問題免費次數剩餘：{Math.max(0, joqQuota.remaining)} / {joqQuota.free_quota}
+          </div>
           {jobs.length === 0 ? (
             <div style={{ padding: 24, border: '2px dashed #f44336', background: '#ffebee', borderRadius: 8, textAlign: 'center' }}>
               <strong style={{ color: '#f44336' }}>請先創建職種再添加職種個別題庫</strong>
@@ -3284,14 +3315,17 @@ ${criteriaText}
                   </button>
                   <button
                     type="button"
-                    disabled={isGeneratingJOQAI}
+                    disabled={isGeneratingJOQAI || joqQuota.remaining <= 0}
                     onClick={() => generateJOQQuestionsWithAI('new')}
-                    style={{ padding: '4px 8px', background: isGeneratingJOQAI ? '#9e9e9e' : '#673ab7', color: 'white', border: 'none', borderRadius: 4, cursor: isGeneratingJOQAI ? 'not-allowed' : 'pointer' }}
+                    style={{ padding: '4px 8px', background: (isGeneratingJOQAI || joqQuota.remaining <= 0) ? '#9e9e9e' : '#673ab7', color: 'white', border: 'none', borderRadius: 4, cursor: (isGeneratingJOQAI || joqQuota.remaining <= 0) ? 'not-allowed' : 'pointer' }}
                   >
                     {isGeneratingJOQAI ? 'AI 生成中…' : 'AI 生成問題'}
                   </button>
                 </div>
               </div>
+              {joqQuota.remaining <= 0 && (
+                <div style={{ color: '#b00000', fontSize: '0.9em', marginBottom: 8 }}>AI 生成問題免費次數已用完</div>
+              )}
               {newJOQ.questions.map((question, idx) => (
                 <div key={idx} style={{ marginBottom: 8, display: 'flex', gap: 8 }}>
                   <div style={{ flex: 1 }}>
@@ -3381,9 +3415,9 @@ ${criteriaText}
                                 </button>
                                 <button
                                   type="button"
-                                  disabled={isGeneratingJOQAI}
+                                  disabled={isGeneratingJOQAI || joqQuota.remaining <= 0}
                                   onClick={() => generateJOQQuestionsWithAI('edit')}
-                                  style={{ padding: '4px 8px', background: isGeneratingJOQAI ? '#9e9e9e' : '#673ab7', color: 'white', border: 'none', borderRadius: 4, cursor: isGeneratingJOQAI ? 'not-allowed' : 'pointer' }}
+                                  style={{ padding: '4px 8px', background: (isGeneratingJOQAI || joqQuota.remaining <= 0) ? '#9e9e9e' : '#673ab7', color: 'white', border: 'none', borderRadius: 4, cursor: (isGeneratingJOQAI || joqQuota.remaining <= 0) ? 'not-allowed' : 'pointer' }}
                                 >
                                   {isGeneratingJOQAI ? 'AI 生成中…' : 'AI 生成問題'}
                                 </button>
@@ -3793,14 +3827,40 @@ ${criteriaText}
                                     <div>
                                       <strong>Token 使用量：</strong>
                                       {(() => {
-                                        const ti = Number((session as any)?.tokens_input)
-                                        const to = Number((session as any)?.tokens_output)
-                                        const hasAny =
-                                          Number.isFinite(ti) || Number.isFinite(to)
-                                        if (!hasAny) return '—'
-                                        const inTok = Number.isFinite(ti) ? Math.max(0, Math.floor(ti)) : 0
-                                        const outTok = Number.isFinite(to) ? Math.max(0, Math.floor(to)) : 0
-                                        const total = inTok + outTok
+                                        // 優先使用逐回合 transcript token_usage 加總，避免 session 累加誤差
+                                        const transcript = Array.isArray((session as any)?.interview_transcript)
+                                          ? (session as any).interview_transcript
+                                          : []
+                                        let tIn = 0
+                                        let tOut = 0
+                                        let hasTranscriptToken = false
+                                        for (const row of transcript) {
+                                          const usage = row?.token_usage
+                                          if (!usage || typeof usage !== 'object') continue
+                                          const ti = Number((usage as any).tokens_input)
+                                          const to = Number((usage as any).tokens_output)
+                                          if (Number.isFinite(ti) && ti >= 0) {
+                                            tIn += Math.floor(ti)
+                                            hasTranscriptToken = true
+                                          }
+                                          if (Number.isFinite(to) && to >= 0) {
+                                            tOut += Math.floor(to)
+                                            hasTranscriptToken = true
+                                          }
+                                        }
+
+                                        const si = Number((session as any)?.tokens_input)
+                                        const so = Number((session as any)?.tokens_output)
+                                        const hasSessionToken = Number.isFinite(si) || Number.isFinite(so)
+                                        if (!hasTranscriptToken && !hasSessionToken) return '—'
+
+                                        const inTok = hasTranscriptToken
+                                          ? tIn
+                                          : (Number.isFinite(si) ? Math.max(0, Math.floor(si)) : 0)
+                                        const outTok = hasTranscriptToken
+                                          ? tOut
+                                          : (Number.isFinite(so) ? Math.max(0, Math.floor(so)) : 0)
+                                        const total = Math.max(0, inTok + outTok)
                                         return `輸入 ${inTok} / 輸出 ${outTok} / 總計 ${total}`
                                       })()}
                                     </div>
@@ -3819,7 +3879,6 @@ ${criteriaText}
                                                 criteriaNames[e.key] ||
                                                 e.key
                                               )}: {e.score}
-                                              {e.evidence ? `（說明：${e.evidence}）` : ''}
                                             </li>
                                           ))}
                                         </ul>
@@ -3833,7 +3892,7 @@ ${criteriaText}
                                       session.interview_transcript.length > 0 ? (
                                         <div
                                           style={{
-                                            maxHeight: 260,
+                                            maxHeight: 560,
                                             overflowY: 'auto',
                                             marginTop: 4,
                                             padding: 8,
@@ -3844,11 +3903,11 @@ ${criteriaText}
                                           {session.interview_transcript.map((t: any, idx: number) => {
                                             const additionsDetail = (t.additions_detail || '').trim()
                                             const deductionsDetail = (t.deductions_detail || '').trim()
+                                            const tu = t?.token_usage && typeof t.token_usage === 'object' ? t.token_usage : null
                                             const hasCurrentScores =
                                               t.current_scores &&
                                               typeof t.current_scores === 'object' &&
                                               Object.keys(t.current_scores).length > 0
-                                            const hasPersonality = t.personality && typeof t.personality === 'object'
 
                                             return (
                                               <div
@@ -3873,6 +3932,15 @@ ${criteriaText}
                                                   <div style={{ marginBottom: 2 }}>
                                                     <span style={{ fontWeight: 'bold' }}>AI 評語：</span>
                                                     <span>{t.aiFeedback}</span>
+                                                  </div>
+                                                )}
+
+                                                {tu && (
+                                                  <div style={{ marginBottom: 2 }}>
+                                                    <span style={{ fontWeight: 'bold' }}>本題 Token：</span>
+                                                    <span>
+                                                      {`輸入 ${Math.max(0, Number(tu.tokens_input) || 0)} / 輸出 ${Math.max(0, Number(tu.tokens_output) || 0)} / 總計 ${Math.max(0, Number(tu.tokens_total) || ((Number(tu.tokens_input) || 0) + (Number(tu.tokens_output) || 0)))}`}
+                                                    </span>
                                                   </div>
                                                 )}
 
@@ -3981,38 +4049,6 @@ ${criteriaText}
                                                     <span>{deductionsDetail}</span>
                                                   </div>
                                                 )}
-
-                                                {hasPersonality && (
-                                                  <div style={{ marginTop: 4 }}>
-                                                    <span style={{ fontWeight: 'bold' }}>人格分析：</span>
-                                                    <div style={{ marginLeft: 12 }}>
-                                                      {t.personality.summaryText && (
-                                                        <div>總結：{t.personality.summaryText}</div>
-                                                      )}
-                                                      {t.personality.extraversion && (
-                                                        <div>外向傾向：{t.personality.extraversion}</div>
-                                                      )}
-                                                      {t.personality.conscientiousness && (
-                                                        <div>盡責程度：{t.personality.conscientiousness}</div>
-                                                      )}
-                                                      {t.personality.detail_attentiveness && (
-                                                        <div>細心程度：{t.personality.detail_attentiveness}</div>
-                                                      )}
-                                                      {t.personality.proactivity && (
-                                                        <div>主動性：{t.personality.proactivity}</div>
-                                                      )}
-                                                      {t.personality.learning_mindset && (
-                                                        <div>學習與成長心態：{t.personality.learning_mindset}</div>
-                                                      )}
-                                                      {t.personality.stress_resilience && (
-                                                        <div>抗壓與情緒穩定：{t.personality.stress_resilience}</div>
-                                                      )}
-                                                      {t.personality.collaboration && (
-                                                        <div>合作與溝通方式：{t.personality.collaboration}</div>
-                                                      )}
-                                                    </div>
-                                                  </div>
-                                                )}
                                               </div>
                                             )
                                           })}
@@ -4020,6 +4056,36 @@ ${criteriaText}
                                       ) : (
                                         <span>尚無面試對話紀錄</span>
                                       )}
+                                      {(() => {
+                                        if (!Array.isArray(session.interview_transcript) || session.interview_transcript.length === 0) return null
+                                        const parsePersonality = (raw: any) => {
+                                          if (!raw) return null
+                                          if (typeof raw === 'object') return raw
+                                          if (typeof raw === 'string') {
+                                            try {
+                                              const parsed = JSON.parse(raw)
+                                              return parsed && typeof parsed === 'object' ? parsed : null
+                                            } catch {
+                                              return null
+                                            }
+                                          }
+                                          return null
+                                        }
+                                        const reversed = [...session.interview_transcript].reverse()
+                                        const latest = reversed.find((item: any) => {
+                                          if (!item || item.role !== 'ai') return false
+                                          return !!parsePersonality(item.personality)
+                                        })
+                                        const personalityData = latest ? parsePersonality(latest.personality) : null
+                                        if (!personalityData) return null
+
+                                        return (
+                                          <div style={{ marginTop: 12 }}>
+                                            <div style={{ fontWeight: 'bold', marginBottom: 6 }}>人格分析：</div>
+                                            <PersonalityAnalysisPanel personality={personalityData} />
+                                          </div>
+                                        )
+                                      })()}
                                     </div>
                                     <div>
                                       <strong>使用者反饋：</strong>

@@ -198,7 +198,7 @@ async function fallbackIsFreeCheck(newTokens: number): Promise<boolean> {
  * Fetch all data needed for the dashboard.
  *
  * Data sources:
- *   - monthly.*     → token_usage_monthly (server cache TTL 300s)
+ *   - monthly.*     → token_usage_daily (current month, exclude today; server cache TTL 300s)
  *   - daily.total   → Redis (real-time)
  *   - daily.breakdown → token_usage_logs for today (server cache TTL 60s)
  *   - trend         → token_usage_daily last 30 days (server cache TTL 300s)
@@ -249,26 +249,41 @@ interface MonthlyAgg {
 
 async function getMonthlyAggregation(): Promise<MonthlyAgg> {
   const month = getTaipeiMonthString()
-  const cacheKey = `dashboard:monthly:${month}`
+  const today = getTaipeiDateString()
+  const cacheKey = `dashboard:monthly:${month}:${today}`
+
+  // Compute next month's first day to use as exclusive upper bound
+  const [yearStr, monStr] = month.split('-')
+  const year = parseInt(yearStr, 10)
+  const mon = parseInt(monStr, 10)
+  const nextMonthDate = mon === 12
+    ? `${year + 1}-01-01`
+    : `${year}-${String(mon + 1).padStart(2, '0')}-01`
 
   return serverCache.getOrSet<MonthlyAgg>(cacheKey, CACHE_TTL_HISTORY, async () => {
     const supa = getServiceClient()
     const { data, error } = await supa
-      .from('token_usage_monthly')
+      .from('token_usage_daily')
       .select('free_tokens, paid_input_tokens, paid_output_tokens')
-      .eq('month', month)
-      .is('user_id', null)   // global row
-      .maybeSingle()
+      .is('user_id', null)   // global rows
+      .gte('date', `${month}-01`)
+      .lt('date', today)
+      .lt('date', nextMonthDate)
 
     if (error) {
       console.error('[TokenUsage] getMonthlyAggregation error:', error)
       return { free_tokens: 0, paid_input_tokens: 0, paid_output_tokens: 0 }
     }
 
+    const rows = data ?? []
+    const free_tokens = rows.reduce((sum, row) => sum + Number(row.free_tokens), 0)
+    const paid_input_tokens = rows.reduce((sum, row) => sum + Number(row.paid_input_tokens), 0)
+    const paid_output_tokens = rows.reduce((sum, row) => sum + Number(row.paid_output_tokens), 0)
+
     return {
-      free_tokens: Number(data?.free_tokens ?? 0),
-      paid_input_tokens: Number(data?.paid_input_tokens ?? 0),
-      paid_output_tokens: Number(data?.paid_output_tokens ?? 0),
+      free_tokens,
+      paid_input_tokens,
+      paid_output_tokens,
     }
   })
 }

@@ -399,7 +399,7 @@ export default function TokenUsageDashboard() {
   const trend = data!.trend
 
   // ── 本月含今日合算（今日即時數據 + 歷史聚合）──────────────────────────────
-  // monthly.*  = token_usage_monthly（昨日以前的聚合，每日 00:00 cron 更新）
+  // monthly.*  = 本月「不含今日」的 daily 聚合（由後端從 token_usage_daily 累加）
   // daily.*    = 今日即時數據（Redis total + logs breakdown）
   // 顯示「本月」時必須把今日加回去，否則今日資料在隔天 cron 前不會反映
   const combined = {

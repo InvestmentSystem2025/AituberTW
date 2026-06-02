@@ -20,11 +20,9 @@ const PersonDetection = dynamic(
     ),
   { ssr: false }
 )
-import { InterviewControls } from '@/components/interview/InterviewControls'
 // import { InterviewQuestions } from '@/components/interview/InterviewQuestions'
 import { InterviewResults } from '@/components/interview/InterviewResults'
 import { InterviewInterface } from '@/components/interview/InterviewInterface'
-import { ResumeUpload } from '@/components/interview/ResumeUpload'
 import { useInterviewFlow } from '@/components/interview/hooks/useInterviewFlow'
 import homeStore from '@/features/stores/home'
 import settingsStore from '@/features/stores/settings'
@@ -32,7 +30,6 @@ import '@/lib/i18n'
 import { buildUrl } from '@/utils/buildUrl'
 import { YoutubeManager } from '@/components/youtubeManager'
 import toastStore from '@/features/stores/toast'
-import { ResumeInfo } from '@/lib/mcpClient'
 import { supabase } from '@/lib/supabaseClient'
 
 interface InterviewConfig {
@@ -65,55 +62,26 @@ const Interview = () => {
   useEffect(() => {
     interviewFlowRef.current = interviewFlow
   }, [interviewFlow])
-  
-  // 履歷資料狀態
-  const [resumeData, setResumeData] = useState<{
-    info: ResumeInfo | null
-    questions: string[]
-    aiGreeting: string | null  // AI 預先生成的問候語
-  }>({
-    info: null,
-    questions: [],
-    aiGreeting: null,
-  })
 
   // Interview配置狀態
-  const [interviewConfig, setInterviewConfig] = useState<InterviewConfig | null>(null)
+  const [interviewConfig, setInterviewConfig] =
+    useState<InterviewConfig | null>(null)
   const [loadingConfig, setLoadingConfig] = useState(false)
   const [restoredSession, setRestoredSession] = useState<any | null>(null)
 
   // 使用者偏好面試語言（來自 profiles.preferred_language）
-  const [preferredInterviewLanguage, setPreferredInterviewLanguage] = useState<'zh-TW' | 'en-US' | 'ja-JP'>('zh-TW')
+  const [preferredInterviewLanguage, setPreferredInterviewLanguage] = useState<
+    'zh-TW' | 'en-US' | 'ja-JP'
+  >('zh-TW')
 
-  // 處理履歷上傳完成
-  const handleResumeProcessed = (resumeInfo: ResumeInfo, questions: string[], aiGreeting: string) => {
-    setResumeData({
-      info: resumeInfo,
-      questions,
-      aiGreeting,
-    })
-    
-    toastStore.getState().addToast({
-      message: '✓ 履歷分析完成！AI 面試官已準備好歡迎您',
-      type: 'success',
-      tag: 'resume-processed',
-    })
-  }
-  
-  // 面試設定（從 localStorage 讀取）
-  const [enableRecording, setEnableRecording] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('interview_enableRecording')
-      return saved === 'true'
-    }
-    return false
-  })
+  // 準備畫面已移除面試設置入口，預設不啟用本機錄製。
+  const enableRecording = false
 
   // 載入interview配置
   useEffect(() => {
     const loadInterviewConfig = async () => {
       if (!interview_id || typeof interview_id !== 'string') return
-      
+
       setLoadingConfig(true)
       try {
         const { data: session } = await supabase.auth.getSession()
@@ -128,14 +96,19 @@ const Interview = () => {
         }
 
         // 1) 載入面試配置
-        const response = await fetch(`/api/interviews/get?interview_id=${interview_id}`, {
-          headers: { 'x-supabase-token': token }
-        })
-        
+        const response = await fetch(
+          `/api/interviews/get?interview_id=${interview_id}`,
+          {
+            headers: { 'x-supabase-token': token },
+          }
+        )
+
         if (!response.ok) {
           const error = await response.json()
           toastStore.getState().addToast({
-            message: error?.message || `載入面試配置失敗: ${error.error || '未知錯誤'}`,
+            message:
+              error?.message ||
+              `載入面試配置失敗: ${error.error || '未知錯誤'}`,
             type: 'error',
           })
           // 若被 gate 擋下，做導頁（避免停在空白面試頁）
@@ -151,11 +124,14 @@ const Interview = () => {
         }
 
         const data = await response.json()
-        
+
         // 1.5) 開始面試扣點（server-side）
         const startResp = await fetch('/api/interviews/start-session', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-supabase-token': token },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-supabase-token': token,
+          },
           body: JSON.stringify({ interviews_id: interview_id }),
         })
         if (!startResp.ok) {
@@ -181,16 +157,20 @@ const Interview = () => {
 
         // 1.6) 重連/續接：讀取 session，若有進度則直接切到 interviewing
         try {
-          const sessResp = await fetch(`/api/interviews/get-session?interview_id=${encodeURIComponent(interview_id)}`, {
-            headers: { 'x-supabase-token': token },
-          })
+          const sessResp = await fetch(
+            `/api/interviews/get-session?interview_id=${encodeURIComponent(interview_id)}`,
+            {
+              headers: { 'x-supabase-token': token },
+            }
+          )
           if (sessResp.ok) {
             const sj = await sessResp.json().catch(() => ({}))
             const s = sj?.session || null
             setRestoredSession(s)
             const hasResumeData =
               !!s?.progress_state ||
-              (Array.isArray(s?.interview_transcript) && s.interview_transcript.length > 0)
+              (Array.isArray(s?.interview_transcript) &&
+                s.interview_transcript.length > 0)
             if (hasResumeData) {
               interviewFlowRef.current.startInterviewManually()
             }
@@ -210,42 +190,55 @@ const Interview = () => {
             .single()
 
           if (!profileError && profile?.preferred_language) {
-            const lang = profile.preferred_language as 'zh-TW' | 'en-US' | 'ja-JP'
+            const lang = profile.preferred_language as
+              | 'zh-TW'
+              | 'en-US'
+              | 'ja-JP'
             setPreferredInterviewLanguage(lang)
-            console.log('[Interview] Loaded preferred interview language from profile:', lang)
+            console.log(
+              '[Interview] Loaded preferred interview language from profile:',
+              lang
+            )
           } else {
-            console.log('[Interview] No preferred_language found in profile, using default zh-TW')
+            console.log(
+              '[Interview] No preferred_language found in profile, using default zh-TW'
+            )
           }
         } catch (e) {
-          console.warn('[Interview] Failed to load preferred_language from profiles:', e)
+          console.warn(
+            '[Interview] Failed to load preferred_language from profiles:',
+            e
+          )
         }
-        
+
         // 如果有AI面試官配置，更新model設定
         if (data.ai_interviewer?.model_name) {
-          const isVrm = data.ai_interviewer.model_name.includes('.vrm') || data.ai_interviewer.model_name.includes('vrm')
+          const isVrm =
+            data.ai_interviewer.model_name.includes('.vrm') ||
+            data.ai_interviewer.model_name.includes('vrm')
           const newModelType = isVrm ? 'vrm' : 'live2d'
           const currentModelType = settingsStore.getState().modelType
-          
+
           // 只在需要時更新model類型，避免不必要的重新渲染
           if (currentModelType !== newModelType) {
             settingsStore.setState({ modelType: newModelType })
           }
-          
+
           // 如果是VRM模型，設置模型路徑
           if (isVrm && data.ai_interviewer.model_name) {
             // 從model_name構造路徑，例如 'yuki.vrm' -> '/vrm/yuki.vrm'
-            const vrmPath = data.ai_interviewer.model_name.startsWith('/') 
-              ? data.ai_interviewer.model_name 
+            const vrmPath = data.ai_interviewer.model_name.startsWith('/')
+              ? data.ai_interviewer.model_name
               : `/vrm/${data.ai_interviewer.model_name}`
             const currentVrmPath = settingsStore.getState().selectedVrmPath
-            
+
             // 只在路徑不同時更新，避免不必要的重新渲染
             if (currentVrmPath !== vrmPath) {
               settingsStore.setState({ selectedVrmPath: vrmPath })
             }
           }
         }
-        
+
         if (data.ai_interviewer?.model_config) {
           // 可以將model_config應用到settings
           const config = data.ai_interviewer.model_config
@@ -269,23 +262,6 @@ const Interview = () => {
 
     loadInterviewConfig()
   }, [interview_id])
-
-  // 監聽 localStorage 變化
-  useEffect(() => {
-    const handleStorageChange = () => {
-      if (typeof window !== 'undefined') {
-        const saved = localStorage.getItem('interview_enableRecording')
-        setEnableRecording(saved === 'true')
-      }
-    }
-
-    // 監聽自定義事件（從 InterviewControls 觸發）
-    window.addEventListener('interviewSettingsChanged', handleStorageChange)
-    
-    return () => {
-      window.removeEventListener('interviewSettingsChanged', handleStorageChange)
-    }
-  }, [])
 
   const characterPresets = [
     {
@@ -361,24 +337,11 @@ const Interview = () => {
       interviewFlow.interviewStatus === 'detecting' ||
       interviewFlow.interviewStatus === 'ready' ? (
         <div className="absolute inset-0 z-50">
-          <div className="absolute top-4 left-4 bg-red-500 text-white p-2 rounded z-[60]">
-            面試模式已啟動 - 狀態: {interviewFlow.interviewStatus}
-          </div>
           <PersonDetection
             onPersonDetected={interviewFlow.handlePersonDetected}
             onDetectionError={interviewFlow.handleDetectionError}
             onStartInterview={interviewFlow.startInterviewManually}
           />
-
-          {/* 履歷上傳組件 */}
-          <div className="absolute top-4 right-4 z-[60]" style={{ maxWidth: '420px' }}>
-            <ResumeUpload onResumeProcessed={handleResumeProcessed} />
-          </div>
-
-          {/* 面試控制面板 */}
-          <div className="absolute top-20 left-4 z-[60]">
-            <InterviewControls />
-          </div>
         </div>
       ) : interviewFlow.interviewStatus === 'interviewing' ? (
         /* 面試進行中：顯示新的面試界面 */
@@ -392,17 +355,23 @@ const Interview = () => {
               interviewFlow.completeInterview(result)
             }}
             enableRecording={enableRecording}
-            initialGreeting={resumeData.aiGreeting || undefined}
             interviewConfig={interviewConfig}
-            interviewId={typeof interview_id === 'string' ? interview_id : undefined}
+            interviewId={
+              typeof interview_id === 'string' ? interview_id : undefined
+            }
             restoredSession={restoredSession}
             resultNotificationMethod={
-              (interviewConfig?.interview?.job_opening?.result_notification_method as 'immediate' | 'later' | undefined) || 'immediate'
+              (interviewConfig?.interview?.job_opening
+                ?.result_notification_method as
+                | 'immediate'
+                | 'later'
+                | undefined) || 'immediate'
             }
             preferredLanguage={preferredInterviewLanguage}
           />
         )
-      ) : interviewFlow.interviewStatus === 'completed' || interviewFlow.showResults ? (
+      ) : interviewFlow.interviewStatus === 'completed' ||
+        interviewFlow.showResults ? (
         /* 顯示面試結果 */
         <InterviewResults
           answers={interviewFlow.answers}

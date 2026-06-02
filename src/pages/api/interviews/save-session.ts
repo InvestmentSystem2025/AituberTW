@@ -85,11 +85,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (progress_state) sessionData.progress_state = progress_state
   if (ai_evaluations) sessionData.ai_evaluations = ai_evaluations
 
-  // token usage（可選；若前端/串流解析拿不到就不傳）
-  const ti = typeof tokens_input === 'string' ? Number(tokens_input) : tokens_input
-  const to = typeof tokens_output === 'string' ? Number(tokens_output) : tokens_output
-  if (Number.isFinite(ti) && ti >= 0) sessionData.tokens_input = Math.floor(ti)
-  if (Number.isFinite(to) && to >= 0) sessionData.tokens_output = Math.floor(to)
+  // token usage：優先使用逐回合 transcript 的 token_usage 加總，避免前端累加誤差
+  const transcriptTokenSum = (() => {
+    if (!Array.isArray(interview_transcript)) return null
+    let input = 0
+    let output = 0
+    let hasAny = false
+    for (const row of interview_transcript) {
+      const usage = (row as any)?.token_usage
+      if (!usage || typeof usage !== 'object') continue
+      const ti = Number((usage as any).tokens_input)
+      const to = Number((usage as any).tokens_output)
+      if (Number.isFinite(ti) && ti >= 0) {
+        input += Math.floor(ti)
+        hasAny = true
+      }
+      if (Number.isFinite(to) && to >= 0) {
+        output += Math.floor(to)
+        hasAny = true
+      }
+    }
+    return hasAny ? { input, output } : null
+  })()
+
+  if (transcriptTokenSum) {
+    sessionData.tokens_input = transcriptTokenSum.input
+    sessionData.tokens_output = transcriptTokenSum.output
+  } else {
+    // fallback：沿用前端傳入的 session 累計
+    const ti = typeof tokens_input === 'string' ? Number(tokens_input) : tokens_input
+    const to = typeof tokens_output === 'string' ? Number(tokens_output) : tokens_output
+    if (Number.isFinite(ti) && ti >= 0) sessionData.tokens_input = Math.floor(ti)
+    if (Number.isFinite(to) && to >= 0) sessionData.tokens_output = Math.floor(to)
+  }
 
   if (video_path) sessionData.video_path = video_path
 
