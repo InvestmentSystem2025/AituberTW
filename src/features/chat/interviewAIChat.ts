@@ -1068,6 +1068,8 @@ export async function getInterviewAIResponseStream(
         { cause: { errorCode: responseBody.errorCode } }
       )
     }
+    const tokenCapHeader = response.headers.get('x-interview-token-cap')
+    const tokenCap = tokenCapHeader ? Number(tokenCapHeader) : null
 
     return new ReadableStream({
       async start(controller) {
@@ -1457,6 +1459,9 @@ export async function getInterviewAIResponseStream(
                       tokens_total: usageAcc.total || (usageAcc.input + usageAcc.output),
                     },
                   }
+                : {}),
+              ...(Number.isFinite(tokenCap)
+                ? { tokenBudget: { token_cap: tokenCap } }
                 : {}),
             })
             controller.enqueue(`\n[INTERVIEW_METADATA_START]${metadata}[INTERVIEW_METADATA_END]`)

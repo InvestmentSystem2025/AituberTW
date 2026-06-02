@@ -523,6 +523,7 @@ export default async function handler(req: NextRequest) {
           : null
       const accessToken = req.headers.get('x-supabase-token')
       const hasInterviewBudgetContext = !!(interviewId && companyId)
+      let tokenBudgetReserve: any = null
       const canUseDevInternalSecret =
         !internalSecret && process.env.NODE_ENV === 'development'
       const shouldEnforceInterviewBudget = !!(
@@ -563,7 +564,7 @@ export default async function handler(req: NextRequest) {
 
       if (shouldEnforceInterviewBudget) {
         try {
-          await postInternalInterviewTokenBudget({
+          tokenBudgetReserve = await postInternalInterviewTokenBudget({
             origins: candidateOrigins,
             internalSecret: internalSecret || 'development',
             accessToken,
@@ -717,6 +718,22 @@ export default async function handler(req: NextRequest) {
           console.error('[vercel.ts] interview token release failed', {
             error: err instanceof Error ? err.message : String(err),
           })
+        })
+      }
+      if (tokenBudgetReserve?.allocation?.token_cap != null) {
+        const headers = new Headers(response.headers)
+        headers.set(
+          'x-interview-token-cap',
+          String(tokenBudgetReserve.allocation.token_cap)
+        )
+        headers.set(
+          'x-interview-token-used',
+          String(tokenBudgetReserve.allocation.token_used ?? 0)
+        )
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
         })
       }
       return response

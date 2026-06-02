@@ -17,6 +17,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     tokens_output,
     video_path,
     is_cancelled_by_user,
+    is_token_limit_exceeded,
     is_final,
   } = req.body || {}
   
@@ -56,7 +57,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const isCancelledByUser = !!is_cancelled_by_user
-  const isFinal = isCancelledByUser ? true : (is_final !== false)
+  const isTokenLimitExceeded = !!is_token_limit_exceeded
+  const isFinal = isCancelledByUser || isTokenLimitExceeded ? true : (is_final !== false)
 
   // 重要：save-session 不負責扣點；必須先呼叫 /api/interviews/start-session 建立 placeholder session。
   // 否則攻擊者可直接 upsert 繞過 quota。
@@ -95,6 +97,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (isFinal && isCancelledByUser) {
     sessionData.interview_result = 'cancelByUser'
     sessionData.result_reason = 'cancelled_by_user'
+  } else if (isFinal && isTokenLimitExceeded) {
+    sessionData.interview_result = 'cancelByUser'
+    sessionData.result_reason = 'token_limit_exceeded'
   }
 
   // 僅更新既有 session（避免繞過 start-session/quota）
@@ -119,7 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // 結算：如果提供了ai_evaluations，且不是「使用者提早結束」，才調用評價函數計算總分
-  if (!isCancelledByUser && ai_evaluations && Array.isArray(ai_evaluations) && ai_evaluations.length > 0) {
+  if (!isCancelledByUser && !isTokenLimitExceeded && ai_evaluations && Array.isArray(ai_evaluations) && ai_evaluations.length > 0) {
     try {
       const { error: evalError } = await supa.rpc('evaluate_interview_total', {
         p_interviews_id: interviews_id
@@ -156,4 +161,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ ok: true, session: freshSession || session })
 }
-

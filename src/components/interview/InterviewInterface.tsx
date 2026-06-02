@@ -94,6 +94,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   const hasRestoredRef = useRef(false)
   const resumePendingAiRef = useRef<{ for_message_id: string; answer: string; at?: string } | null>(null)
   const resumeTriggeredRef = useRef(false)
+  const interviewTokenCapRef = useRef<number | null>(null)
   // 避免同一題被重複送出（例如：按鈕/Enter/語音在同一個 event loop 內連續觸發）
   const turnLockRef = useRef(false)
   // 面試結束時，用於把「最後一輪」的完整 transcript（含 aiFeedback）交給 final save，避免 state 尚未 flush 造成錯位
@@ -594,7 +595,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   // 保存面試session到資料庫
   const saveInterviewSession = useCallback(async (
     finalResult: InterviewResult,
-    options?: { userCancelled?: boolean; transcriptMessages?: ChatMessage[] }
+    options?: { userCancelled?: boolean; tokenLimitExceeded?: boolean; transcriptMessages?: ChatMessage[] }
   ): Promise<'hired' | 'rejected' | 'pending' | 'cancelByUser' | undefined> => {
     if (!interviewId) return
 
@@ -681,6 +682,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           tokens_input: tokensInputRef.current,
           tokens_output: tokensOutputRef.current,
           is_cancelled_by_user: options?.userCancelled === true,
+          is_token_limit_exceeded: options?.tokenLimitExceeded === true,
         }),
       })
 
@@ -878,6 +880,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       let rawBuffer = '' // 用於累積原始內容（包含元數據）
       let didHandleMetadata = false // 避免重複解析/重複累加 tokens/重複 console log
       let didHandleScoreBlock = false // fallback：模型直接輸出 [SCORE_START] 區塊時仍要能解析
+      let didHitTokenLimit = false
 
       // 強化版：移除因為模型漏字元/串流拆分導致的破碎標記（例如：CONTENT_END]、[CONTENT_EN...）
       const sanitizeInterviewVisibleText = (text: string): string => {
@@ -931,6 +934,15 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                   if (Number.isFinite(ti) && ti >= 0) tokensInputRef.current += Math.floor(ti)
                   if (Number.isFinite(to) && to >= 0) tokensOutputRef.current += Math.floor(to)
                 }
+                const tokenCap = Number(metadata?.tokenBudget?.token_cap)
+                if (Number.isFinite(tokenCap) && tokenCap > 0) {
+                  interviewTokenCapRef.current = Math.floor(tokenCap)
+                }
+                const sessionTokenTotal = (tokensInputRef.current || 0) + (tokensOutputRef.current || 0)
+                const activeTokenCap = interviewTokenCapRef.current
+                if (activeTokenCap != null && sessionTokenTotal > activeTokenCap) {
+                  didHitTokenLimit = true
+                }
                 // 為了方便檢驗：每題回答結束後印一次 token（本次 + 累計）
                 console.log('[Interview] 回答完成 token', {
                   questionIndex: currentQuestionIndex + 1,
@@ -939,13 +951,17 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                   tokens_session_total: {
                     tokens_input: tokensInputRef.current,
                     tokens_output: tokensOutputRef.current,
-                    tokens_total: (tokensInputRef.current || 0) + (tokensOutputRef.current || 0),
+                    tokens_total: sessionTokenTotal,
                   },
+                  token_cap: activeTokenCap,
+                  token_limit_exceeded: didHitTokenLimit,
                 })
                 console.log('[Interview] 目前已使用 TOKEN', {
-                  tokens_total: (tokensInputRef.current || 0) + (tokensOutputRef.current || 0),
+                  tokens_total: sessionTokenTotal,
                   tokens_input: tokensInputRef.current,
                   tokens_output: tokensOutputRef.current,
+                  token_cap: activeTokenCap,
+                  token_limit_exceeded: didHitTokenLimit,
                 })
                 // 處理 scoreResult，將 timestamp 轉換回 Date 對象
                 if (metadata.scoreResult) {
@@ -1225,6 +1241,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         // 檢查是否為面試結束的回應
         const endKeywords = ['面試到此結束', '面試結束', '感謝你的參與', '我們的面試', '後續流程']
         const isInterviewEnding = endKeywords.some((keyword) => streamingContent.includes(keyword))
+        const tokenLimitNotice = '本場面試的 AI token 額度已用完，系統已保存目前資料並結束面試。'
 
         // ⭐ 關鍵：每題 AI 串流結束後只存一次（把 AI 回覆/評分落盤；不在「使用者送出」時先存，避免重複與錯位）
         // 若本回合已判定結束（endKeywords），則把 nowMs 快照留給最後一次 final save 使用，避免多打一發 save-session。
@@ -1252,8 +1269,20 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                 : m
             )
 
-            if (isInterviewEnding) {
-              finalTranscriptSnapshotRef.current = nowMs
+            if (isInterviewEnding || didHitTokenLimit) {
+              const finalMessages = didHitTokenLimit
+                ? [
+                    ...nowMs,
+                    {
+                      id: `token-limit-${Date.now()}`,
+                      type: 'ai' as const,
+                      content: tokenLimitNotice,
+                      timestamp: new Date(),
+                    },
+                  ]
+                : nowMs
+              finalTranscriptSnapshotRef.current = finalMessages
+              if (didHitTokenLimit) setMessages(finalMessages)
             } else {
               const duration_seconds = Math.floor((Date.now() - interviewStartTimeRef.current) / 1000)
               const nextIndex = decidedAction === 'next' ? (currentQuestionIndex + 1) : currentQuestionIndex
@@ -1290,6 +1319,51 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           }
         } catch (e) {
           if (DEBUG_INTERVIEW) console.warn('[Interview] save after AI response failed', e)
+        }
+
+        if (didHitTokenLimit) {
+          if (!finalTranscriptSnapshotRef.current) {
+            const baseMs = messagesRef.current || []
+            const nowMs: ChatMessage[] = baseMs.map((m) =>
+              m.id === streamingMessageId ? { ...m, content: streamingContent } : m
+            )
+            const finalMessages = [
+              ...nowMs,
+              {
+                id: `token-limit-${Date.now()}`,
+                type: 'ai' as const,
+                content: tokenLimitNotice,
+                timestamp: new Date(),
+              },
+            ]
+            finalTranscriptSnapshotRef.current = finalMessages
+            setMessages(finalMessages)
+          }
+          setInterviewCompletionStatus('complete')
+          setFinalizing(true)
+          setFinalSaveError(null)
+          setIsWaitingForAnswer(false)
+          try { recording.stopRecording() } catch {}
+          try { stopListening() } catch {}
+          stopCamera()
+          setShowLocalVideo(false)
+
+          const finalResult = scoringEngine.generateFinalResult('candidate-001')
+          if (interviewId) {
+            const transcriptMessages = finalTranscriptSnapshotRef.current || undefined
+            const outcome = await saveInterviewSession(finalResult, {
+              transcriptMessages,
+              tokenLimitExceeded: true,
+            })
+            if (outcome !== undefined) {
+              setFinalSaveCompleted(true)
+            } else {
+              setFinalSaveError('資料保存失敗，請稍後再試或重新整理頁面。')
+            }
+          } else {
+            onInterviewComplete(finalResult)
+          }
+          return
         }
         
         if (isInterviewEnding) {

@@ -50,6 +50,12 @@ SET free_interview_token_cap = 50000,
     updated_at = now()
 WHERE id = 'default';
 
+UPDATE public.interview_billing_allocations
+SET token_cap = LEAST(token_cap, 50000),
+    updated_at = now()
+WHERE source IN ('free_quota', 'subscription', 'admin_entitlement', 'purchased_credit', 'purchased_token')
+  AND token_cap > 50000;
+
 INSERT INTO public.credit_packages (
   code,
   name,
@@ -623,7 +629,8 @@ BEGIN
   UPDATE public.interview_billing_allocations
   SET token_used = GREATEST(0, token_used + v_delta),
       updated_at = now()
-  WHERE id = v_allocation.id;
+  WHERE id = v_allocation.id
+  RETURNING * INTO v_allocation;
 
   UPDATE public.company_ai_token_usage_logs
   SET input_tokens = p_input_tokens,
@@ -638,7 +645,10 @@ BEGIN
     'ok', true,
     'request_id', v_log.request_id,
     'total_tokens', v_total,
-    'delta_tokens', v_delta
+    'delta_tokens', v_delta,
+    'token_cap', v_allocation.token_cap,
+    'token_used', v_allocation.token_used,
+    'token_limit_exceeded', v_allocation.token_used > v_allocation.token_cap
   );
 END;
 $$;
