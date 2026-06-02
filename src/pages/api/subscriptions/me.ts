@@ -31,6 +31,8 @@ type SubscriptionMeResponse =
         monthlyTokenLimit: number | null
         monthlyTokenUsed: number
         monthlyTokenRemaining: number | null
+        estimatedRemainingInterviews: number | null
+        requiredTokensForNewInterview: number | null
         paymentMethodLabel: string | null
         cardStatus: 'none' | 'active' | 'card_update_required'
         cancelAtPeriodEnd: boolean
@@ -95,6 +97,8 @@ export default async function handler(
         monthlyTokenLimit: null,
         monthlyTokenUsed: 0,
         monthlyTokenRemaining: null,
+        estimatedRemainingInterviews: null,
+        requiredTokensForNewInterview: null,
         paymentMethodLabel: null,
         cardStatus: 'none',
         cancelAtPeriodEnd: false,
@@ -106,7 +110,7 @@ export default async function handler(
     })
   }
 
-  const [subscriptionRes, entitlementRes] = await Promise.all([
+  const [subscriptionRes, entitlementRes, tokenSummaryRes] = await Promise.all([
     ctx.supa
       .from('subscriptions')
       .select(
@@ -126,6 +130,9 @@ export default async function handler(
       .order('ends_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    ctx.supa.rpc('get_company_interview_token_summary', {
+      p_company_id: companyId,
+    }),
   ])
 
   const subscription = subscriptionRes.data as any
@@ -143,6 +150,18 @@ export default async function handler(
   const monthlyTokenUsed = Number(
     entitlement?.monthly_token_used ?? subscription?.monthly_token_used ?? 0
   )
+  const tokenSummary = (tokenSummaryRes.data as any) || {}
+  const requiredTokensForNewInterview = Number(
+    tokenSummary.required_tokens_for_new_interview || 0
+  )
+  const monthlyTokenRemaining =
+    typeof monthlyTokenLimit === 'number'
+      ? Math.max(0, monthlyTokenLimit - monthlyTokenUsed)
+      : null
+  const estimatedRemainingInterviews =
+    monthlyTokenRemaining != null && requiredTokensForNewInterview > 0
+      ? Math.floor(monthlyTokenRemaining / requiredTokensForNewInterview)
+      : null
 
   if (subscription?.id || entitlement?.ends_at) {
     const rawStatus = String(subscription?.status || 'active')
@@ -172,10 +191,9 @@ export default async function handler(
         ),
         monthlyTokenLimit,
         monthlyTokenUsed,
-        monthlyTokenRemaining:
-          typeof monthlyTokenLimit === 'number'
-            ? Math.max(0, monthlyTokenLimit - monthlyTokenUsed)
-            : null,
+        monthlyTokenRemaining,
+        estimatedRemainingInterviews,
+        requiredTokensForNewInterview,
         paymentMethodLabel: subscription?.card_mask || null,
         cardStatus,
         cancelAtPeriodEnd: !!subscription?.cancel_at_period_end,
@@ -213,6 +231,8 @@ export default async function handler(
       monthlyTokenLimit: null,
       monthlyTokenUsed: 0,
       monthlyTokenRemaining: null,
+      estimatedRemainingInterviews: null,
+      requiredTokensForNewInterview,
       paymentMethodLabel: null,
       cardStatus: 'none',
       cancelAtPeriodEnd: false,

@@ -240,9 +240,9 @@ export default function PaymentResultPage() {
         const latestPurchase = creditsBody?.recent_purchases?.[0]
         setStatus('ready')
         if (latestPurchase?.status === 'paid') {
-          setMessage('付款成功，面試追加回數已更新。')
+          setMessage('付款成功，TOKEN 餘額已更新。')
         } else if (latestPurchase?.status === 'failed') {
-          setMessage('付款失敗，未增加面試追加回數。')
+          setMessage('付款失敗，未增加 TOKEN 餘額。')
         } else if (
           sub?.status === 'active' ||
           sub?.status === 'cancel_at_period_end'
@@ -280,7 +280,7 @@ export default function PaymentResultPage() {
             href="/me?tab=subscription"
             className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-800"
           >
-            查看面試次數
+            查看 TOKEN 餘額
           </Link>
         </div>
       </section>

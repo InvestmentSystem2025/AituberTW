@@ -162,7 +162,7 @@ export default async function handler(
 
   const { data: purchase } = await supa
     .from('one_time_purchases')
-    .select('id, company_id, amount, interview_count, status')
+    .select('id, company_id, amount, interview_count, token_amount, status')
     .eq('merchant_order_no', merchantOrderNo)
     .maybeSingle()
   if (!purchase) return failSecurity('MPG MerchantOrderNo not found')
@@ -237,14 +237,14 @@ export default async function handler(
       .json({ status: 'SUCCESS', message: 'PURCHASE_ALREADY_HANDLED' })
   }
 
-  const creditRes = await supa.rpc('add_company_interview_credits', {
+  const creditRes = await supa.rpc('add_company_purchased_tokens', {
     p_company_id: (purchase as any).company_id,
-    p_credits: (purchase as any).interview_count,
+    p_tokens: Number((purchase as any).token_amount || 0),
   })
   if (creditRes.error)
     return res
       .status(500)
-      .json({ status: 'ERROR', message: 'CREDIT_UPDATE_FAILED' })
+      .json({ status: 'ERROR', message: 'TOKEN_UPDATE_FAILED' })
 
   await supa
     .from('newebpay_webhook_events')

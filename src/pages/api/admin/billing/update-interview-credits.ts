@@ -10,7 +10,7 @@ export default async function handler(
   if (req.method !== 'POST')
     return res.status(405).json({ ok: false, error: 'METHOD_NOT_ALLOWED' })
   const companyId = String(req.body?.company_id || '')
-  const delta = Number(req.body?.credits_delta)
+  const delta = Number(req.body?.tokens_delta ?? req.body?.credits_delta)
   const reason = String(req.body?.reason || '').trim()
   if (!companyId || !Number.isInteger(delta) || !reason)
     return res.status(400).json({ ok: false, error: 'INVALID_PARAMS' })
@@ -21,16 +21,16 @@ export default async function handler(
       .select('*')
       .eq('company_id', companyId)
       .maybeSingle()
-    const current = Number((before as any)?.purchased_credits_remaining || 0)
+    const current = Number((before as any)?.purchased_tokens_remaining || 0)
     const next = current + delta
     if (next < 0)
-      return res.status(400).json({ ok: false, error: 'NEGATIVE_CREDITS' })
+      return res.status(400).json({ ok: false, error: 'NEGATIVE_TOKENS' })
     const { data, error } = await ctx.supa
       .from('company_interview_credit_balance')
       .upsert(
         {
           company_id: companyId,
-          purchased_credits_remaining: next,
+          purchased_tokens_remaining: next,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'company_id' }
@@ -43,13 +43,13 @@ export default async function handler(
       supa: ctx.supa,
       adminUserId: ctx.profile.id,
       companyId,
-      action: 'update_interview_credits',
+      action: 'update_purchased_tokens',
       targetType: 'company_interview_credit_balance',
       beforeValue: (before as any) || null,
       afterValue: data as any,
       reason,
     })
-    return res.status(200).json({ ok: true, creditBalance: data })
+    return res.status(200).json({ ok: true, tokenBalance: data, creditBalance: data })
   } catch (error) {
     return res.status(mapAuthErrorToStatus(error)).json({
       ok: false,

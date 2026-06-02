@@ -51,16 +51,18 @@
   - 信用卡不可使用，需要引導重新契約
   - 若仍有剩餘期間與 token，仍可用到其中一個條件用完
 
-### B. 單次購買面試追加回數
+### B. 單次購買 TOKEN 方案
 
 - 使用 NewebPay MPG / NPA-F01
-- 用於購買面試追加回數
-- 購入回數無限制
-- 購入一次，面試追加回數 `+n`
-- 沒有日數限制，只有次數限制
-- 每場面試仍必須有 `per_interview_token_cap`，避免 AI token 成本失控
-- 付款成功後增加 `company_interview_credit_balance.purchased_credits_remaining`
-- 付款失敗不可增加 credits
+- 用於公司購買一次性 TOKEN 額度
+- 預設測試方案：`2,000K tokens`，價格 `NT$10`
+- 購買次數無限制
+- 購買一次，公司可用 TOKEN `+n`
+- 沒有日數限制，只有 TOKEN 使用量限制
+- 每場面試仍必須有單場 token guard，避免單場 AI token 成本失控
+- 付款成功後增加公司一次性購買 TOKEN 餘額
+- 付款失敗不可增加 TOKEN
+- 企業端購買頁必須顯示「當前可使用 TOKEN」與「依當前使用狀況推測還可進行 OO 次面試」
 
 ## 共通金流安全規則
 
@@ -71,7 +73,7 @@
 5. 只可保存遮罩卡號。
 6. HashKey / HashIV / MerchantID 不可輸出到 log。
 7. Webhook 必須 idempotent。
-8. Duplicate webhook 不可重複延長期間、reset token、增加 credits、建立重複 payment。
+8. Duplicate webhook 不可重複延長期間、reset token、增加 TOKEN、建立重複 payment。
 9. Security alert 不可更新權益。
 10. 所有金流權益變更要 transaction 或 RPC 化。
 11. Admin 寫入操作要寫 audit log。
@@ -383,13 +385,13 @@ CAU `CARD_NOT_ALLOWED`：
 - `Version = 2.3`
 - `MerchantOrderNo`
 - `Amt`
-- `ItemDesc`，例：`AI面接官 面接追加回数`
+- `ItemDesc`，例：`AI面接官 TOKEN方案 2000K`
 - `OrderDetail`：信用卡單次購買不送；STG 曾因一般文字格式觸發 `MPG01028`
   訂單細項格式錯誤。若未來啟用需要細項的支付方式，須依藍新該支付方式規格送
   JSON / itemized 格式，且總額需等於 `Amt`。
 - `NotifyURL`，STG：`https://stg.ai-interview.tw/api/newebpay/mpg/notify`
 - `ReturnURL`，STG：`https://stg.ai-interview.tw/payment/result`
-- `ClientBackURL`，可設 `/me?tab=credits`
+- `ClientBackURL`，可設 `/me?tab=subscription`
 - `Email`
 - `CREDIT = 1`
 - `LoginType = 0`
@@ -424,14 +426,14 @@ HashKey={HashKey}&{TradeInfo}&HashIV={HashIV}
 
 - `one_time_purchases.status = paid`
 - payment / purchase record 記錄 paid
-- `company_interview_credit_balance.purchased_credits_remaining += one_time_purchases.interview_count`
+- 公司一次性購買 TOKEN 餘額 `+= one_time_purchases.token_amount`
 - webhook event `status = processed`
 - 回 HTTP 200
 
 失敗處理：
 
 - `one_time_purchases.status = failed`
-- 不增加 credits
+- 不增加 TOKEN
 - 保存 `Message` / `RespondCode` / raw payload
 - 回 HTTP 200
 
@@ -440,7 +442,7 @@ Security mismatch：
 - 例如 `Amt` mismatch、`MerchantID` 不符、`TradeSha` 錯
 - webhook event `status = security_alert`
 - 建立 `billing_alerts`
-- 不加 credits
+- 不增加 TOKEN
 - 不更新 payment 為 paid
 - 不 reset token
 - 目前可回 HTTP 200，避免無限 retry 噪音
@@ -459,7 +461,7 @@ Security mismatch：
 6. 查 `unique_key` 是否已 processed。
 7. 若已 processed，回 HTTP 200 並不重複處理。
 8. 若未處理，insert received。
-9. 使用 transaction / RPC 更新 subscription / payment / credits / token。
+9. 使用 transaction / RPC 更新 subscription / payment / TOKEN wallet / token usage。
 10. event status 設為 processed。
 11. 若 retryable error，event status 設為 failed 並回 HTTP 500。
 12. 若 security error，event status 設為 security_alert，建立 billing alert，不更新權益。
@@ -540,15 +542,31 @@ Token reserve / finalize：
 - AI 成功後 finalize actual input / output / total
 - estimated > actual 時返還差額
 - actual > estimated 時補扣差額
-- 如果補扣後超過 limit，允許本次完成，下次 reserve 時阻擋
+- 如果補扣後超過 limit，該場面試必須進入「token 用完」結束流程，不可繼續下一輪問答
 - AI request error / timeout 且沒有 provider usage 時 release
 - streaming 若 server `onFinish` 拿到 usage，即使 client 中斷也 finalize
 
 Token route：
 
 - subscription / admin entitlement 走 `reserve_company_billing_tokens`
-- free quota / purchased credit 走 `reserve_interview_allocation_tokens`
-- purchased credit 的 token cap 來自 `interview_billing_allocations.token_cap`
+- 一次性購買 TOKEN 走公司 TOKEN wallet reserve / finalize / release
+- free quota 若仍保留免費面試額度，走 `reserve_interview_allocation_tokens` 或等價的免費額度 token guard
+- 單次購買 TOKEN 不再用 `purchased_credit` 作為「面試次數」來源，不再於建立面試時扣 1 次 credit
+
+Token 用完時的面試行為：
+
+- 若單場 `token_cap` 超過，必須先保存當前 transcript / progress / token usage / session 狀態，然後結束面試。
+- 若企業端 subscription / admin entitlement / 一次性購買 TOKEN 餘額不足或用完，必須先保存當前資料，然後結束面試。
+- 結束後不應再讓應徵者繼續送出新回答或觸發下一輪 AI request。
+- 面試結果狀態與畫面文案需標記為「因 TOKEN 額度不足而提前結束」，避免誤判為正常完成。
+
+面試 token 需求預估：
+
+- 招募方建立面試前，系統要判定「這次面試是否有足夠 TOKEN 完整執行」。
+- 判定基準：`當前可使用 TOKEN > 過去面試 TOKEN 最大使用量`。
+- 過去最大使用量以該公司既有面試的 `tokens_input + tokens_output` 最大值為基準。
+- 若公司尚無歷史面試資料，使用系統預設估算值或方案預設值作為建立前檢查基準。
+- 若不滿足條件，不允許建立面試，UI 必須顯示無法建立原因，並導向付費頁面。
 
 ## 面試建立流程
 
@@ -556,8 +574,14 @@ Token route：
 
 1. free quota
 2. subscription entitlement
-3. purchased credits
+3. 一次性購買 TOKEN 餘額
 4. billing required
+
+建立面試前 token 檢查：
+
+- 招募方建立面試前，除了次數 / entitlement 判定外，還要檢查該場面試可用 token 是否足以完成一場面試。
+- 可用 token 必須大於公司過去面試的最大 token 使用量。
+- 若可用 token 不足，API 回傳明確錯誤碼，前端顯示原因並導向 `/me?tab=subscription` 或對應課金頁。
 
 free quota：
 
@@ -565,6 +589,7 @@ free quota：
 - 成功建立面試後寫 `interview_billing_allocations`
 - `source = free_quota`
 - `token_cap = billing_runtime_settings.free_interview_token_cap`
+- 使用 free quota 時，只消耗免費配額與該場免費 token guard，不得扣除公司一次性購買的付費 TOKEN wallet。
 
 subscription：
 
@@ -574,21 +599,32 @@ subscription：
 - `subscription_id` 若來自 subscription
 - AI 使用時走 `reserve_company_billing_tokens`
 
-purchased credits：
+一次性購買 TOKEN：
 
-- `purchased_credits_remaining > 0`
-- 扣 1 次 credit
-- 建立面試
-- 寫 `interview_billing_allocations`
-- `source = purchased_credit`
-- `token_cap = credit_packages.per_interview_token_cap`
-- `one_time_purchase_id` 若目前能追蹤來源就寫入；如果只能用 balance，要在實作回覆中說明替代設計
-- AI 使用時走 `reserve_interview_allocation_tokens`
+- 公司一次性購買 TOKEN 餘額 > 公司過去面試 TOKEN 最大使用量時，允許建立面試。
+- 建立面試時不扣 1 次 credit，也不預先扣完整面試 TOKEN。
+- 面試進行中依 AI request reserve / finalize 實際消耗 TOKEN。
+- 寫 `interview_billing_allocations` 或等價 allocation 記錄，用於標記該面試使用一次性購買 TOKEN wallet。
+- `source = purchased_token` 或等價新值；不再使用 `purchased_credit` 表示面試次數。
+- 若要追蹤單筆購買來源，應由 TOKEN wallet ledger 記錄消耗來源；不可依賴舊 `one_time_purchase_id` + `credits_used` 模型。
 
 如果以上都不可用：
 
 - 回 `BILLING_REQUIRED`
-- UI 提示 subscription 或單次購買
+- UI 提示 subscription 或單次購買 TOKEN
+
+應徵者面試開始前提示文：
+
+- 面試開始前必須提示應徵者：
+  - `請每題盡量以 1～2 分鐘回答。若回答時間過長，可能因 TOKEN 額度不足而提前結束面試。`
+
+企業端 TOKEN 方案購買頁文案：
+
+- 企業購買 TOKEN 方案區塊必須顯示：
+  - `2,000K TOKEN 方案，NT$10。若每場面試約使用 100K TOKEN，約可進行 20 場面試（問題數目安：10 題）。`
+- 訂閱 / TOKEN 頁面不可再以「剩餘建立面試次數」作為主要指標，必須改為：
+  - `當前可使用 TOKEN：OOO TOKEN`
+  - `依當前使用狀況推測還可進行 OO 次面試`
 
 ## Admin billing
 
@@ -631,7 +667,7 @@ Admin update token limit：
 - `used > limit` 時不刪 usage，下次使用阻擋
 - 寫 audit
 
-Admin update credits：
+Admin update TOKEN wallet：
 
 - atomic update
 - 不可小於 0
@@ -715,8 +751,8 @@ Billing foundation tables:
 - `subscriptions`
 - `admin_billing_entitlements`
 - `subscription_payments`
-- `credit_packages`
-- `company_interview_credit_balance`
+- `token_packages` 或將既有 `credit_packages` migration 改為 TOKEN package schema
+- `company_token_balance` 或等價公司 TOKEN wallet table
 - `one_time_purchases`
 - `interview_billing_allocations`
 - `company_ai_token_usage_logs`
@@ -731,13 +767,15 @@ Token RPC:
 - `reserve_company_billing_tokens`
 - `finalize_company_billing_tokens`
 - `release_company_billing_tokens`
+- 一次性購買 TOKEN wallet 的 reserve / finalize / release RPC，或將其整合進 `reserve_company_billing_tokens`
 - `reserve_interview_allocation_tokens`
 - `finalize_interview_allocation_tokens`
 - `release_interview_allocation_tokens`
 
-Credit RPC:
+TOKEN wallet RPC:
 
-- `add_company_interview_credits`
+- `add_company_purchased_tokens` 或等價 RPC
+- 舊 `add_company_interview_credits` 不可再作為新單次購買 TOKEN 方案的入帳方法
 
 ## 實作優先順序
 

@@ -114,6 +114,11 @@ export default function CompanyAdminPage() {
     free_quota: 3,
     remaining: 3,
     purchased_credits_remaining: 0,
+    purchased_tokens_remaining: 0,
+    available_tokens: 0,
+    required_tokens_for_new_interview: 0,
+    estimated_remaining_interviews: 0,
+    can_create_interview: true,
     total_remaining: 3,
   })
   const [resumeReviewInviteQuota, setResumeReviewInviteQuota] = useState({
@@ -455,6 +460,11 @@ export default function CompanyAdminPage() {
         free_quota: Number(j.free_quota || 3),
         remaining: Number(j.remaining || 0),
         purchased_credits_remaining: Number(j.purchased_credits_remaining || 0),
+        purchased_tokens_remaining: Number(j.purchased_tokens_remaining || 0),
+        available_tokens: Number(j.available_tokens || j.purchased_tokens_remaining || 0),
+        required_tokens_for_new_interview: Number(j.required_tokens_for_new_interview || 0),
+        estimated_remaining_interviews: Number(j.estimated_remaining_interviews || 0),
+        can_create_interview: j.can_create_interview !== false,
         total_remaining: Number(j.total_remaining ?? Number(j.remaining || 0)),
       })
     }
@@ -973,6 +983,8 @@ ${criteriaText}
         errorMsg = '此職種已達招募目標人數，無法再建立面試'
       } else if (result.error === 'INTERVIEW_QUOTA_EXCEEDED') {
         errorMsg = '公司面試免費配額與付費面試配額皆已用完'
+      } else if (result.error === 'INSUFFICIENT_TOKENS_FOR_INTERVIEW' || result.error === 'BILLING_REQUIRED') {
+        errorMsg = '公司目前可用 TOKEN 不足以建立新面試，請前往課金頁購買 TOKEN 或確認訂閱狀態'
       } else if (result.error === 'CANDIDATE_NOT_JOBSEEKER') {
         errorMsg = '候選人必須是 jobSeeker，請更換候選人'
       } else if (result.error === 'CREATE_FAILED') {
@@ -3441,7 +3453,10 @@ ${criteriaText}
               公司面試剩餘免費配額：{Math.max(0, interviewQuota.free_quota - interviewQuota.used_count)} / {interviewQuota.free_quota}
             </div>
             <div>
-              公司付費剩餘面試配額：{interviewQuota.purchased_credits_remaining} 次
+              公司付費剩餘 TOKEN：{interviewQuota.available_tokens.toLocaleString('zh-TW')}
+            </div>
+            <div>
+              依當前使用狀況推測還可進行 {interviewQuota.estimated_remaining_interviews} 次面試
             </div>
           </div>
           <form onSubmit={addIV} style={{ display: 'grid', gap: 12, padding: 12, border: '2px solid #000', background: '#e6f2ff', borderRadius: 8 }}>
@@ -3509,20 +3524,20 @@ ${criteriaText}
             </div>
             <button
               type="submit"
-              disabled={interviewQuota.total_remaining <= 0}
+              disabled={!interviewQuota.can_create_interview}
               style={{
                 padding: '8px 12px',
-                background: interviewQuota.total_remaining <= 0 ? '#9ca3af' : '#4CAF50',
+                background: !interviewQuota.can_create_interview ? '#9ca3af' : '#4CAF50',
                 color: 'white',
                 border: 'none',
                 borderRadius: 4,
-                cursor: interviewQuota.total_remaining <= 0 ? 'not-allowed' : 'pointer',
+                cursor: !interviewQuota.can_create_interview ? 'not-allowed' : 'pointer',
               }}
             >
               新增面試
             </button>
-            {interviewQuota.total_remaining <= 0 && (
-              <div style={{ color: '#b00000', fontSize: '0.9em' }}>公司面試免費配額與付費面試配額皆已用完</div>
+            {!interviewQuota.can_create_interview && (
+              <div style={{ color: '#b00000', fontSize: '0.9em' }}>公司目前可用 TOKEN 不足以建立新面試，請前往課金頁補充 TOKEN 或確認訂閱狀態。</div>
             )}
           </form>
           <ul 

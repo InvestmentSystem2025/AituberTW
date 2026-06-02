@@ -12,6 +12,9 @@ type SubscriptionInfo = {
   billingCycle: 'monthly' | 'yearly' | null
   nextBillingDate: string | null
   currentPeriodEnd: string | null
+  monthlyTokenRemaining?: number | null
+  estimatedRemainingInterviews?: number | null
+  requiredTokensForNewInterview?: number | null
   paymentMethodLabel: string | null
   cardStatus: 'none' | 'active' | 'card_update_required'
   cancelAtPeriodEnd: boolean
@@ -24,6 +27,14 @@ type SubscriptionInfo = {
 type InterviewCreditsInfo = {
   balance: {
     purchased_credits_remaining: number
+    purchased_tokens_remaining: number
+  }
+  credits: {
+    availableTokens: number
+    estimatedRemainingInterviews: number
+    requiredTokensForNewInterview: number
+    historicalMaxInterviewTokens: number
+    defaultEstimatedInterviewTokens: number
   }
   packages: Array<{
     id: string
@@ -32,6 +43,7 @@ type InterviewCreditsInfo = {
     price_twd: number
     interview_count: number
     per_interview_token_cap: number
+    token_amount: number
     is_active: boolean
   }>
   recent_purchases: Array<{
@@ -39,10 +51,17 @@ type InterviewCreditsInfo = {
     merchant_order_no: string
     amount: number
     interview_count: number
+    token_amount: number
     status: string
     created_at: string
     updated_at: string
   }>
+}
+
+const formatTokens = (value: number): string => {
+  if (!Number.isFinite(value) || value <= 0) return '0'
+  if (value >= 1000) return `${Math.floor(value / 1000).toLocaleString('zh-TW')}K`
+  return value.toLocaleString('zh-TW')
 }
 
 type RecruiterTutorialState = {
@@ -389,6 +408,31 @@ export default function MePage() {
           body?.credits?.purchasedCreditsRemaining ??
           0
       ),
+      purchased_tokens_remaining: Number(
+        body?.balance?.purchased_tokens_remaining ??
+          body?.credits?.purchasedTokensRemaining ??
+          body?.credits?.availableTokens ??
+          0
+      ),
+    },
+    credits: {
+      availableTokens: Number(
+        body?.credits?.availableTokens ??
+          body?.balance?.purchased_tokens_remaining ??
+          0
+      ),
+      estimatedRemainingInterviews: Number(
+        body?.credits?.estimatedRemainingInterviews || 0
+      ),
+      requiredTokensForNewInterview: Number(
+        body?.credits?.requiredTokensForNewInterview || 0
+      ),
+      historicalMaxInterviewTokens: Number(
+        body?.credits?.historicalMaxInterviewTokens || 0
+      ),
+      defaultEstimatedInterviewTokens: Number(
+        body?.credits?.defaultEstimatedInterviewTokens || 0
+      ),
     },
     packages: ((body?.packages as any[]) || []).map((pkg) => ({
       id: pkg.id,
@@ -399,6 +443,7 @@ export default function MePage() {
       per_interview_token_cap: Number(
         pkg.per_interview_token_cap ?? pkg.perInterviewTokenCap ?? 0
       ),
+      token_amount: Number(pkg.token_amount ?? pkg.tokenAmount ?? 0),
       is_active: pkg.is_active !== false,
     })),
     recent_purchases: ((body?.recent_purchases as any[]) || []).map((purchase) => ({
@@ -406,6 +451,7 @@ export default function MePage() {
       merchant_order_no: purchase.merchant_order_no,
       amount: Number(purchase.amount || 0),
       interview_count: Number(purchase.interview_count || 0),
+      token_amount: Number(purchase.token_amount || 0),
       status: purchase.status,
       created_at: purchase.created_at,
       updated_at: purchase.updated_at,
@@ -426,7 +472,7 @@ export default function MePage() {
       }
       setCreditsInfo(normalizeCreditsInfo(body))
     } catch {
-      setCreditsError('面試追加回數暫時無法讀取，請稍後再試。')
+      setCreditsError('TOKEN 方案暫時無法讀取，請稍後再試。')
     } finally {
       setCreditsLoading(false)
     }
@@ -455,7 +501,7 @@ export default function MePage() {
     if (!accessToken || purchaseCreating) return
     const companyId = companies[0]?.id
     if (!companyId) {
-      setCenterNotice('請先建立或加入公司後再購買面試追加回數。')
+      setCenterNotice('請先建立或加入公司後再購買 TOKEN 方案。')
       return
     }
 
@@ -1377,19 +1423,22 @@ export default function MePage() {
             <div style={{ padding: 18, border: '2px solid #000', borderRadius: 8, background: '#fff' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                 <div>
-                  <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 4 }}>面試追加回數</div>
+                  <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 4 }}>TOKEN 方案</div>
                   <div style={{ fontSize: 20, fontWeight: 800 }}>
-                    剩餘建立面試次數（付費版）：{creditsInfo?.balance.purchased_credits_remaining ?? 0} 次
+                    目前可使用 TOKEN：{formatTokens(creditsInfo?.credits.availableTokens ?? creditsInfo?.balance.purchased_tokens_remaining ?? 0)}
+                  </div>
+                  <div style={{ marginTop: 4, fontWeight: 700 }}>
+                    依當前使用狀況推測還可進行 {creditsInfo?.credits.estimatedRemainingInterviews ?? 0} 次面試
                   </div>
                   <div style={{ marginTop: 8, color: '#4b5563', lineHeight: 1.6 }}>
-                    購買追加回數後，付款成功需等待藍新 NotifyURL 通知完成，重新整理後會更新剩餘次數。
+                    購買 TOKEN 方案後，付款成功需等待藍新 NotifyURL 通知完成，重新整理後會更新 TOKEN 餘額。
                   </div>
                 </div>
               </div>
 
               <div style={{ marginTop: 14, display: 'grid', gap: 10 }}>
                 {(creditsInfo?.packages || [])
-                  .filter((pkg) => pkg.code === 'interview_10_test')
+                  .filter((pkg) => pkg.token_amount > 0)
                   .map((pkg) => (
                     <div
                       key={pkg.id}
@@ -1408,7 +1457,7 @@ export default function MePage() {
                       <div>
                         <div style={{ fontWeight: 800 }}>{pkg.name}</div>
                         <div style={{ marginTop: 4, fontSize: 13, color: '#4b5563' }}>
-                          NT${pkg.price_twd.toLocaleString('zh-TW')} / {pkg.interview_count} 回
+                          NT${pkg.price_twd.toLocaleString('zh-TW')} / {formatTokens(pkg.token_amount)} TOKEN
                         </div>
                       </div>
                       <button
@@ -1424,13 +1473,13 @@ export default function MePage() {
                           fontWeight: 700,
                         }}
                       >
-                        {purchaseCreating ? '前往付款中…' : '購買面試次數+10次'}
+                        {purchaseCreating ? '前往付款中…' : `購買 ${formatTokens(pkg.token_amount)} TOKEN`}
                       </button>
                     </div>
                   ))}
-                {creditsInfo && creditsInfo.packages.filter((pkg) => pkg.code === 'interview_10_test').length === 0 && (
+                {creditsInfo && creditsInfo.packages.filter((pkg) => pkg.token_amount > 0).length === 0 && (
                   <div style={{ padding: 12, border: '1px dashed #d1d5db', borderRadius: 8, color: '#6b7280' }}>
-                    目前沒有可購買的面試追加方案。
+                    目前沒有可購買的 TOKEN 方案。
                   </div>
                 )}
               </div>
@@ -1489,6 +1538,20 @@ export default function MePage() {
                 {
                   label: '本期可用至',
                   value: subscriptionInfo?.currentPeriodEnd || '免費測試期間',
+                },
+                {
+                  label: '本期可用 TOKEN',
+                  value:
+                    typeof subscriptionInfo?.monthlyTokenRemaining === 'number'
+                      ? formatTokens(subscriptionInfo.monthlyTokenRemaining)
+                      : '尚未啟用',
+                },
+                {
+                  label: '推測可面試數',
+                  value:
+                    typeof subscriptionInfo?.estimatedRemainingInterviews === 'number'
+                      ? `${subscriptionInfo.estimatedRemainingInterviews} 次`
+                      : '尚未啟用',
                 },
                 {
                   label: '付款方式',

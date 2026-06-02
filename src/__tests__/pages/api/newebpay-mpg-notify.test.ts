@@ -96,6 +96,7 @@ function buildSupaMock(options?: {
       company_id: 'company-1',
       amount: 10,
       interview_count: 10,
+      token_amount: 2000000,
       status: 'pending',
     }
 
@@ -163,7 +164,7 @@ describe('/api/newebpay/mpg/notify', () => {
     decryptMpgTradeInfo.mockImplementation((tradeInfo: string) => payloads[tradeInfo])
   })
 
-  it('marks a successful pending purchase paid and adds interview credits', async () => {
+  it('marks a successful pending purchase paid and adds purchased tokens', async () => {
     const supa = buildSupaMock()
     getServiceClient.mockReturnValue(supa.client)
 
@@ -172,8 +173,8 @@ describe('/api/newebpay/mpg/notify', () => {
     expect(response).toEqual({ statusCode: 200, body: { status: 'SUCCESS', message: 'OK' } })
     expect(supa.calls.rpc).toEqual([
       {
-        fn: 'add_company_interview_credits',
-        args: { p_company_id: 'company-1', p_credits: 10 },
+        fn: 'add_company_purchased_tokens',
+        args: { p_company_id: 'company-1', p_tokens: 2000000 },
       },
     ])
     expect(supa.calls.updates).toEqual(

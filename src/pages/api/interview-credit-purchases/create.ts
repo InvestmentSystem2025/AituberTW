@@ -66,13 +66,16 @@ export default async function handler(
     const { data: pkg, error: pkgErr } = await ctx.supa
       .from('credit_packages')
       .select(
-        'id, name, price_twd, interview_count, per_interview_token_cap, is_active'
+        'id, name, price_twd, interview_count, per_interview_token_cap, token_amount, is_active'
       )
       .eq('id', packageId)
       .eq('is_active', true)
       .maybeSingle()
     if (pkgErr || !pkg)
       return res.status(404).json({ ok: false, error: 'PACKAGE_NOT_FOUND' })
+    const tokenAmount = Number((pkg as any).token_amount || 0)
+    if (!Number.isFinite(tokenAmount) || tokenAmount <= 0)
+      return res.status(400).json({ ok: false, error: 'INVALID_TOKEN_PACKAGE' })
 
     const merchantOrderNo = createMerchantOrderNo('CRD')
     const { data: purchase, error: insertErr } = await ctx.supa
@@ -83,8 +86,9 @@ export default async function handler(
         package_id: packageId,
         merchant_order_no: merchantOrderNo,
         amount: (pkg as any).price_twd,
-        interview_count: (pkg as any).interview_count,
+        interview_count: Number((pkg as any).interview_count || 1),
         per_interview_token_cap: (pkg as any).per_interview_token_cap,
+        token_amount: tokenAmount,
         status: 'pending',
       })
       .select('id')
@@ -99,7 +103,7 @@ export default async function handler(
       {
         merchantOrderNo,
         amount: Number((pkg as any).price_twd),
-        itemDesc: 'AI面接官 面接追加回数',
+        itemDesc: `AI面接官 TOKEN方案 ${tokenAmount.toLocaleString('zh-TW')} tokens`,
         email: ctx.profile.email || undefined,
         returnUrl: `${baseUrl}/payment/result`,
         notifyUrl:

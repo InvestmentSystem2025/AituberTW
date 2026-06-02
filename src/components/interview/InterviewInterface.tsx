@@ -102,7 +102,8 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
   
   // 針對首句問候語做內容淨化，避免模型產生不友善/不合語境的句子
   const sanitizeGreeting = useCallback((text: string | undefined | null): string => {
-    const fallback = '你好，我是今天的 AI 面試官，很高興見到你！開始前請你先做個簡短的自我介紹。'
+    const tokenNotice = '請每題盡量以 1～2 分鐘回答。若回答時間過長，可能因 TOKEN 額度不足而提前結束面試。'
+    const fallback = `你好，我是今天的 AI 面試官，很高興見到你！${tokenNotice} 開始前請你先做個簡短的自我介紹。`
     if (!text || typeof text !== 'string') return fallback
     let t = text
     // 移除不必要的評語或系統化用語
@@ -111,6 +112,9 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
     // 若清理後過短，回退成預設友善問候
     t = t.trim()
     if (t.length < 6) return fallback
+    if (!t.includes('1～2 分鐘') && !t.includes('1~2 分鐘')) {
+      t = `${t} ${tokenNotice}`
+    }
     return t
   }, [])
   

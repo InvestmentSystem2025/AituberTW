@@ -13,7 +13,7 @@ export default async function handler(
     const { data, error } = await ctx.supa
       .from('company')
       .select(
-        'id, company_name, created_at, subscriptions(id, status, current_period_end, monthly_token_limit, monthly_token_used, card_status, created_at), company_interview_credit_balance(purchased_credits_remaining)'
+        'id, company_name, created_at, subscriptions(id, status, current_period_end, monthly_token_limit, monthly_token_used, card_status, created_at), company_interview_credit_balance(purchased_credits_remaining, purchased_tokens_remaining)'
       )
       .order('created_at', { ascending: false })
       .limit(100)

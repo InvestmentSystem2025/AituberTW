@@ -19,7 +19,11 @@ export const SUBSCRIPTION_USABLE_WITH_TIME_AND_TOKENS = new Set([
   'manual_granted',
 ])
 
-export type BillingSource = 'free_quota' | 'subscription' | 'purchased_credit'
+export type BillingSource =
+  | 'free_quota'
+  | 'subscription'
+  | 'purchased_credit'
+  | 'purchased_token'
 
 export type SubscriptionStatus =
   | 'pending'

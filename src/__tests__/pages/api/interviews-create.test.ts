@@ -103,6 +103,17 @@ describe('/api/interviews/create', () => {
     expect(JSON.parse(res._getData())).toEqual({ error: 'BILLING_REQUIRED' })
   })
 
+  it('returns billing required when available tokens are insufficient', async () => {
+    getServiceClient.mockReturnValue(buildSupaMock({ rpcError: 'INSUFFICIENT_TOKENS_FOR_INTERVIEW' }))
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: { company_id: 'c1', job_opening_id: 'j1', start_time: '2026-03-24T10:00:00Z', candidate_email: 'a@b.com' },
+    })
+    await handler(req as any, res as any)
+    expect(res._getStatusCode()).toBe(402)
+    expect(JSON.parse(res._getData())).toEqual({ error: 'INSUFFICIENT_TOKENS_FOR_INTERVIEW' })
+  })
+
   it('returns a conflict when paid credit balance has no purchase snapshot ledger', async () => {
     getServiceClient.mockReturnValue(buildSupaMock({ rpcError: 'PURCHASED_CREDIT_LEDGER_MISMATCH' }))
     const { req, res } = createMocks({

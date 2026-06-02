@@ -46,6 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (msg.includes('PROFILE_ID_NOT_FOUND')) return res.status(400).json({ error: 'PROFILE_ID_NOT_FOUND' })
     if (msg.includes('XOR_PROFILE_EMAIL')) return res.status(400).json({ error: 'XOR_PROFILE_EMAIL' })
     if (msg.includes('BILLING_REQUIRED')) return res.status(402).json({ error: 'BILLING_REQUIRED' })
+    if (msg.includes('INSUFFICIENT_TOKENS_FOR_INTERVIEW')) return res.status(402).json({ error: 'INSUFFICIENT_TOKENS_FOR_INTERVIEW' })
     if (msg.includes('PURCHASED_CREDIT_LEDGER_MISMATCH')) return res.status(409).json({ error: 'PURCHASED_CREDIT_LEDGER_MISMATCH' })
     console.error('Interview create rpc error:', rpcErr)
     return res.status(400).json({ error: 'CREATE_FAILED' })
@@ -69,4 +70,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ ok: true })
 }
-
