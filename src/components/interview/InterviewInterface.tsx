@@ -942,6 +942,11 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
                     tokens_total: (tokensInputRef.current || 0) + (tokensOutputRef.current || 0),
                   },
                 })
+                console.log('[Interview] 目前已使用 TOKEN', {
+                  tokens_total: (tokensInputRef.current || 0) + (tokensOutputRef.current || 0),
+                  tokens_input: tokensInputRef.current,
+                  tokens_output: tokensOutputRef.current,
+                })
                 // 處理 scoreResult，將 timestamp 轉換回 Date 對象
                 if (metadata.scoreResult) {
                   const scoreResult = metadata.scoreResult
@@ -1053,6 +1058,15 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
         
         // 完成追蹤並記錄指標
         responseTimeTracker.completeTracking(trackingId, streamingContent)
+
+        if (!didHandleMetadata) {
+          console.log('[Interview] 目前已使用 TOKEN', {
+            tokens_total: (tokensInputRef.current || 0) + (tokensOutputRef.current || 0),
+            tokens_input: tokensInputRef.current,
+            tokens_output: tokensOutputRef.current,
+            note: '本次回覆未收到 token metadata，顯示目前累積值。',
+          })
+        }
         
         // 記錄本回合 AI 決策（用於控制題號與追問狀態）
         let decidedAction: 'followup' | 'next' | 'end' | null = null

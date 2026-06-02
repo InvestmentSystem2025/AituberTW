@@ -84,7 +84,8 @@ export default async function handler(
     freeInterviewTokenCap > requiredTokensForNewInterview
   const paidTokenCanCreate =
     requiredTokensForNewInterview > 0 &&
-    purchasedTokensRemaining > requiredTokensForNewInterview
+    Math.min(purchasedTokensRemaining, freeInterviewTokenCap) >
+      requiredTokensForNewInterview
   const subscriptionRemainingTokens =
     (subscriptionRes.data as any)?.monthly_token_limit == null
       ? 0
@@ -103,7 +104,10 @@ export default async function handler(
         )
   const entitlementCanCreate =
     requiredTokensForNewInterview > 0 &&
-    Math.max(subscriptionRemainingTokens, adminRemainingTokens) >
+    Math.min(
+      Math.max(subscriptionRemainingTokens, adminRemainingTokens),
+      freeInterviewTokenCap
+    ) >
       requiredTokensForNewInterview
   return res.status(200).json({
     ok: true,

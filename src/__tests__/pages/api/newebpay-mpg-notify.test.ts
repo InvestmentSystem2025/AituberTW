@@ -96,7 +96,7 @@ function buildSupaMock(options?: {
       company_id: 'company-1',
       amount: 10,
       interview_count: 10,
-      token_amount: 2000000,
+      token_amount: 100000,
       status: 'pending',
     }
 
@@ -174,7 +174,7 @@ describe('/api/newebpay/mpg/notify', () => {
     expect(supa.calls.rpc).toEqual([
       {
         fn: 'add_company_purchased_tokens',
-        args: { p_company_id: 'company-1', p_tokens: 2000000 },
+        args: { p_company_id: 'company-1', p_tokens: 100000 },
       },
     ])
     expect(supa.calls.updates).toEqual(

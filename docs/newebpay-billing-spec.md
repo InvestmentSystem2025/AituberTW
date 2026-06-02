@@ -55,7 +55,7 @@
 
 - 使用 NewebPay MPG / NPA-F01
 - 用於公司購買一次性 TOKEN 額度
-- 預設測試方案：`2,000K tokens`，價格 `NT$10`
+- 預設測試方案：`100K tokens`，價格 `NT$10`
 - 購買次數無限制
 - 購買一次，公司可用 TOKEN `+n`
 - 沒有日數限制，只有 TOKEN 使用量限制
@@ -385,7 +385,7 @@ CAU `CARD_NOT_ALLOWED`：
 - `Version = 2.3`
 - `MerchantOrderNo`
 - `Amt`
-- `ItemDesc`，例：`AI面接官 TOKEN方案 2000K`
+- `ItemDesc`，例：`AI面接官 TOKEN方案 100K`
 - `OrderDetail`：信用卡單次購買不送；STG 曾因一般文字格式觸發 `MPG01028`
   訂單細項格式錯誤。若未來啟用需要細項的支付方式，須依藍新該支付方式規格送
   JSON / itemized 格式，且總額需等於 `Amt`。
@@ -621,7 +621,7 @@ subscription：
 企業端 TOKEN 方案購買頁文案：
 
 - 企業購買 TOKEN 方案區塊必須顯示：
-  - `2,000K TOKEN 方案，NT$10。若每場面試約使用 100K TOKEN，約可進行 20 場面試（問題數目安：10 題）。`
+  - `100K TOKEN 方案，NT$10。測試期間單場 token_cap 暫設為 50K，方便驗證 TOKEN 用完流程。`
 - 訂閱 / TOKEN 頁面不可再以「剩餘建立面試次數」作為主要指標，必須改為：
   - `當前可使用 TOKEN：OOO TOKEN`
   - `依當前使用狀況推測還可進行 OO 次面試`

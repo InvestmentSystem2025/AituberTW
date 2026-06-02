@@ -45,6 +45,11 @@ ALTER TABLE public.interview_billing_allocations
   ADD CONSTRAINT interview_billing_allocations_source_chk
   CHECK (source IN ('free_quota', 'subscription', 'admin_entitlement', 'purchased_credit', 'purchased_token'));
 
+UPDATE public.billing_runtime_settings
+SET free_interview_token_cap = 50000,
+    updated_at = now()
+WHERE id = 'default';
+
 INSERT INTO public.credit_packages (
   code,
   name,
@@ -56,12 +61,12 @@ INSERT INTO public.credit_packages (
   updated_at
 )
 VALUES (
-  'token_2000k_test',
-  '2,000K TOKEN 方案',
+  'token_100k_test',
+  '100K TOKEN 方案',
   10,
   1,
-  2000000,
-  2000000,
+  50000,
+  100000,
   true,
   now()
 )
@@ -77,7 +82,7 @@ SET name = EXCLUDED.name,
 UPDATE public.credit_packages
 SET is_active = false,
     updated_at = now()
-WHERE code IN ('interview_10_for_10_twd', 'interview_10_test');
+WHERE code IN ('interview_10_for_10_twd', 'interview_10_test', 'token_2000k_test');
 
 INSERT INTO public.company_interview_credit_balance(company_id, updated_at)
 SELECT id, now()
@@ -303,6 +308,7 @@ BEGIN
       AND COALESCE(current_period_end, '-infinity'::timestamptz) > now()
       AND monthly_token_limit IS NOT NULL
       AND monthly_token_limit - monthly_token_used > v_required_tokens
+      AND LEAST(monthly_token_limit - monthly_token_used, v_settings.free_interview_token_cap) > v_required_tokens
     ORDER BY current_period_end DESC NULLS LAST, created_at DESC
     LIMIT 1
     FOR UPDATE;
@@ -315,6 +321,7 @@ BEGIN
       AND ends_at > now()
       AND monthly_token_limit_override IS NOT NULL
       AND monthly_token_limit_override - monthly_token_used > v_required_tokens
+      AND LEAST(monthly_token_limit_override - monthly_token_used, v_settings.free_interview_token_cap) > v_required_tokens
     ORDER BY ends_at DESC, created_at DESC
     LIMIT 1
     FOR UPDATE;
@@ -325,10 +332,16 @@ BEGIN
          v_admin_entitlement.ends_at > COALESCE(v_subscription.current_period_end, '-infinity'::timestamptz)
        ) THEN
       v_billing_source := 'admin_entitlement';
-      v_token_cap := v_admin_entitlement.monthly_token_limit_override;
+      v_token_cap := LEAST(
+        v_admin_entitlement.monthly_token_limit_override - v_admin_entitlement.monthly_token_used,
+        v_settings.free_interview_token_cap
+      );
     ELSIF v_subscription.id IS NOT NULL THEN
       v_billing_source := 'subscription';
-      v_token_cap := v_subscription.monthly_token_limit;
+      v_token_cap := LEAST(
+        v_subscription.monthly_token_limit - v_subscription.monthly_token_used,
+        v_settings.free_interview_token_cap
+      );
     ELSE
       INSERT INTO public.company_interview_credit_balance(
         company_id,
@@ -343,12 +356,12 @@ BEGIN
       WHERE company_id = p_company_id
       FOR UPDATE;
 
-      IF v_token_balance.purchased_tokens_remaining <= v_required_tokens THEN
+      IF LEAST(v_token_balance.purchased_tokens_remaining, v_settings.free_interview_token_cap) <= v_required_tokens THEN
         RAISE EXCEPTION 'INSUFFICIENT_TOKENS_FOR_INTERVIEW';
       END IF;
 
       v_billing_source := 'purchased_token';
-      v_token_cap := LEAST(v_token_balance.purchased_tokens_remaining, 2147483647)::integer;
+      v_token_cap := LEAST(v_token_balance.purchased_tokens_remaining, v_settings.free_interview_token_cap)::integer;
     END IF;
   END IF;
 
