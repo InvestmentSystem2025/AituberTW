@@ -21,7 +21,6 @@ const PersonDetection = dynamic(
   { ssr: false }
 )
 // import { InterviewQuestions } from '@/components/interview/InterviewQuestions'
-import { InterviewResults } from '@/components/interview/InterviewResults'
 import { InterviewInterface } from '@/components/interview/InterviewInterface'
 import { useInterviewFlow } from '@/components/interview/hooks/useInterviewFlow'
 import homeStore from '@/features/stores/home'
@@ -372,13 +371,22 @@ const Interview = () => {
         )
       ) : interviewFlow.interviewStatus === 'completed' ||
         interviewFlow.showResults ? (
-        /* 顯示面試結果 */
-        <InterviewResults
-          answers={interviewFlow.answers}
-          interviewResult={interviewFlow.interviewResult}
-          onRestart={interviewFlow.restartInterview}
-          onExit={interviewFlow.exitInterview}
-        />
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-50 px-4">
+          <div className="max-w-xl w-full bg-white rounded-xl shadow-md p-8">
+            <h1 className="text-2xl font-bold text-gray-800 mb-4 text-center">面試已完成</h1>
+            <p className="text-gray-700 text-sm leading-relaxed mb-6">
+              面試到此結束，感謝您的參與。企業將會參閱您的面試紀錄，如通過，則會另行通知；如未通過，則不另外做通知。
+            </p>
+            <div className="flex justify-center">
+              <button
+                onClick={interviewFlow.exitInterview}
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+              >
+                回到面試列表
+              </button>
+            </div>
+          </div>
+        </div>
       ) : (
         /* 正常模式：顯示原有的組件 */
         <>

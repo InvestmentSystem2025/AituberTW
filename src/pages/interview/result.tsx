@@ -1,28 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
-import { InterviewResults } from '@/components/interview/InterviewResults'
-import { InterviewResult, DEFAULT_SCORING_CRITERIA, PersonalitySummary } from '@/types/interviewScoring'
 import { supabase } from '@/lib/supabaseClient'
-
-type TranscriptItem = {
-  role: string
-  content: string
-  timestamp: string
-  aiFeedback?: string
-  additions_detail?: string
-  deductions_detail?: string
-  current_scores?: any
-  personality?: any
-}
 
 type SessionRow = {
   id: string
   interviews_id: string
-  ai_evaluations: Array<{ key: string; score: number; evidence?: string }>
-  interview_transcript?: TranscriptItem[]
   interview_result?: 'hired' | 'rejected' | 'pending' | 'cancelByUser' | 'onHold'
-  created_at?: string
 }
+
+const CANDIDATE_COMPLETION_MESSAGE =
+  '面試到此結束，感謝您的參與。企業將會參閱您的面試紀錄，如通過，則會另行通知；如未通過，則不另外做通知。'
 
 export default function InterviewResultPage() {
   const router = useRouter()
@@ -70,38 +57,44 @@ export default function InterviewResultPage() {
     return () => { mounted = false }
   }, [interviewId])
 
-  const interviewResult: InterviewResult | undefined = useMemo(() => {
-    if (!session) return undefined
-    if (session.interview_result === 'cancelByUser') return undefined
-    const finalScores: Record<string, number> = {}
-    const evals = Array.isArray(session.ai_evaluations) ? session.ai_evaluations : []
-    evals.forEach((e) => {
-      if (e && typeof e.key === 'string') finalScores[e.key] = Number(e.score) || 0
-    })
-    const values = Object.values(finalScores)
-    const totalScore = values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0
-    const result: InterviewResult = {
-      candidateId: 'unknown',
-      interviewDate: session.created_at ? new Date(session.created_at) : new Date(),
-      totalQuestions: Array.isArray(session.interview_transcript) ? session.interview_transcript.filter(x => x.role === 'user').length : 0,
-      answeredQuestions: Array.isArray(session.interview_transcript) ? session.interview_transcript.filter(x => x.role === 'user' && (x.content || '').trim().length > 0).length : 0,
-      answerScores: [],
-      finalScores: finalScores as any,
-      totalScore,
-      isPassed: session.interview_result === 'hired',
-      passingCriteria: DEFAULT_SCORING_CRITERIA,
-      summary: { strengths: [], weaknesses: [], recommendations: [] },
-    }
-    return result
-  }, [session])
+  const renderCandidateCompletionNotice = (title = '面試已完成') => (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+      <div className="max-w-xl w-full bg-white rounded-xl shadow-md p-8">
+        <h1 className="text-2xl font-bold text-gray-800 mb-4 text-center">{title}</h1>
+        <p className="text-gray-700 text-sm leading-relaxed mb-6">
+          {CANDIDATE_COMPLETION_MESSAGE}
+        </p>
+        <div className="flex justify-center gap-4">
+          <button
+            onClick={() => router.push('/me?tab=interviews')}
+            className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+          >
+            回到面試列表
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 
-  const personalitySummary: PersonalitySummary | undefined = useMemo(() => {
-    if (!session || !Array.isArray(session.interview_transcript)) return undefined
-    // 從最後一則有 personality 的 AI 訊息中取出人格總結
-    const reversed = [...session.interview_transcript].reverse()
-    const lastAiWithPersonality = reversed.find(item => item && item.role === 'ai' && item.personality)
-    return (lastAiWithPersonality?.personality || undefined) as PersonalitySummary | undefined
-  }, [session])
+  const renderCandidateCancelledNotice = () => (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+      <div className="max-w-xl w-full bg-white rounded-xl shadow-md p-8">
+        <h1 className="text-2xl font-bold text-gray-800 mb-4 text-center">面試者提早結束</h1>
+        <p className="text-gray-700 text-sm leading-relaxed mb-6">
+          你已在面試過程中主動結束本次 AI 面試，因此本場面試不會產生正式的錄取／未錄取判定。
+          你先前的作答與對話內容仍會保留，做為招募方日後參考之用。
+        </p>
+        <div className="flex justify-center gap-4">
+          <button
+            onClick={() => router.push('/me?tab=interviews')}
+            className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+          >
+            回到面試列表
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 
   if (!interviewId) {
     return (
@@ -123,37 +116,8 @@ export default function InterviewResultPage() {
 
   // 面試者提早結束的專用畫面：不顯示錄取／未錄取紅字
   if (session.interview_result === 'cancelByUser') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-        <div className="max-w-xl w-full bg-white rounded-xl shadow-md p-8">
-          <h1 className="text-2xl font-bold text-gray-800 mb-4 text-center">面試者提早結束</h1>
-          <p className="text-gray-700 text-sm leading-relaxed mb-6">
-            你已在面試過程中主動結束本次 AI 面試，因此本場面試不會產生正式的錄取／未錄取判定。
-            你先前的作答與對話內容仍會保留，做為招募方日後參考之用。
-          </p>
-          <div className="flex justify-center gap-4">
-            <button
-              onClick={() => router.push('/me?tab=interviews')}
-              className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
-            >
-              回到面試列表
-            </button>
-          </div>
-        </div>
-      </div>
-    )
+    return renderCandidateCancelledNotice()
   }
 
-  return (
-    <InterviewResults
-      answers={[]}
-      interviewResult={interviewResult}
-      personalitySummary={personalitySummary}
-      interviewId={interviewId}
-      onRestart={() => router.push('/interview')}
-      onExit={() => router.push('/me?tab=interviews')}
-    />
-  )
+  return renderCandidateCompletionNotice()
 }
-
-
