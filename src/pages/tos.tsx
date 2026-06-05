@@ -163,8 +163,14 @@ export default function TosAndSignupPage() {
         setMessage('帳號已建立，請前往信箱點擊驗證連結後再登入。')
         return
       }
-      // 註冊完成後先導向 MFA 設定頁（/me 仍保留 gate 作為保險）
-      window.location.href = '/mfa/setup'
+      const mfaResp = await fetch('/api/me/mfa', {
+        headers: { 'x-supabase-token': signInData.session.access_token },
+      })
+      const mfaJson = await mfaResp.json().catch(() => ({}))
+      window.location.href =
+        mfaResp.ok && (mfaJson as any)?.mfa_enabled === true
+          ? '/me'
+          : '/mfa/setup'
     } catch (err: any) {
       const code = String(err?.message || '')
       if (code === 'TOS_EXPIRED') {

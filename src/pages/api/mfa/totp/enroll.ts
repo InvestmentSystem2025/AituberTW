@@ -3,6 +3,10 @@ import crypto from 'crypto'
 import { getAuthUserIdFromRequest, getServiceClient } from '@/lib/supabaseServer'
 import { sealText } from '@/lib/cryptoSeal'
 import { base32Encode } from '@/lib/totp'
+import {
+  ensureMfaCertifiedWhenDisabled,
+  isMfaCertificationRequired,
+} from '@/lib/authFeatureFlags'
 
 type Resp =
   | { ok: true; otpauth_url?: string; secret_base32?: string; already_enabled?: boolean; expires_in_seconds?: number }
@@ -29,6 +33,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   const authUserId = await getAuthUserIdFromRequest(req)
   if (!authUserId) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' })
+  if (!isMfaCertificationRequired()) {
+    const supa = getServiceClient()
+    await ensureMfaCertifiedWhenDisabled({ supa, authUserId })
+    return res.status(200).json({ ok: true, already_enabled: true })
+  }
 
   // TODO: rate limit (per IP / per account). Serverless 下 in-memory 不可靠，需用 KV/Redis 才能穩定。
 
@@ -85,5 +94,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     expires_in_seconds: Math.floor(ENROLL_TTL_MS / 1000),
   })
 }
-
 

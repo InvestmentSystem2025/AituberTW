@@ -2,6 +2,10 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { getAuthUserIdFromRequest, getServiceClient } from '@/lib/supabaseServer'
 import { openText } from '@/lib/cryptoSeal'
 import { verifyTotpCode } from '@/lib/totp'
+import {
+  ensureMfaCertifiedWhenDisabled,
+  isMfaCertificationRequired,
+} from '@/lib/authFeatureFlags'
 
 type Resp = { ok: true; already_enabled?: boolean } | { ok: false; message: string }
 
@@ -19,6 +23,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   const authUserId = await getAuthUserIdFromRequest(req)
   if (!authUserId) return res.status(401).json({ ok: false, message: FAIL_MSG })
+  if (!isMfaCertificationRequired()) {
+    const supa = getServiceClient()
+    await ensureMfaCertifiedWhenDisabled({ supa, authUserId })
+    return res.status(200).json({ ok: true, already_enabled: true })
+  }
 
   const code = normalizeOtpCode(String(req.body?.code || '').trim())
   if (!/^\d{6}$/.test(code)) return res.status(200).json({ ok: false, message: FAIL_MSG })
@@ -85,5 +94,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   return res.status(200).json({ ok: true })
 }
-
 

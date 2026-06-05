@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createAuthContext } from '@/lib/authContext'
+import { ensureMfaCertifiedWhenDisabled } from '@/lib/authFeatureFlags'
 
 type Resp =
   | { ok: true; usage?: { used_count: number; free_quota: number }; did_increment?: boolean }
@@ -25,6 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   if (!interviews_id) return res.status(400).json({ ok: false, error: 'MISSING_INTERVIEWS_ID' })
 
   const supa = ctx.supa
+  await ensureMfaCertifiedWhenDisabled({ supa, authUserId })
 
   const { data, error } = await supa.rpc('start_interview_session', {
     p_interviews_id: interviews_id,
@@ -56,5 +58,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     usage: usage ? { used_count: usage.used_count, free_quota: usage.free_quota } : undefined,
   })
 }
-
 

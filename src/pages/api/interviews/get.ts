@@ -1,6 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { TtlCache } from '@/lib/ttlCache'
 import { createAuthContext } from '@/lib/authContext'
+import {
+  ensureMfaCertifiedWhenDisabled,
+  isMfaCertificationRequired,
+} from '@/lib/authFeatureFlags'
 
 const TTL_300S_MS = 300_000
 const aiInterviewerCache = new TtlCache<any[]>({ ttlMs: TTL_300S_MS, maxEntries: 500 })
@@ -71,8 +75,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Gate 1: 必須完成 MFA
-    if (!me.mfa_totp_enabled_at) {
+    // Gate 1: 必須完成 MFA；公開 demo / 指定環境可由 env 關閉。
+    if (!isMfaCertificationRequired()) {
+      await ensureMfaCertifiedWhenDisabled({ supa, authUserId })
+    } else if (!me.mfa_totp_enabled_at) {
       return res.status(403).json({
         error: 'MFA_REQUIRED',
         message: '開始面試前需要完成 Authenticator 認證。'
@@ -248,4 +254,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     evaluation_criteria: criteria || [],
   })
 }
-

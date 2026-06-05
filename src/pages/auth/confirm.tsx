@@ -83,13 +83,31 @@ const ConfirmEmailPage = () => {
 
         // 如果 Supabase 回傳 session，代表已完成登入
         if (result.data?.session) {
-          const postLoginRedirect = normalizedType === 'signup' ? '/mfa/setup' : '/me'
+          let postLoginRedirect = '/me'
+          if (normalizedType === 'signup') {
+            try {
+              const mfaResp = await fetch('/api/me/mfa', {
+                headers: {
+                  'x-supabase-token': result.data.session.access_token,
+                },
+              })
+              const mfaJson = await mfaResp.json().catch(() => ({}))
+              postLoginRedirect =
+                mfaResp.ok && (mfaJson as any)?.mfa_enabled === true
+                  ? '/me'
+                  : '/mfa/setup'
+            } catch {
+              postLoginRedirect = '/mfa/setup'
+            }
+          }
           setMessage(
             normalizedType === 'signup'
-              ? '電子郵件已驗證，系統將自動帶您前往 MFA 設定。'
+              ? postLoginRedirect === '/me'
+                ? '電子郵件已驗證，系統將自動帶您前往個人頁面。'
+                : '電子郵件已驗證，系統將自動帶您前往 MFA 設定。'
               : '電子郵件已驗證，系統將自動帶您前往個人頁面。'
           )
-          setCtaLabel(normalizedType === 'signup' ? '前往 MFA 設定' : '前往個人頁')
+          setCtaLabel(postLoginRedirect === '/me' ? '前往個人頁' : '前往 MFA 設定')
           setCtaHref(postLoginRedirect)
           setStatus('success')
           setTimeout(() => router.replace(postLoginRedirect), 1800)
@@ -131,4 +149,3 @@ const ConfirmEmailPage = () => {
 }
 
 export default ConfirmEmailPage
-

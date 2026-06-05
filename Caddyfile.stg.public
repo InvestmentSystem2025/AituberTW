@@ -1,0 +1,19 @@
+{
+  # Optional: admin off
+  # admin off
+}
+
+# AITuberKit (Next.js) - Staging public demo (NO Basic Auth)
+stg.ai-interview.tw {
+  reverse_proxy app:3000
+
+  log {
+    output stdout
+    level INFO
+  }
+}
+
+# Self-hosted Supabase API gateway (Kong) - Staging (NO Basic Auth)
+supabase-stg.ai-interview.tw {
+  reverse_proxy supabase-kong:8000
+}
