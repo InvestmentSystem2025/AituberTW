@@ -45,3 +45,26 @@ variable "allow_stopping_for_update" {
   default     = false
 }
 
+variable "enable_vm_work_hours_schedule" {
+  description = "VM の勤務時間 start/stop schedule を有効化する"
+  type        = bool
+  default     = false
+}
+
+variable "vm_schedule_time_zone" {
+  description = "VM start/stop schedule のタイムゾーン"
+  type        = string
+  default     = "Asia/Taipei"
+}
+
+variable "vm_start_schedule" {
+  description = "VM start schedule（cron 形式）。例: 台湾時間 08:45"
+  type        = string
+  default     = "45 8 * * *"
+}
+
+variable "vm_stop_schedule" {
+  description = "VM stop schedule（cron 形式）。例: 台湾時間 18:00"
+  type        = string
+  default     = "0 18 * * *"
+}

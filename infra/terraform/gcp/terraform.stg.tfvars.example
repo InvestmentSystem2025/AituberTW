@@ -18,3 +18,10 @@ ssh_source_ranges = ["0.0.0.0/0"]
 
 # Allow Terraform to stop the instance when resizing.
 allow_stopping_for_update = true
+
+# STG work-hours schedule. Asia/Taipei 08:45 start is intentional because
+# Compute Engine schedules can run with several minutes of delay.
+enable_vm_work_hours_schedule = true
+vm_schedule_time_zone         = "Asia/Taipei"
+vm_start_schedule             = "45 8 * * *"
+vm_stop_schedule              = "0 18 * * *"
