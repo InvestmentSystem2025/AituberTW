@@ -1134,6 +1134,17 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           })),
         })
 
+        const { data: authSessionData } = await supabase.auth.getSession()
+        const accessToken = authSessionData.session?.access_token
+        const companyId = interviewConfig?.interview?.company_id
+        if (
+          !interviewId ||
+          typeof companyId !== 'string' ||
+          !accessToken
+        ) {
+          throw new Error('INTERVIEW_TOKEN_BUDGET_CONTEXT_MISSING')
+        }
+
         // 調用AI API獲取串流回應
         const stream = await getInterviewAIResponseStream(
           conversationMessages,
@@ -1147,7 +1158,12 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
           effectiveIsFollowUpPhase,
           effectiveFollowUpCount,
           MAX_FOLLOWUPS,
-          isLastQuestion
+          isLastQuestion,
+          {
+            interviewId,
+            companyId,
+            accessToken,
+          }
         )
 
         // 創建一個新的 AI 消息用於實時更新
@@ -2100,6 +2116,7 @@ export const InterviewInterface: React.FC<InterviewInterfaceProps> = ({
       currentQuestionId,
       recording,
       interviewId,
+      interviewConfig,
       saveInterviewSession,
       formattedQuestions,
       questionSequence,

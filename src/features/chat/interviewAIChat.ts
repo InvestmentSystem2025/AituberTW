@@ -17,6 +17,10 @@ import { AnswerScore, ScoreReasonItem } from '@/types/interviewScoring'
 import { speakCharacter } from '../messages/speakCharacter'
 import { generateMessageId } from '@/utils/messageUtils'
 import { responseTimeTracker } from '@/utils/responseTimeTracker'
+import {
+  captureFirstStreamTokenUsage,
+  StreamTokenUsage,
+} from './streamTokenUsage'
 
 const DEBUG_INTERVIEW = process.env.NEXT_PUBLIC_DEBUG_INTERVIEW === '1'
 
@@ -844,6 +848,14 @@ export async function getInterviewAIResponseStream(
     accessToken?: string
   }
 ): Promise<ReadableStream<string>> {
+  if (
+    !tokenBudgetContext?.interviewId ||
+    !tokenBudgetContext.companyId ||
+    !tokenBudgetContext.accessToken
+  ) {
+    throw new Error('INTERVIEW_TOKEN_BUDGET_CONTEXT_MISSING')
+  }
+
   const {
     aiApiKey,
     selectAIService,
@@ -1003,20 +1015,16 @@ export async function getInterviewAIResponseStream(
     })
   }
 
-  if (tokenBudgetContext?.interviewId && tokenBudgetContext?.companyId) {
-    requestData.interviewContext = {
-      interviewId: tokenBudgetContext.interviewId,
-      companyId: tokenBudgetContext.companyId,
-    }
+  requestData.interviewContext = {
+    interviewId: tokenBudgetContext.interviewId,
+    companyId: tokenBudgetContext.companyId,
   }
 
   const response = await fetch(apiEndpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(tokenBudgetContext?.accessToken
-        ? { 'x-supabase-token': tokenBudgetContext.accessToken }
-        : {}),
+      'x-supabase-token': tokenBudgetContext.accessToken,
     },
     body: JSON.stringify(requestData),
   })
@@ -1048,7 +1056,12 @@ export async function getInterviewAIResponseStream(
         let displayBuffer = '' // 用於顯示的緩衝區（已清理標籤）
 
         // 嘗試從資料流的 metadata 事件抓 token usage（不同 provider/SDK 可能格式不同）
-        const usageAcc = { input: 0, output: 0, total: 0, found: false }
+        let usageAcc: StreamTokenUsage = {
+          input: 0,
+          output: 0,
+          total: 0,
+          found: false,
+        }
         const toNum = (v: any) => {
           const n = typeof v === 'string' ? Number(v) : v
           return Number.isFinite(n) ? Number(n) : null
@@ -1388,12 +1401,9 @@ export async function getInterviewAIResponseStream(
                   try {
                     const decoded = JSON.parse(content)
                     const t = extractTokens(decoded)
-                    if (t) {
-                      usageAcc.input += Math.max(0, Math.floor(t.input))
-                      usageAcc.output += Math.max(0, Math.floor(t.output))
-                      usageAcc.total += Math.max(0, Math.floor(t.total))
-                      usageAcc.found = true
-                    }
+                    // AI SDK may emit the same final usage through multiple
+                    // metadata event types (e:/d:/2:).
+                    usageAcc = captureFirstStreamTokenUsage(usageAcc, t)
                   } catch {
                     // ignore
                   }

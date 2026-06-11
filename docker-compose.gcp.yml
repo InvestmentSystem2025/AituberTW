@@ -275,7 +275,7 @@ services:
     volumes:
       - ./supabase/${KONG_CONFIG_NAME}:/var/lib/kong/kong.yml:ro
 
-  # Token Usage Cron（每日 00:00 / 每月 1 號 00:00 Asia/Taipei 執行聚合）
+  # Token Usage Cron（VM 夜間關機，因此在開機時段執行）
   token-usage-cron:
     image: alpine:3.20
     restart: unless-stopped
@@ -286,8 +286,8 @@ services:
     command: >
       sh -c "
       apk add --no-cache curl >/dev/null;
-      echo '0 0 * * * curl -sf -X POST -H \"Authorization: Bearer $$CRON_SECRET\" $$APP_URL/api/cron/aggregate-daily >> /var/log/cron.log 2>&1' > /etc/crontabs/root;
-      echo '0 0 1 * * curl -sf -X POST -H \"Authorization: Bearer $$CRON_SECRET\" $$APP_URL/api/cron/aggregate-monthly >> /var/log/cron.log 2>&1' >> /etc/crontabs/root;
+      echo '5 * * * * curl -sf -X POST -H \"Authorization: Bearer $$CRON_SECRET\" $$APP_URL/api/cron/aggregate-daily >> /var/log/cron.log 2>&1' > /etc/crontabs/root;
+      echo '10 10 1 * * curl -sf -X POST -H \"Authorization: Bearer $$CRON_SECRET\" $$APP_URL/api/cron/aggregate-monthly >> /var/log/cron.log 2>&1' >> /etc/crontabs/root;
       crond -f -l 8
       "
     depends_on:
@@ -340,4 +340,3 @@ volumes:
   supabase_db_data:
   supabase_storage_data:
   redis_data:
-
