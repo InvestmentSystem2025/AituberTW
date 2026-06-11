@@ -12,6 +12,7 @@ interface ExpressionInfo {
 export default function VRMExpressionChecker() {
   const [expressions, setExpressions] = useState<ExpressionInfo[]>([])
   const [selectedModel, setSelectedModel] = useState<string>('')
+  const [vrmModels, setVrmModels] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [testResults, setTestResults] = useState<{ [key: string]: boolean }>({})
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -38,17 +39,31 @@ export default function VRMExpressionChecker() {
     { label: '向右看', value: 'LookRight' },
   ]
 
-  // 可用的VRM模型列表
-  const vrmModels = [
-    'AvatarSample_A.vrm',
-    'AvatarSample_B.vrm', 
-    'AvatarSample_C.vrm',
-    'mentoly.vrm',
-    'nikechan_v1.vrm',
-    'nikechan_v2.vrm',
-    'nikechan_v2_outerwear.vrm',
-    'yuki.vrm'
-  ]
+  useEffect(() => {
+    let cancelled = false
+
+    fetch('/api/get-vrm-list')
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return response.json()
+      })
+      .then((files) => {
+        if (!cancelled && Array.isArray(files)) {
+          setVrmModels(
+            files
+              .filter((file): file is string => typeof file === 'string')
+              .sort((a, b) => a.localeCompare(b))
+          )
+        }
+      })
+      .catch((error) => {
+        console.error('取得 VRM 模型列表失敗:', error)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // 載入VRM模型並檢查表情
   const loadVRMModel = async (modelPath: string) => {
