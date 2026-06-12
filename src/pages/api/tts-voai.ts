@@ -17,11 +17,14 @@ export default async function handler(
 
   // 優先使用伺服器端環境變數，絕不將 API Key 暴露給前端
   const apiKey =
-    (process.env.VOAI_API_KEY as string)?.trim() || (bodyApiKey as string)?.trim()
+    (process.env.VOAI_API_KEY as string)?.trim() ||
+    (bodyApiKey as string)?.trim()
+  const version = process.env.VOAI_TTS_VERSION?.trim() || 'Neo'
 
   if (!text || !speaker || !apiKey) {
     return res.status(400).json({
-      error: 'Missing required parameters (text, speaker, and VOAI API key in env or request)',
+      error:
+        'Missing required parameters (text, speaker, and VOAI API key in env or request)',
     })
   }
 
@@ -34,7 +37,7 @@ export default async function handler(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        version: 'Classic',
+        version,
         text: text,
         speaker: speaker,
         style: style || '預設',
